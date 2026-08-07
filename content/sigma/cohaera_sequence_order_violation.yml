@@ -23,9 +23,9 @@ references:
     - https://www.exabeam.com/blog/security-operations-center/what-makes-agent-activity-harder-to-detect/
 author: Imran Hafeez
 date: 2026-08-07
-tags:
-    - owasp.llm06.excessive.agency
-    - cohaera.ch01
+# Tags intentionally omitted. Sigma validation rejects private namespaces
+# (owasp.*, cohaera.*) and MITRE ATLAS IDs were not verified against the
+# current matrix. Add them in your own pipeline if it accepts them.
 logsource:
     product: cohaera
     service: session_verdict

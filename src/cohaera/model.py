@@ -10,6 +10,7 @@ Everything here is deliberately dependency-free stdlib so it runs anywhere.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field, asdict
 from typing import Any, Iterable
@@ -33,9 +34,12 @@ REVERSIBLE_KEYWORDS = {
 
 # Tools whose effect leaves the trust boundary. Distinct from irreversibility:
 # a tool can be reversible locally and still exfiltrate.
+# NOTE the omissions. "request" was removed after review: as a whole token it
+# matches request_permission and request_review, which are not egress. "post"
+# stays because postmortem_read no longer matches under token splitting.
 EGRESS_KEYWORDS = {
-    "http", "request", "post", "send", "webhook", "upload", "publish",
-    "email", "message", "notify", "sync", "export", "transfer",
+    "http", "https", "post", "send", "webhook", "upload", "publish",
+    "email", "message", "notify", "sync", "export", "transfer", "exfiltrate",
 }
 
 TERMINAL_EVENTS = {
@@ -46,20 +50,60 @@ TERMINAL_EVENTS = {
 POLICY_EVENTS = {"cost_threshold_exceeded", "depth_exceeded"}
 
 
-def _classify(tool_name: str | None) -> str:
-    """Classify a tool as read_only, state_change, or egress.
+_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
 
-    Egress wins over state_change, because data leaving the boundary is the
-    more consequential property for a concealment check.
+
+def _classify(tool_name: Any) -> str:
+    """Classify a tool as read_only, state_change, egress or unknown.
+
+    Two defects fixed after the second external review.
+
+    1. TYPE SAFETY. This did ``tool_name.lower()`` on whatever it was handed. A
+       non-string tool_name (int, list, dict) raised AttributeError from inside
+       a security check. Anything untyped is now ``unknown``.
+
+    2. SUBSTRING COLLISIONS. Matching was ``any(k in t ...)`` on raw substrings,
+       which produced genuinely bad results:
+
+           budget_report        -> read_only   ("get" inside "budget")
+           forget_password      -> read_only   ("get" inside "forget")
+           request_permission   -> egress      ("request" is a whole word here,
+                                                but the effect is not egress)
+           postmortem_read      -> egress      ("post" inside "postmortem")
+
+       Now split on non-alphanumerics and match WHOLE TOKENS only. Multi-word
+       keywords such as ``send_email`` are matched against the token sequence.
+
+    Egress still wins over state_change: data leaving the boundary is the more
+    consequential property for a concealment check.
+
+    This is still a name heuristic and it will still be wrong. The real fix is
+    producer-signed capability manifests keyed on exact tool ID. Tools that do
+    not match anything return ``unknown``, which must degrade coverage rather
+    than silently read as safe.
     """
-    if not tool_name:
+    if not isinstance(tool_name, str) or not tool_name:
         return "unknown"
-    t = tool_name.lower()
-    if any(k in t for k in EGRESS_KEYWORDS):
+    tokens = [t for t in _TOKEN_SPLIT.split(tool_name.lower()) if t]
+    if not tokens:
+        return "unknown"
+    tokset = set(tokens)
+    joined = "_".join(tokens)
+
+    def _hit(keywords: set[str]) -> bool:
+        for k in keywords:
+            if "_" in k:
+                if k in joined:            # multi-word keyword, e.g. send_email
+                    return True
+            elif k in tokset:              # whole token only
+                return True
+        return False
+
+    if _hit(EGRESS_KEYWORDS):
         return "egress"
-    if any(k in t for k in IRREVERSIBLE_KEYWORDS):
+    if _hit(IRREVERSIBLE_KEYWORDS):
         return "state_change"
-    if any(k in t for k in REVERSIBLE_KEYWORDS):
+    if _hit(REVERSIBLE_KEYWORDS):
         return "read_only"
     return "unknown"
 
@@ -72,7 +116,19 @@ class Event:
 
     @property
     def event_type(self) -> str:
-        return self.raw.get("event_type", "")
+        """Always a string.
+
+        R2-02. This returned the raw value, so a list or dict event_type raised
+        "unhashable type" from ``e.event_type not in {...}`` inside CH04. A
+        malformed field in one record should never abort scoring the session.
+        """
+        v = self.raw.get("event_type")
+        return v if isinstance(v, str) else ""
+
+    @property
+    def agent_name(self) -> str | None:
+        n = self.raw.get("agent_name")
+        return n if isinstance(n, str) else None
 
     @property
     def timestamp(self) -> float:
@@ -82,30 +138,33 @@ class Event:
         last and is detectable downstream via ``timestamp_valid``.
         """
         raw = self.raw.get("timestamp")
-        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
-            return float(raw)
-        try:
-            return float(raw)  # numeric strings are tolerated
-        except (TypeError, ValueError):
-            return float("nan")
+        if isinstance(raw, bool):
+            return float("nan")            # True is not a timestamp
+        if isinstance(raw, (int, float)):
+            return float(raw) if math.isfinite(raw) else float("nan")
+        if isinstance(raw, str):
+            try:
+                v = float(raw)
+            except ValueError:
+                return float("nan")
+            return v if math.isfinite(v) else float("nan")  # rejects "inf"/"nan"
+        return float("nan")
 
     @property
     def timestamp_valid(self) -> bool:
         t = self.timestamp
-        return t == t and t > 0        # NaN != NaN
+        return math.isfinite(t) and t > 0
+
+    @property
+    def tool_name(self) -> str | None:
+        """Always a string or None. Producers do send non-strings."""
+        n = self.raw.get("tool_name")
+        return n if isinstance(n, str) else None
 
     @property
     def data(self) -> dict[str, Any]:
         d = self.raw.get("data")
         return d if isinstance(d, dict) else {}
-
-    @property
-    def tool_name(self) -> str | None:
-        return self.raw.get("tool_name")
-
-    @property
-    def agent_name(self) -> str | None:
-        return self.raw.get("agent_name")
 
     def get(self, key: str, default: Any = None) -> Any:
         """Look in the envelope first, then the data bag."""
@@ -182,6 +241,8 @@ class Session:
 
     session_id: str
     events: list[Event] = field(default_factory=list)
+    _calls_cache: list[ToolCall] | None = field(default=None, repr=False,
+                                                compare=False)
 
     # ---- identity -------------------------------------------------------
     @property
@@ -226,11 +287,13 @@ class Session:
     # ---- tool calls -----------------------------------------------------
     @property
     def tool_calls(self) -> list[ToolCall]:
-        """Pair tool_start with tool_end / tool_error.
+        """Pair tool_start with tool_end / tool_error. Cached per session.
 
         Pairing is by span_id where available, falling back to tool_name FIFO,
         because not every adapter propagates span_id consistently.
         """
+        if self._calls_cache is not None:
+            return self._calls_cache
         calls: list[ToolCall] = []
         # C-02 fix. Previously a span match popped the call out of open_by_span
         # but left it in open_by_name, so a later name-only terminal event could
@@ -239,6 +302,7 @@ class Session:
         open_by_span: dict[str, int] = {}          # span_id -> index into calls
         open_by_name: dict[str, list[int]] = {}    # name    -> indices, FIFO
         closed: set[int] = set()
+        seen_spans: set[str] = set()      # every span we have ever closed
 
         def _release(idx: int) -> None:
             """Remove this call from BOTH indices. The whole point of the fix."""
@@ -277,8 +341,15 @@ class Session:
                 name = e.tool_name or "<unnamed>"
                 idx: int | None = None
 
-                if sid and sid in open_by_span:
-                    idx = open_by_span[sid]
+                # R2-01 fix. A supplied span_id is an IDENTITY ASSERTION. If it
+                # does not match an open call, this terminal event must NOT be
+                # allowed to close a different call by name. The old fallback
+                # let an unknown or duplicate span mark an unrelated concurrent
+                # call as failed, which fabricates findings.
+                if sid:
+                    idx = open_by_span.get(sid)          # strict, no fallback
+                    if idx is not None and calls[idx].name != name:
+                        idx = None                       # span/name disagreement
                 else:
                     bucket = open_by_name.get(name) or []
                     idx = bucket[0] if bucket else None
@@ -295,12 +366,16 @@ class Session:
                         had_result=e.data.get("tool_result") is not None,
                         error_class=(e.data.get("error_class")
                                      or e.data.get("error_type_name")),
-                        state="orphan_end",
+                        state=("duplicate_end" if (sid and sid in seen_spans)
+                               else "mismatched_end" if sid
+                               else "orphan_end"),
                     )
                     calls.append(orphan)
                     continue
 
                 tc = calls[idx]
+                if tc.span_id:
+                    seen_spans.add(tc.span_id)
                 _release(idx)
                 tc.ended_at = e.timestamp
                 tc.result = "failure" if e.event_type == "tool_error" else "success"
@@ -312,6 +387,7 @@ class Session:
                 tc.had_result = e.data.get("tool_result") is not None
                 tc.state = "complete"
 
+        self._calls_cache = calls
         return calls
 
     @property
@@ -404,9 +480,14 @@ class Session:
             "egress_count": sum(1 for c in calls if c.klass == "egress"),
             "unknown_class_count": sum(1 for c in calls if c.klass == "unknown"),
             "unpaired_calls": sum(1 for c in calls
-                                  if c.state in {"open", "orphan_end"}),
+                                  if c.state in {"open", "orphan_end",
+                                                 "mismatched_end", "duplicate_end"}),
             "open_starts": sum(1 for c in calls if c.state == "open"),
-            "orphan_terminals": sum(1 for c in calls if c.state == "orphan_end"),
+            "orphan_terminals": sum(1 for c in calls if c.state in
+                                    {"orphan_end", "mismatched_end", "duplicate_end"}),
+            "unpaired_consequential_count": sum(
+                1 for c in calls
+                if c.consequential and c.state != "complete"),
             "error_count": self.error_count,
             "injection_markers": self.injection_markers,
             "max_delegation_depth": self.max_delegation_depth,
@@ -442,6 +523,27 @@ class Finding:
         return self._ORDER.get(self.severity, 0)
 
 
+def json_safe(o: Any) -> Any:
+    """Coerce a value tree into something json.dumps(allow_nan=False) accepts.
+
+    R2-02. Producers send non-finite floats and unhashable values. Emitting
+    Infinity or NaN produces output that is not valid JSON, and crashing on
+    serialisation turns a bad input line into a lost verdict. Neither is
+    acceptable for a security control, so values that cannot be represented are
+    replaced with a typed marker that an analyst can see.
+    """
+    if isinstance(o, float):
+        return o if math.isfinite(o) else {"_invalid_number": repr(o)}
+    if isinstance(o, dict):
+        return {(k if isinstance(k, str) else repr(k)): json_safe(v)
+                for k, v in o.items()}
+    if isinstance(o, (list, tuple, set)):
+        return [json_safe(v) for v in o]
+    if o is None or isinstance(o, (str, int, bool)):
+        return o
+    return repr(o)
+
+
 def to_cim_event(session: Session, findings: list[Finding],
                  schema: str = "cohaera:0.1") -> dict[str, Any]:
     """Emit one correlation-grade CIM record per session.
@@ -455,7 +557,7 @@ def to_cim_event(session: Session, findings: list[Finding],
     max_sev = max(findings, key=lambda f: f.rank).severity if findings else "info"
     feats = session.features()
 
-    return {
+    return json_safe({
         "type": "cohaera_session_verdict",
         "schema": schema,
         "event_type": "cohaera_session_verdict",
@@ -474,4 +576,4 @@ def to_cim_event(session: Session, findings: list[Finding],
             "finding_count": len(findings),
             "findings": [asdict(f) for f in findings],
         },
-    }
+    })

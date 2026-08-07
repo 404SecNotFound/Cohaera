@@ -62,16 +62,22 @@ def _anon_key(e: Event, counter: dict[tuple, float]) -> str:
     Unrelated producers can no longer be joined. This is still a fallback, not a
     correlation key. Verdicts built on it should be treated as low confidence.
     """
-    ident = (e.raw.get("host"), e.raw.get("user"),
-             e.raw.get("agent_name"), e.raw.get("framework"))
+    # R2-07: identity fields arrive untyped. Lists and dicts are unhashable and
+    # crashed assembly. Coerce to a repr and keep the field boundary explicit so
+    # host "a|b" + user "c" cannot collide with host "a" + user "b|c".
+    ident = tuple(
+        f"{k}={v!r}" for k, v in (
+            ("host", e.raw.get("host")), ("user", e.raw.get("user")),
+            ("agent", e.raw.get("agent_name")), ("fw", e.raw.get("framework")),
+        ))
     ts = e.timestamp
     if ts != ts:                      # NaN, no usable clock
-        return "anon|" + "|".join(str(x) for x in ident) + "|no-clock"
+        return "anon|" + "\x1f".join(ident) + "|no-clock"
     start = counter.get(ident)
     if start is None or ts - start > ANON_WINDOW_S:
         counter[ident] = ts
         start = ts
-    return ("anon|" + "|".join(str(x) for x in ident)
+    return ("anon|" + "\x1f".join(ident)
             + f"|w{int(start // ANON_WINDOW_S)}")
 
 
@@ -86,9 +92,17 @@ def assemble(events: Iterable[Event]) -> list[Session]:
 
     ordered = sorted(events, key=lambda e: (e.timestamp != e.timestamp, e.timestamp))
     for e in ordered:
-        key = e.raw.get("session_id") or e.raw.get("trace_id")
-        if not key:
+        # R2-02: session_id and trace_id arrive untyped. A list or dict here
+        # raised "unhashable type" from inside session assembly. Only a
+        # non-empty string is accepted as a correlation key; anything else
+        # falls through to the scoped anonymous path.
+        key = e.raw.get("session_id")
+        if not isinstance(key, str) or not key:
+            key = e.raw.get("trace_id")
+        if not isinstance(key, str) or not key:
             key = _anon_key(e, anon_counter)
+        if not isinstance(key, str):
+            key = repr(key)
         if key not in buckets:
             buckets[key] = Session(session_id=key)
         buckets[key].events.append(e)

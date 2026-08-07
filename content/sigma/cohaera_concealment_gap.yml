@@ -21,9 +21,9 @@ references:
     - https://arxiv.org/abs/2603.15714
 author: Imran Hafeez
 date: 2026-08-07
-tags:
-    - owasp.llm06.excessive.agency
-    - cohaera.ch02
+# Tags intentionally omitted. Sigma validation rejects private namespaces
+# (owasp.*, cohaera.*) and MITRE ATLAS IDs were not verified against the
+# current matrix. Add them in your own pipeline if it accepts them.
 logsource:
     product: cohaera
     service: session_verdict
@@ -31,11 +31,7 @@ detection:
     selection:
         type: 'cohaera_session_verdict'
         data.triggered_rules|contains: 'CH02_concealment_gap'
-    egress:
-        data.egress_count|gte: 1
     condition: selection
-    # Raise to critical when the unreported call left the trust boundary:
-    #   condition: selection and egress
 fields:
     - session_id
     - agent_name

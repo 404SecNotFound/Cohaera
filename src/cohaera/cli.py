@@ -17,7 +17,7 @@ from pathlib import Path
 
 from .checks import SequenceGrammar, run_all
 from .ingest import load
-from .model import to_cim_event
+from .model import json_safe, to_cim_event
 
 _SEV_MARK = {"critical": "[CRIT]", "high": "[HIGH]", "medium": "[MED ]",
              "low": "[LOW ]", "info": "[INFO]"}
@@ -41,7 +41,7 @@ def cmd_score(args: argparse.Namespace) -> int:
         total_findings += len(findings)
         record = to_cim_event(s, findings)
         record["data"]["coverage"] = cov
-        print(json.dumps(record))
+        print(json.dumps(json_safe(record), allow_nan=False, default=str))
 
         f = s.features()
         agents = ", ".join(s.agent_names) or "?"

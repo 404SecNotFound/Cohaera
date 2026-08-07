@@ -2,8 +2,9 @@ title: Agent Consequential Tool Call Started With No Terminal Event
 id: d173d4c0-f82d-48e3-a7ef-7b3d4a70b38b
 status: experimental
 description: |
-  A state-changing or egress tool call emitted tool_start with no matching
-  tool_end or tool_error.
+  A state-changing or egress tool call has an incomplete lifecycle: a
+  tool_start with no terminal event, OR a terminal event with no start, OR a
+  terminal event whose span does not match any open call.
 
   This is an integrity check on the telemetry itself, not on the agent. Either
   the run was truncated mid-write, or the event was lost in collection. The
@@ -22,9 +23,9 @@ references:
     - https://github.com/open-agent-ai-security/observra
 author: Imran Hafeez
 date: 2026-08-07
-tags:
-    - cohaera.ch05
-    - telemetry.integrity
+# Tags intentionally omitted. Sigma validation rejects private namespaces
+# (owasp.*, cohaera.*) and MITRE ATLAS IDs were not verified against the
+# current matrix. Add them in your own pipeline if it accepts them.
 logsource:
     product: cohaera
     service: session_verdict
@@ -33,13 +34,15 @@ detection:
         type: 'cohaera_session_verdict'
         data.triggered_rules|contains: 'CH05_unpaired_calls'
     consequential:
-        data.unpaired_calls|gte: 1
+        data.unpaired_consequential_count|gte: 1
     condition: selection and consequential
 fields:
     - session_id
     - agent_name
     - host
+    - data.unpaired_consequential_count
     - data.unpaired_calls
+    - data.orphan_terminals
     - data.event_count
     - data.findings
 falsepositives:

@@ -19,10 +19,9 @@ references:
     - https://genai.owasp.org/llm-top-10/
 author: Imran Hafeez
 date: 2026-08-07
-tags:
-    - owasp.llm06.excessive.agency
-    - owasp.llm10.unbounded.consumption
-    - cohaera.ch04
+# Tags intentionally omitted. Sigma validation rejects private namespaces
+# (owasp.*, cohaera.*) and MITRE ATLAS IDs were not verified against the
+# current matrix. Add them in your own pipeline if it accepts them.
 logsource:
     product: cohaera
     service: session_verdict

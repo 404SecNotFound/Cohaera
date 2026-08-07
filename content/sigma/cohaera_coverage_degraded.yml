@@ -25,9 +25,9 @@ references:
     - https://github.com/404SecNotFound/Cohaera
 author: Imran Hafeez
 date: 2026-08-07
-tags:
-    - cohaera.coverage
-    - detection.gap
+# Tags intentionally omitted. Sigma validation rejects private namespaces
+# (owasp.*, cohaera.*) and MITRE ATLAS IDs were not verified against the
+# current matrix. Add them in your own pipeline if it accepts them.
 logsource:
     product: cohaera
     service: session_verdict
@@ -35,7 +35,7 @@ detection:
     selection:
         type: 'cohaera_session_verdict'
     blind:
-        data.coverage.completeness|lt: 0.8
+        data.coverage.completeness|lte: 0.8   # lte, not lt: 0.8 is the COMMON case
     condition: selection and blind
 fields:
     - session_id

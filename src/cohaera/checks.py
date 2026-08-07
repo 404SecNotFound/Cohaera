@@ -219,15 +219,24 @@ def ch03_untrusted_to_consequential(session: Session) -> list[Finding]:
         return []
 
     first_marker = min(marker_times)
-    after = [c for c in session.consequential_calls if c.started_at >= first_marker]
+    # R2-04 fix. consequential_calls includes open, failed and orphan calls.
+    # Saying one "ran" when it errored overstates the fact. Split them.
+    cand = [c for c in session.consequential_calls if c.started_at >= first_marker]
+    after = [c for c in cand if c.executed]
+    attempted = [c for c in cand if not c.executed]
+    if not after:
+        after, attempted = attempted, []          # attempt-only, lower severity
     if not after:
         return []
 
     return [Finding(
         check="CH03_untrusted_to_consequential",
-        severity="critical" if any(c.klass == "egress" for c in after) else "high",
+        severity=("critical" if any(c.klass == "egress" and c.executed for c in after)
+                  else "high" if any(c.executed for c in after) else "medium"),
         session_id=session.session_id,
-        title="Consequential action followed observed injection markers",
+        title=("Completed consequential action followed observed injection markers"
+               if any(c.executed for c in after)
+               else "Attempted consequential action followed observed injection markers"),
         detail=(
             f"Injection markers were flagged at t={first_marker:.3f}, and "
             f"{len(after)} consequential call(s) ran afterwards in the same session. "
@@ -238,8 +247,10 @@ def ch03_untrusted_to_consequential(session: Session) -> list[Finding]:
         evidence={
             "markers": session.injection_markers,
             "first_marker_ts": first_marker,
-            "calls_after": [{"tool": c.name, "class": c.klass, "at": c.started_at}
-                            for c in after],
+            "calls_after": [{"tool": c.name, "class": c.klass, "at": c.started_at,
+                             "state": c.state, "result": c.result,
+                             "completed": c.executed} for c in after],
+            "attempted_only": [{"tool": c.name, "state": c.state} for c in attempted],
         },
     )]
 
@@ -261,23 +272,29 @@ def ch04_guardrail_overrun(session: Session) -> list[Finding]:
     for e in session.events:
         if e.event_type not in {"cost_threshold_exceeded", "depth_exceeded"}:
             continue
-        after = [c for c in session.consequential_calls if c.started_at > e.timestamp]
-        if not after:
+        cand = [c for c in session.consequential_calls if c.started_at > e.timestamp]
+        after = [c for c in cand if c.executed]        # R2-04: completed only
+        attempted = [c for c in cand if not c.executed]
+        if not after and not attempted:
             continue
         findings.append(Finding(
             check="CH04_guardrail_overrun",
-            severity="high",
+            severity="high" if after else "medium",
             session_id=session.session_id,
             title=f"Session continued with consequential actions after {e.event_type}",
             detail=(
                 f"{e.event_type} fired at t={e.timestamp:.3f}, then "
-                f"{len(after)} consequential call(s) executed. The control produced "
-                "a log line but did not stop the behaviour."
+                f"{len(after)} consequential call(s) COMPLETED and "
+                f"{len(attempted)} were attempted without completing. The control "
+                "produced a log line but did not stop the behaviour."
             ),
             evidence={
                 "policy_event": e.event_type,
                 "policy_event_data": e.data,
-                "calls_after": [{"tool": c.name, "class": c.klass} for c in after],
+                "completed_after": [{"tool": c.name, "class": c.klass,
+                                     "result": c.result} for c in after],
+                "attempted_after": [{"tool": c.name, "class": c.klass,
+                                     "state": c.state} for c in attempted],
             },
         ))
     return findings
@@ -303,7 +320,8 @@ def ch05_unpaired_calls(session: Session) -> list[Finding]:
     interesting of the two cases and it was invisible.
     """
     opens = [c for c in session.tool_calls if c.state == "open"]
-    orphans = [c for c in session.tool_calls if c.state == "orphan_end"]
+    orphans = [c for c in session.tool_calls
+               if c.state in {"orphan_end", "mismatched_end", "duplicate_end"}]
     if not opens and not orphans:
         return []
 
