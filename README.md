@@ -418,6 +418,9 @@ flowchart TB
 
 ## Lab build, step by step
 
+**Automated:** `lab/Build-CohaeraLab.ps1` builds all four VMs unattended on
+VMware Workstation Pro 17. You supply the Ubuntu ISO. See [lab/README.md](lab/README.md).
+
 Full commands, verification gates and troubleshooting are in **[LAB.md](LAB.md)**.
 This is the shape of it.
 
@@ -657,6 +660,7 @@ prevention claim collapses.
 - [x] Six correctness defects from external review, fixed with regression tests
 - [ ] Typed capability manifests per producer, replacing name heuristics
 - [ ] Cohaera schema 1.0 plus a tested Exabeam exporter and parser package
+- [x] Automated VMware Workstation lab build ([lab/](lab/))
 - [ ] Streaming state with watermarks, replacing batch load
 - [ ] CH02 semantic matching
 - [ ] Validate content against a live SIEM

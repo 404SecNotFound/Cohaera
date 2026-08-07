@@ -11,3 +11,7 @@ tests/fixtures/*.jsonl
 *.out.jsonl
 telemetry.jsonl
 .DS_Store
+
+# lab build artefacts: user-data contains the password hash and SSH key
+lab/generated/
+lab/*.local.psd1
