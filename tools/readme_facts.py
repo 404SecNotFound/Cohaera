@@ -104,11 +104,17 @@ def count_constructed_evasions() -> int:
 def count_working_evasions() -> int:
     """Constructed evasions that have not been closed.
 
+    Only a cell that says exactly CLOSED counts as closed. A substring test read
+    "Half closed, coverage sees it" as a closure and quietly reported one fewer
+    working evasion than the file listed -- the number moving in the flattering
+    direction because of a word in a sentence, which is the drift this whole
+    module exists to prevent.
+
     This number is supposed to be able to go UP. An evasion catalogue whose
     headline count only ever falls is a catalogue nobody is adding to.
     """
     return len([e for e, fix in _evasion_rows().items()
-                if not e[-1].isalpha() and "CLOSED" not in fix.upper()])
+                if not e[-1].isalpha() and fix.strip().strip("*").upper() != "CLOSED"])
 
 
 def count_evasion_tests() -> int:

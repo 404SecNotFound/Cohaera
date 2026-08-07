@@ -841,7 +841,7 @@ prevention claim collapses.
 - [x] Sigma content pack, 9 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 301 passing across unit, hostile-input and content conformance
+- [x] Tests, 304 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 19 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger
@@ -924,7 +924,7 @@ tests/
                       resource amplification, correlation forgery, exit codes
   test_content.py     asserts every field the Sigma pack names exists in a real
                       record. Sigma validation cannot check this.
-  test_evasion.py     19 adversarial tests that PASS when an evasion works
+  test_evasion.py     20 adversarial tests that PASS when an evasion works
   fuzz_smoke.py       seeded malformed-input fuzz, runs in CI
   make_fixtures.py    labelled benign and suspect telemetry
 

@@ -204,7 +204,7 @@
     "coverage": {
       "type": "object",
       "index": true,
-      "description": "Schema cohaera.coverage:2. Per-check capability contracts. checks[] carries check, status (evaluated | degraded | not_evaluated), confidence, required_surfaces, present_surfaces, missing_surfaces, reasons (stable codes), remedies and assumptions. completeness is the mean confidence and is NOT a count of checks that did not error: unknown tool classification, an anonymous correlation key and unparseable clocks all reduce it. gaps[] is a flattened view kept for content written against coverage:1.",
+      "description": "Schema cohaera.coverage:2. Per-check capability contracts. checks[] carries check, status (evaluated | degraded | not_evaluated), confidence, required_surfaces, present_surfaces, missing_surfaces, reasons (stable codes), remedies and assumptions. completeness is the mean confidence and is NOT a count of checks that did not error: unknown tool classification, an anonymous correlation key and unparseable clocks all reduce it. Two reason codes mark blind spots that produce NO finding at all and are only visible here: BASELINE_VOCABULARY_MISMATCH (CH01 declined a workload its baseline was not fitted on) and DISCLOSURE_AMBIGUOUS_SHARED_TOKENS (CH02 could not attribute the summary to a specific call because the session's tool names share tokens). Alert on those via cohaera_coverage_degraded, not via the per-check rules. gaps[] is a flattened view kept for content written against coverage:1.",
       "subfields": [
         "schema",
         "checks_total",
