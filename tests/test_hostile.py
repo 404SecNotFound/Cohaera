@@ -745,6 +745,40 @@ def test_ch02_disclosure_scan_is_linear_in_response_length():
     assert elapsed < 1.5, f"CH02 took {elapsed:.2f}s"
 
 
+def test_e16_ambiguity_scan_cost_stays_bounded():
+    """The E16 fix made coverage() build a SECOND response index.
+
+    Named with "bounded" on purpose: the CI perf job selects tests by keyword
+    (`-k "amplify or linear or quadratic or bounded"`), so a cost test whose
+    name matches none of them runs in the ordinary suite and is absent from the
+    gate that exists to catch cost regressions.
+
+    CH02's own scan is pinned above; nothing pinned the whole run, and a second
+    linear pass is only obviously acceptable once it has been measured. Same
+    shape as the test above -- 400 consequential calls against an 80 KB response,
+    both numbers supplied by the observed system -- through run_all, which
+    executes every check and then the coverage contracts.
+    """
+    events = []
+    for i in range(400):
+        events.append(ev("tool_start", i * 0.002, tool_name=f"send_email_{i}",
+                         span_id=f"s{i}", data={"reversible": False}))
+        events.append(ev("tool_end", i * 0.002 + 0.001, tool_name=f"send_email_{i}",
+                         span_id=f"s{i}", data={"reversible": False}))
+    events.append(ev("model_response", 9999,
+                     data={"response_text": "send email nothing here " * 4000}))
+    s = sess(*events)
+    assert s.tool_calls, "warm the pairing cache so it is not timed below"
+    t0 = time.perf_counter()
+    _, cov = run_all(s)
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 3.0, f"run_all took {elapsed:.2f}s"
+    # And the scan has to have actually run, or the timing measures nothing:
+    # every one of these tools shares 'send' and 'email' with 399 others.
+    ch02 = next(c for c in cov["checks"] if c["check"] == "CH02_concealment_gap")
+    assert "DISCLOSURE_AMBIGUOUS_SHARED_TOKENS" in ch02["reasons"]
+
+
 def test_same_name_pairing_is_not_quadratic():
     """The name index used ``idx in bucket`` then ``bucket.remove(idx)``, both
     O(n) scans, so N same-name calls cost O(N^2) to pair."""
