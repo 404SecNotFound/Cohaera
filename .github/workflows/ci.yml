@@ -124,6 +124,18 @@ jobs:
       - name: Content conformance
         run: python -m pytest tests/test_content.py -q
 
+      - name: Evaluation corpus regenerates and the card is current
+        # The corpus is deterministic from its seed and is NOT committed, so the
+        # thing to guard is that it still generates, still passes its own
+        # label-integrity checks, and still produces the committed evaluation
+        # card byte for byte. A card that no longer matches the detector it
+        # claims to describe is worse than no card.
+        run: |
+          python eval/vocabulary.py
+          python eval/run_eval.py
+          git diff --exit-code -- eval/EVALUATION-CARD.md eval/evaluation-card.json \
+                                  eval/corpus/sample.jsonl eval/corpus/sample.labels.jsonl
+
       - name: README claims match the repository
         # C4-11. The README said "188 passing" against a tree with 197 and
         # listed one roadmap item twice. A number nothing keeps true is the one

@@ -15,3 +15,10 @@ telemetry.jsonl
 # lab build artefacts: user-data contains the password hash and SSH key
 lab/generated/
 lab/*.local.psd1
+
+# The generated evaluation corpus: 9 MB, deterministic from the seed in
+# eval/corpus/generate.py, so committing it would store nothing the generator
+# does not already encode. Regenerate with `python eval/corpus/generate.py`.
+# A readable sample (one session per family x kind) IS committed, at
+# eval/corpus/sample.jsonl, so the corpus can be audited without running it.
+eval/corpus/data/

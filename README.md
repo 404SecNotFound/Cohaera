@@ -256,16 +256,56 @@ positive for **"this session needs review"** and a false positive for **"this
 agent was compromised"**. The check's own output says exactly that. See
 [FINDINGS.md](FINDINGS.md).
 
+### Measured results
+
+There is now a labelled corpus and an evaluation harness. **The numbers are in
+[`eval/EVALUATION-CARD.md`](eval/EVALUATION-CARD.md)**, they are generated
+deterministically by `python eval/run_eval.py`, and they are not flattering.
+
+768 sessions per condition, 192 tasks across 8 task families, splits by task and
+never at random, and three quarters of the benign sessions are deliberate
+confounders — sessions that are genuinely benign and genuinely look like the
+attack they sit next to. Headline, `task_disjoint` with a capability manifest:
+
+| | |
+|---|---|
+| recall | **100%** (all four attack shapes caught) |
+| false positive rate | **60.6%** |
+| false positives per 1000 sessions | **417** |
+| false positives on *plain* benign sessions | **0 / 128** |
+
+Both halves matter. Cohaera separates clean benign traffic from everything else
+perfectly, and cannot separate a hard benign session from an attack at all: every
+false positive comes from a confounder, and every confounder trips exactly the
+check it was built to trip. **Cohaera is not noisy. It cannot distinguish intent
+from sequence**, which is a different and less fixable problem.
+
+Two results worth pulling out:
+
+- **With tool names the classifier's keyword lists already know, the name
+  heuristic alone scores identically to a full capability manifest.** That is
+  what the twelve fixtures below always measured — the keyword list checking
+  itself. Swap in a realistic vocabulary the heuristic has never seen and its
+  classification accuracy is **0% of 34 tools**, and recall falls to 73%.
+- **Under `family_holdout`, where the baseline never saw the test workload, the
+  false positive rate is 100%.** CH01 does not transfer across task families.
+  Fitting one baseline across a fleet of differently-tasked agents produces a
+  paging storm, not a detector.
+
+The card also measures the split-leakage inflation the citation below asserts,
+rather than repeating the citation, and states what it does not measure: the
+corpus is synthetic, attack prevalence is an absurd 33%, and none of the sixteen
+catalogued evasions in [EVASION.md](EVASION.md) appear in it.
+
 ### Fixture results
+
+The original fixtures remain as unit tests. They are a **smoke test, not a
+measurement**, and are kept only because the unit suite asserts against them.
 
 | Corpus | Sessions | Findings |
 |---|---|---|
 | 12 benign fixture sessions, grammar fitted on themselves | 12 | **0** |
 | 4 suspect fixture sessions | 4 | 9 across CH01 to CH05 |
-
-Zero false positives on benign is a **smoke test, not a measurement**. The
-grammar was fitted on near-identical sessions. Real numbers need the AgentDojo
-corpus with task-disjoint splits. That is what the lab below is for.
 
 ---
 
@@ -710,7 +750,10 @@ task and aggregates hide it.
 **Task-disjoint splits, never random.** MCPShield
 ([arXiv:2605.11053](https://arxiv.org/abs/2605.11053)) measured that naive
 random splits inflate AUROC by **up to 26 points**. If you use random splits
-your numbers are wrong and someone will notice.
+your numbers are wrong and someone will notice. This is no longer advice here:
+`eval/harness.py` raises `LeakageError` rather than return a split whose train
+and test sides share a task, and the card reports the inflation measured on this
+corpus rather than citing someone else's figure for it.
 
 **Fix the model tier.** Praxen's own documentation warns that scores are only
 comparable within a fixed model tier. State the model and version explicitly.
@@ -777,16 +820,17 @@ prevention claim collapses.
 - [x] Coverage reporting
 - [x] CIM emit with `type` and `schema`
 - [x] Fires on observra's shipped demo data
+- [x] Labelled corpus, task families, benign-hard confounders and an evaluation card ([eval/](eval/))
 - [ ] AgentDojo corpus under observra instrumentation, 25 attempts per scenario
-- [ ] Measured TPR and FPR with task-disjoint splits
+- [x] Measured TPR and FPR with task-disjoint splits ([eval/](eval/EVALUATION-CARD.md))
 - [ ] CH02 semantic matching, currently lexical and its weakest point
 - [ ] Praxen Worker Remit compiler, remit sections to runtime predicates
 - [x] Sigma content pack, 9 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 246 passing across unit, hostile-input and content conformance
+- [x] Tests, 273 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
-- [x] Adversarial self-test, 15 evasions ([EVASION.md](EVASION.md))
+- [x] Adversarial self-test, 16 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger
 - [x] Typed capability manifests per producer, replacing name heuristics
 - [x] Stable verdict, run and config identity for replay and dedup
