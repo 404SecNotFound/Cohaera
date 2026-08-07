@@ -212,7 +212,16 @@ def run_id(*, detector_version: str, config_hash: str, source: str,
     }, 24)
 
 
-def verdict_id(*, run: str, session_id: str, findings_digest: str) -> str:
-    """Identify one session verdict within one run."""
+def verdict_id(*, run: str, session_id: str, findings_digest: str,
+               session_digest: str = "", coverage_digest: str = "",
+               schema: str = "") -> str:
+    """Identify one session verdict within one run.
+
+    Commits to the EVIDENCE as well as the conclusion. Hashing only
+    (run, session, findings) meant two sessions with different events but
+    matching findings collided, and a SIEM deduplicating on verdict_id would
+    discard the second as a retry (C4-01).
+    """
     return digest({"run": run, "session": session_id,
-                   "findings": findings_digest}, 32)
+                   "findings": findings_digest, "events": session_digest,
+                   "coverage": coverage_digest, "schema": schema}, 32)
