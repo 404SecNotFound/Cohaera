@@ -342,6 +342,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="score the committed corpus instead of regenerating it")
     args = ap.parse_args(argv)
 
+    if not args.no_generate:
+        # The committed sample is regenerated here too, not only by
+        # generate.py's own main(). CI checks it for drift, and a drift check
+        # over a file the command never writes passes for the wrong reason.
+        gen.write_sample(gen.generate("unseen", args.seed),
+                         Path(__file__).resolve().parent / "corpus")
     summary = (gen.write(DATA, args.seed) if not args.no_generate
                else {"seed": args.seed, "conditions": {
                    c: {"sessions": len(load_corpus(DATA, c)),
