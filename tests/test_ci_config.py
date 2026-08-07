@@ -144,6 +144,32 @@ def test_ruleset_blocks_the_things_it_should():
         assert required in rules, f"ruleset does not enforce {required}"
 
 
+def test_squash_is_the_only_allowed_merge_method():
+    """A signing control, not a style preference.
+
+    GitHub signs commits it creates server-side. A squash merge is one such
+    commit, so it lands Verified even when the contributor cannot sign locally.
+    A merge commit is signed too -- but it PRESERVES the branch commits beneath
+    it, unsigned and all.
+
+    This repository paid for that distinction. PR #3 merged with a merge commit
+    and four unsigned commits survived under a Verified merge commit, taking
+    main from one unverified commit to five. Clearing them cost a history
+    rewrite, a force push, and taking the ruleset down and back up.
+
+    Allowing `merge` again silently re-opens it, so assert the setting rather
+    than trusting whoever next edits this file to remember why.
+    """
+    for rule in load_ruleset()["rules"]:
+        if rule["type"] == "pull_request":
+            methods = rule["parameters"].get("allowed_merge_methods")
+            assert methods == ["squash"], (
+                f"allowed_merge_methods is {methods!r}; must be ['squash'] so "
+                "unsigned branch commits cannot survive a merge onto main")
+            return
+    pytest.fail("no pull_request rule in the ruleset")
+
+
 def test_ruleset_targets_main_and_is_active():
     ruleset = load_ruleset()
     assert ruleset["target"] == "branch"
