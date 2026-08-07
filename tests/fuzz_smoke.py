@@ -33,7 +33,7 @@ from cohaera.checks import SequenceGrammar, run_all
 from cohaera.identity import Correlator
 from cohaera.ingest import assemble, read_events
 from cohaera.limits import Limits
-from cohaera.model import Event, to_cim_event
+from cohaera.model import Event, Session, to_cim_event
 from cohaera.validate import IngestReport
 
 SEED = 20260807
@@ -140,8 +140,19 @@ def score_in_memory(rng: random.Random, failures: dict) -> int:
             json.loads(blob, parse_constant=_no_bare_constants)
             if rng.random() < 0.2:
                 # BUG-05: derived state must refresh when the session grows.
-                s.add_event(Event(raw=rand_record(rng)))
-                run_all(s, grammar)
+                #
+                # Fuzzed on an UNSEALED session, because that is the only place
+                # the guarantee applies now. C4-08 sealed batch-assembled
+                # sessions -- their event list is a tuple and add_event raises --
+                # precisely so that the batch path cannot serve a stale cache at
+                # all. Growth is the streaming path's problem, so build a
+                # streaming session and grow that one.
+                live = Session(session_id=s.session_id, events=list(s.events),
+                               correlation=s.correlation, manifest=s.manifest)
+                run_all(live, grammar)
+                live.add_event(Event(raw=rand_record(rng)))
+                run_all(live, grammar)
+                live.seal()
     except Exception as exc:
         failures.setdefault(f"{type(exc).__name__}: {str(exc)[:90]}",
                             (records, traceback.format_exc()))

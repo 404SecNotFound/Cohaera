@@ -21,7 +21,9 @@ import hashlib
 import math
 import re
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
+from functools import cached_property
 from typing import Any, ClassVar
 
 from . import validate
@@ -153,24 +155,95 @@ def evidence_list(items: list[Any], limits: Limits) -> dict[str, Any]:
     return out
 
 
-@dataclass
+class FrozenDict(dict):
+    """A dict that refuses to be changed.
+
+    A ``dict`` subclass rather than ``MappingProxyType`` on purpose. Cohaera
+    tests record shape with ``isinstance(x, dict)`` in the schema firewall, the
+    classifier and the serialiser, and a proxy is not a dict, so swapping one in
+    would have made every record's ``data`` bag read as absent-and-defective.
+    This keeps `dict` behaviour -- lookups, ``.get``, ``json.dumps`` -- and
+    removes only the ability to mutate.
+    """
+
+    __slots__ = ()
+
+    def _immutable(self, *_a: Any, **_kw: Any) -> Any:
+        raise TypeError(
+            "this record is frozen: Event.raw is immutable once constructed "
+            "because derived values are cached from it (C4-07)")
+
+    __setitem__ = _immutable
+    __delitem__ = _immutable
+    pop = _immutable                    # type: ignore[assignment]
+    popitem = _immutable                # type: ignore[assignment]
+    clear = _immutable                  # type: ignore[assignment]
+    update = _immutable                 # type: ignore[assignment]
+    setdefault = _immutable             # type: ignore[assignment]
+    __ior__ = _immutable                # type: ignore[assignment]
+
+
+_CONTAINERS = (dict, list, tuple)
+
+
+def freeze(value: Any, _depth: int = 0, _max_depth: int = 100) -> Any:
+    """Deep-freeze a decoded JSON value: dicts become FrozenDict, lists tuples.
+
+    Depth-bounded for the same reason ``json_safe`` is: this walks
+    producer-controlled structure. The ingest firewall refuses over-deep records
+    long before this sees them, so the bound is the second wall, for Events
+    built in memory rather than parsed from a line.
+
+    Scalars are passed through at the call site rather than by recursing into
+    this function, because most values in a record ARE scalars: a typical
+    observra record made 18 calls per event when only 4 of its values were
+    containers, and this runs once per event on the ingest hot path.
+    """
+    if _depth > _max_depth:
+        return FrozenDict({"_truncated_depth": _max_depth})
+    d = _depth + 1
+    if isinstance(value, dict):
+        return FrozenDict({
+            k: (freeze(v, d, _max_depth) if isinstance(v, _CONTAINERS) else v)
+            for k, v in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(freeze(v, d, _max_depth) if isinstance(v, _CONTAINERS) else v
+                     for v in value)
+    return value
+
+
+@dataclass(frozen=True)
 class Event:
     """One observra CIM record, parsed but not interpreted.
 
     ``raw`` is kept verbatim. Every accessor reads it through
     :mod:`cohaera.validate`, so ``raw`` can contain anything JSON can express
     without a downstream consumer ever seeing a value of an unexpected type.
+
+    C4-07. ``raw`` used to be an ordinary mutable dict while ``view`` was cached
+    on first access, so ``e.raw["tool_name"] = "delete_everything"`` left every
+    accessor still reporting the old name -- the class, the correlation key, the
+    digest, all of it. The record and the engine's belief about the record could
+    disagree indefinitely, and nothing raised.
+
+    That is not a caching bug to paper over with an invalidate() call. The API
+    PERMITTED mutation behind a cache, and any fix that leaves the mutation
+    possible only narrows the window. So the record is frozen instead: the
+    dataclass refuses rebinding, and ``freeze`` makes the payload itself
+    immutable all the way down. A cache over an immutable value cannot go stale.
+    C4-08 is the same fault one layer up; see :class:`Session`.
     """
 
     raw: dict[str, Any]
     limits: Limits = field(default=DEFAULT_LIMITS, repr=False, compare=False)
-    _view: validate.RecordView | None = field(default=None, repr=False, compare=False)
 
-    @property
+    def __post_init__(self) -> None:
+        if not isinstance(self.raw, FrozenDict):
+            object.__setattr__(self, "raw", freeze(self.raw))
+
+    @cached_property
     def view(self) -> validate.RecordView:
-        if self._view is None:
-            self._view = validate.view(self.raw, self.limits)
-        return self._view
+        return validate.view(self.raw, self.limits)
 
     @property
     def defects(self) -> tuple[str, ...]:
@@ -370,31 +443,57 @@ def _num(value: Any) -> float | None:
     return v
 
 
+class SealedSessionError(RuntimeError):
+    """An attempt to mutate a session that has already been scored against."""
+
+
 @dataclass
 class Session:
     """A correlated agent session. This is the object observra never builds.
 
-    Derived values are cached, and the cache is keyed on the length of the event
-    list. BUG-05: the previous cache was populated on first access and never
-    invalidated, so appending a terminal event to ``session.events`` left the
-    call reported as still open. Batch loading hid it because the list was fully
-    populated before any check ran. A streaming service would have shipped wrong
-    verdicts. Prefer :meth:`add_event`; direct ``.events.append`` is still
-    handled, because somebody will do it.
+    Derived values are cached. BUG-05: the first cache was populated on first
+    access and never invalidated, so appending a terminal event left the call
+    reported as still open. That was fixed by keying the cache on
+    ``len(self.events)``.
+
+    C4-08. Keying on LENGTH is not keying on CONTENT, and the difference is
+    reachable: replace an event in place with ``s.events[0] = other`` and the
+    length is unchanged, so every cached feature -- tool classes, egress counts,
+    the call pairing, the content digest the verdict ID commits to -- is served
+    from the old set. A read-only tool silently stands in for an exfiltration.
+
+    This is C4-07 one layer up, and it has the same answer. Rather than add
+    another invalidation hook for callers to forget, a session that is finished
+    being built is SEALED: ``events`` becomes a tuple, so neither ``append`` nor
+    index assignment exists any more, and a cache over an immutable sequence
+    cannot go stale. :func:`cohaera.ingest.assemble` seals every session it
+    returns, so everything the CLI scores is immutable by the time a check sees
+    it. Streaming assembly keeps the mutable path: build with :meth:`add_event`,
+    which bumps a revision counter, then :meth:`seal` when the session ends.
     """
 
     session_id: str
-    events: list[Event] = field(default_factory=list)
+    events: Sequence[Event] = field(default_factory=list)
     correlation: CorrelationKey | None = field(default=None, compare=False)
     limits: Limits = field(default=DEFAULT_LIMITS, repr=False, compare=False)
     manifest: CapabilityManifest = field(default=EMPTY_MANIFEST, repr=False,
                                          compare=False)
-    _caches: dict[str, tuple[int, Any]] = field(default_factory=dict, repr=False,
+    _caches: dict[str, tuple[Any, Any]] = field(default_factory=dict, repr=False,
                                                 compare=False)
+    _revision: int = field(default=0, repr=False, compare=False)
+    _sealed: bool = field(default=False, repr=False, compare=False)
+
+    @property
+    def sealed(self) -> bool:
+        return self._sealed
 
     # ---- cache plumbing --------------------------------------------------
     def _cached(self, key: str, build):
-        token = len(self.events)
+        # Length AND revision. Once sealed the events are a tuple and neither
+        # can change; before that, length still catches a bare ``.events.append``
+        # and the revision catches an in-place replacement made through
+        # add_event/invalidate.
+        token = (self._revision, len(self.events))
         hit = self._caches.get(key)
         if hit is not None and hit[0] == token:
             return hit[1]
@@ -405,9 +504,24 @@ class Session:
     def invalidate(self) -> None:
         """Drop every derived value. Call after mutating ``events`` in place."""
         self._caches.clear()
+        self._revision += 1
+
+    def seal(self) -> None:
+        """Freeze the event list. Idempotent; after this the session is read-only."""
+        if self._sealed:
+            return
+        self.events = tuple(self.events)
+        self._sealed = True
+        self.invalidate()
 
     def add_event(self, event: Event) -> None:
         """Append an event and invalidate everything derived from the old set."""
+        if self._sealed:
+            raise SealedSessionError(
+                f"session {self.session_id!r} is sealed; its derived values are "
+                "cached and adding an event would serve stale ones (C4-08)")
+        if isinstance(self.events, tuple):      # defensive: sealed flag cleared
+            self.events = list(self.events)
         self.events.append(event)
         self.invalidate()
 
@@ -676,7 +790,8 @@ class Session:
                 if len(out) >= cap:
                     break
                 pats = e.data.get("injection_patterns")
-                if isinstance(pats, list):
+                # tuple as well as list: a frozen Event's sequences are tuples.
+                if isinstance(pats, (list, tuple)):
                     items = pats
                 elif isinstance(pats, str) and pats:
                     items = [p.strip() for p in pats.split(",") if p.strip()]

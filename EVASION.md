@@ -166,6 +166,50 @@ regression test. The reproduction matters: three of the claims below turned out
 to be true for a different reason than the reviewer gave, and one turned out to
 be aimed at the wrong function entirely.
 
+### Fourth review, revision `ec77e3f`
+
+Eleven defects, C4-01 to C4-11. Seven were spot-checked first and all seven
+reproduced, so the review was treated as reliable and the remainder were
+reproduced individually before any of them were touched. Nine are fixed here,
+with regression tests in [`tests/test_hostile.py`](tests/test_hostile.py); the
+two that are not are listed below with the reason.
+
+The unifying theme this time is different from the third review's, and worse.
+The third review found inputs the code had never been shown. This one found
+**bounds and caches that did not do what their names said** -- a budget checked
+after the work it was meant to prevent, a cap that a negative value disabled, a
+cache keyed on a length rather than on the content it was caching. Every one of
+these reads as present when you audit the code by grepping for the control. They
+are only absent when you measure.
+
+| ID | Defect | Effect | Status |
+|---|---|---|---|
+| C4-01 | `run_id` hashed the ingest **summary** -- source path plus counts -- not the content. | Two entirely different files at the same path with matching counts produced identical `analysis_run_id` and `verdict_id`. A SIEM deduplicating on either discards the second as a retry, which is what a rotating collector produces every day. | **Fixed.** A streaming SHA-256 over the exact bytes of every record read, in order, accepted and rejected alike. `verdict_id` also commits to the session events, coverage and schema, so two sessions with different evidence and matching findings no longer collide. |
+| C4-02 | `max_events_total` was checked against `report.accepted`; `max_rejects` and `max_reject_ratio` were checked by the CLI *after* `load()` returned. | A file of nothing but malformed records incremented no accepted count, so the only in-reader budget never moved, and the CLI's budgets were a post-mortem: every byte was already read, decoded, depth-scanned and hashed. With `max_events_total=1` and `max_rejects=1`, all three malformed records in a three-line file were still read. | **Fixed.** Every budget is evaluated per record inside `read_events`, and two new ones bound the **work** rather than the yield: `max_records_total` and `max_input_bytes`. The ratio check waits for `max_reject_ratio_floor` records first, because one bad line out of one is a ratio of 1.0. |
+| C4-03 | A record with partial identity and an invalid timestamp keyed as `anon-<scope>-noclock`. | One bucket per scope for the whole run. Two unrelated events an hour apart merged into a single session, which then supported cross-event findings the data never justified. The timestamp is producer-controlled, so this was reachable on purpose. | **Fixed.** A scoped anonymous key is identity *plus* a time window; with no usable clock there is no window and nothing to merge on, so the record is isolated exactly as BUG-06's fully-anonymous records are. Confidence 0.0, stated in the record. |
+| C4-04 | `_write_reject_log` caught `OSError`, printed a line and returned. | A run whose `--reject-log` path was unwritable still exited **0**. The quarantine ledger is the record of what Cohaera refused to score; losing it while reporting success is the same silent-data-loss failure BUG-11 introduced exit codes to remove. | **Fixed.** The path is probed for writability before scoring starts, and a write failure at the end is an error exit. A requested audit artifact that cannot be produced fails the command. |
+| C4-05 | `Limits` validated nothing. | `Limits(max_evidence_items=-1)` constructed happily and then **silently disabled** the output cap, because `cap_list` reads a negative limit as unlimited -- so lowering a bound by typo raised the ceiling and reinstated the 61x amplification that bound exists to stop. `max_reject_ratio=2.0` was a reject budget that could never trip. | **Fixed.** `Limits.__post_init__` refuses every out-of-range value, argparse rejects them at the boundary as usage errors, and a test asserts that *every* field is covered by a validation rule so a bound added later cannot escape one. |
+| C4-06 | `requires_approval=bool(spec.get(...))`. | The JSON string `"false"` became `True`. Every other field on the record was type-checked; this one guessed, and it guessed in the direction that changes what a check concludes. | **Fixed.** Booleans only. The manifest also gets the bounds telemetry already had: file size, tool count, field lengths and `sensitive_args` count, and producer metadata is no longer coerced with `str()` -- `str({...})` sent a dict's repr to the SIEM as a producer name. |
+| C4-07 | `Event.view` was cached; `Event.raw` stayed a mutable dict. | The record and the engine's belief about it could disagree indefinitely, with nothing raising. Mutate `raw["tool_name"]` after first access and the class, the correlation key and the digest all still report the old value. | **Fixed.** Records are frozen: the dataclass refuses rebinding and the payload is immutable all the way down. A cache over an immutable value cannot go stale. Digests are unchanged, so stored verdicts still match. **Measured cost:** deep-freezing every record moved `read_events` on 64,000 typical events from 2.13s to 2.80s, a 31% ingest overhead. Stated rather than buried, because it is a real price and somebody sizing a collector needs it. It buys the removal of a state in which the record and the engine's belief about it can disagree with nothing raising. |
+| C4-08 | The `Session` cache keyed on `len(self.events)`. | Length is not content. `s.events[0] = other` left the length unchanged, so every cached feature -- tool classes, egress counts, the digest `verdict_id` commits to -- was served from the old set, and a read-only tool stood in for an exfiltration. | **Fixed.** Same fault as C4-07 one layer up, and the same answer: batch-assembled sessions are **sealed**, `events` becomes a tuple, and neither `append` nor index assignment exists. The streaming path keeps `add_event`, which bumps a revision counter the cache also reads. |
+| C4-09 | Oversize rejects logged `bytes_seen=0` and an empty digest. | For the one reject class where size *is* the finding, the ledger recorded no size. The byte count was already being computed to enforce the bound and was thrown away. | **Fixed.** `_bounded_lines` yields the real byte count and a digest streamed over the whole line without ever retaining it, so an oversize record is identifiable and comparable across runs, and its content reaches the run identity that C4-01 added. |
+
+**C4-10, semantic manifest digest: not taken.** The review proposed replacing the
+manifest's byte digest with a digest of its parsed semantics, so that
+reformatting the file does not change the recorded hash. That trade goes the
+wrong way for a security control. The question the digest answers is "did the
+policy file change at all", and the byte digest answers it strictly; a semantic
+digest would report *no change* for an edit that added a field Cohaera does not
+yet read. If the semantic digest is wanted for change-management ergonomics it
+should ship **alongside** the byte digest, not instead of it.
+
+**C4-11, README drift: fixed, and made structural.** The README said "188
+passing" against a tree with 197 and listed "CH02 semantic matching" twice in one
+roadmap. Small, both of them -- and exactly the kind of claim this project argues
+should be kept true by something rather than by attention. The counts are now
+derived from the tree by [`tools/readme_facts.py`](tools/readme_facts.py) and
+checked on every test run and in CI.
+
 ### Third review, revision `c832721`
 
 Eleven defects. All eleven reproduced; all eleven fixed with tests in
@@ -252,7 +296,7 @@ regression tests.
 | CH05 | Orphan terminal events were constructed with `result="success"` and never flagged. | An irreversible action appearing from nowhere was invisible | **Fixed.** `orphan_end` state, reported by CH05. |
 
 The review's C-05 finding, no executable test suite, was accurate at revision
-`45d3bf8`. There are now 188 tests: unit, hostile-input, content conformance and
+`45d3bf8`. There are now 246 tests: unit, hostile-input, content conformance and
 15 evasion characterizations, plus a seeded fuzz smoke test in CI.
 
 ### What is still open from the third review
