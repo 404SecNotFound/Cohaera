@@ -317,6 +317,26 @@ def test_example_manifest_loads_and_is_useful():
     assert manifest.klass_for("sync_local_cache") == "state_change"
 
 
+def test_the_example_manifest_declares_policy_semantics_both_ways():
+    """The `policies` section is the remedy for EVASION.md E20, so the shipped
+    example has to demonstrate the remedy rather than describe it.
+
+    Both values matter and they fail in opposite directions. `advisory` stops
+    CH04 paging on correct behaviour; `blocking` is what lets it use the word
+    bypass. An example carrying only one of them would show half the mechanism.
+    """
+    manifest = CapabilityManifest.from_file(MANIFEST)
+    assert manifest.policy("cost_threshold_exceeded").enforcement == "advisory"
+    assert manifest.policy("depth_exceeded").enforcement == "blocking"
+    # Keyed on a producer's policy_id rather than on an event type, which is
+    # what a real policy engine emits and what the lookup has to support.
+    assert manifest.policy("external-data-egress").enforcement == "blocking"
+    assert manifest.policy("no-such-policy") is None
+    # Lookup takes candidates in preference order, so a caller does not have to
+    # know which of the two the producer happened to send.
+    assert manifest.policy(None, "depth_exceeded").enforcement == "blocking"
+
+
 def test_example_manifest_is_valid_json_with_a_stable_digest():
     blob = MANIFEST.read_bytes()
     json.loads(blob.decode("utf-8"))

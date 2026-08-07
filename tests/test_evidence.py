@@ -317,6 +317,23 @@ def test_deleting_a_record_is_detected_as_a_gap():
     assert state.gaps == [{"missing_from": 3, "missing_to": 3, "missing_count": 1}]
 
 
+def test_records_after_a_deletion_are_not_reported_as_reordered():
+    """Found by running the CLI over a tampered stream, not by reading the code.
+
+    Every record after a gap has to be held while the verifier waits for the one
+    that never arrives, and counting them on release made a DELETION report
+    ``INTEGRITY_RECORDS_REORDERED`` alongside its gap. To an analyst that reads
+    as a delivery problem sitting next to a tamper signal, which is the one
+    reading this check exists to prevent.
+    """
+    signed = sign_stream(_records(8), "stream-a", SECRET, KEY_ID)
+    del signed[3]
+    state = _run(signed).for_session("sess-1")
+    assert R_SEQUENCE_GAP in state.codes
+    assert R_REORDERED not in state.codes
+    assert state.reordered == 0
+
+
 def test_one_deletion_does_not_read_as_a_wholly_forged_stream():
     """After a gap the verifier resyncs on the survivor's declared predecessor.
 

@@ -737,7 +737,9 @@ class StreamVerifier:
         body = body_digest(record)
         if integrity.seq == stream.expected:
             self._consume(stream, integrity.seq, body, integrity, session_key)
-            self._drain(stream)
+            # A hole was just FILLED, so anything already waiting arrived early
+            # and was genuinely reordered.
+            self._drain(stream, reordered=True)
         elif integrity.seq < stream.expected:
             # Already accounted for. Either a duplicate delivery or a replay of
             # a record whose position in the chain is taken.
@@ -750,7 +752,7 @@ class StreamVerifier:
         for stream in sorted(self.streams.values(), key=lambda s: s.stream_id):
             while stream.pending:
                 self._force(stream)
-                self._drain(stream)
+                self._drain(stream, reordered=False)
         # Selective stripping. A session where SOME records carry a sidecar and
         # others do not is not a session with partial coverage; it is the shape
         # an attacker produces by removing the evidence from the records they
@@ -866,21 +868,33 @@ class StreamVerifier:
             # bound rather than by evidence.
             state.note(R_REORDER_BUDGET)
             self._force(stream)
-            self._drain(stream)
+            self._drain(stream, reordered=False)
             if seq == stream.expected:
                 self._consume(stream, seq, body, integrity, session_key)
-                self._drain(stream)
+                self._drain(stream, reordered=True)
                 return
         stream.pending[seq] = (body, integrity, session_key)
         self._pending_total += 1
 
-    def _drain(self, stream: _Stream) -> None:
+    def _drain(self, stream: _Stream, reordered: bool) -> None:
+        """Consume everything now contiguous. ``reordered`` says WHY it was held.
+
+        The distinction is not cosmetic. Records held because the sequence
+        number before them was DELETED arrived perfectly in order -- they were
+        waiting for something that never came -- and counting them as reordered
+        made a deletion report ``INTEGRITY_RECORDS_REORDERED`` alongside the gap,
+        which reads to an analyst as a delivery problem rather than as evidence
+        of tampering. The caller knows which case it is: a hole filled by an
+        arriving record is a reorder, a hole closed by the gap logic is not.
+        """
         while stream.expected in stream.pending:
             seq = stream.expected
             body, integrity, session_key = stream.pending.pop(seq)
             self._pending_total -= 1
-            self._session(session_key).reordered += 1
-            self._session(session_key).note(R_REORDERED)
+            if reordered:
+                state = self._session(session_key)
+                state.reordered += 1
+                state.note(R_REORDERED)
             self._consume(stream, seq, body, integrity, session_key)
 
     def _force(self, stream: _Stream) -> None:
