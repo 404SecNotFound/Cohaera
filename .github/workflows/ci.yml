@@ -14,6 +14,21 @@ name: ci
 #
 # Branch protection is a repository setting and cannot be committed. Require
 # these checks on the default branch in Settings -> Branches.
+#
+# ACTIONS ARE PINNED TO COMMIT SHAs, not to tags. A tag is a mutable pointer in
+# a repository this project does not control: whoever can move `v4` can run
+# arbitrary code in a job that holds this repository's token, and the diff that
+# does it is invisible here because the workflow file does not change. Pinning
+# to a SHA makes the supply chain a content address rather than a name lookup.
+#
+# The version comment after each SHA is the human-readable half and is checked
+# by tests/test_ci_config.py, along with the pinning itself, so an unpinned
+# `uses:` added later fails the suite rather than being noticed by a reviewer.
+#
+# The cost of pinning is that security updates stop arriving on their own.
+# .github/dependabot.yml is the other half of the trade: it opens a pull request
+# when a pinned action moves, which puts the update through the same review and
+# the same required checks as any other change.
 
 on:
   push:
@@ -39,8 +54,8 @@ jobs:
         # is a claim rather than a fact.
         python: ["3.10", "3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ matrix.python }}
       - name: Install
@@ -95,8 +110,8 @@ jobs:
     name: malformed-input fuzz
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]"
@@ -107,8 +122,8 @@ jobs:
     name: sigma validation and conformance
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev,content]"
@@ -149,8 +164,8 @@ jobs:
     name: amplification regression
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]"
@@ -163,8 +178,8 @@ jobs:
     name: build and install the wheel
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Build
@@ -192,7 +207,7 @@ jobs:
           assert all(r["verdict_id"] for r in rows)
           print(f"{len(rows)} verdict record(s) emitted from the installed wheel")
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dist
           path: dist/
@@ -201,8 +216,8 @@ jobs:
     name: sbom
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Generate an SBOM for the built artefact
@@ -211,7 +226,7 @@ jobs:
           python -m build
           python -m pip install dist/*.whl
           cyclonedx-py environment -o /tmp/cohaera-sbom.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sbom
           path: /tmp/cohaera-sbom.json

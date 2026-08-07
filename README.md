@@ -841,7 +841,7 @@ prevention claim collapses.
 - [x] Sigma content pack, 9 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 304 passing across unit, hostile-input and content conformance
+- [x] Tests, 309 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 19 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger
@@ -850,6 +850,9 @@ prevention claim collapses.
 - [x] Per-check coverage capability contracts (`cohaera.coverage:2`)
 - [x] CI with lint, fuzz smoke, Sigma validation, conversion and wheel install
 - [x] Eleven defects from the third external review, fixed with regression tests
+- [x] Eleven defects from the fourth external review, fixed with regression tests
+- [x] Supply chain: SHA-pinned actions, Dependabot, CodeQL, [SECURITY.md](SECURITY.md), [threat model](docs/THREAT-MODEL.md)
+- [ ] Signed releases with an SBOM attested to the released artefact, not a 90-day CI artefact
 - [ ] Cohaera schema 1.0 plus a tested Exabeam exporter and parser package
 - [x] Automated VMware Workstation lab build ([lab/](lab/))
 - [ ] Streaming state with watermarks, replacing batch load

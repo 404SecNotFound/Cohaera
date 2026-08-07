@@ -35,7 +35,8 @@
           { "context": "sigma validation and conformance" },
           { "context": "amplification regression" },
           { "context": "build and install the wheel" },
-          { "context": "sbom" }
+          { "context": "sbom" },
+          { "context": "codeql (python)" }
         ]
       }
     }
