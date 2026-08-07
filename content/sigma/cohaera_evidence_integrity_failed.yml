@@ -1,0 +1,71 @@
+title: Agent Telemetry Failed Collector Integrity Verification
+id: 3e9a1c7d-8b64-4f02-a5d1-7c2e40b9f8a3
+status: experimental
+description: |
+  Records in this agent session did not verify against what the collector
+  attested to: a gap in the collector's sequence, a record that does not match
+  the hash chain, a signature that did not verify, or a record signed by a key
+  the operator did not supply.
+
+  THIS IS NOT A BEHAVIOURAL FINDING AND SHOULD NOT BE TRIAGED AS ONE. Every
+  other rule in this pack is a statement about what an agent did. This one is a
+  statement about whether the evidence for any of those is admissible. A session
+  that fires this rule has findings -- and absences of findings -- that rest on
+  records somebody could have edited.
+
+  Read it with data.findings[].evidence_status on the OTHER findings in the same
+  verdict, which is one of:
+
+    verified       the chain held and a signature verified against a supplied key
+    chained_unsigned  the chain held; nothing was supplied to verify its origin
+    unattested     no integrity evidence at all. THE DEFAULT for any deployment
+                   that has not adopted cohaera.integrity:1, and it means
+                   tampering was not ruled out rather than ruled out
+    inadmissible   this rule fired
+
+  WHAT IT CANNOT TELL YOU. Not who did it. A collector holding the signing key
+  can produce a perfectly chained stream of lies, and where the adapter runs
+  in-process with the agent that is not even a compromise, it is the normal
+  configuration. Verification says these records are the ones that collector
+  wrote. It does not say the collector was truthful.
+
+  A SEQUENCE GAP IS THE ONE TO ESCALATE. Deleting an event was, before this,
+  detectable only by accident -- when the missing call happened to break a
+  learned bigram. data.findings[].evidence.integrity.sequence_gaps says how many
+  records are missing and where, and Cohaera distinguishes a genuine deletion
+  from out-of-order delivery: reordered records are counted separately under
+  records_reordered and do not fire this rule.
+
+  Requires Cohaera and a collector emitting cohaera.integrity:1.
+references:
+    - https://github.com/404SecNotFound/Cohaera
+    - https://github.com/404SecNotFound/Cohaera/blob/main/docs/EVIDENCE-TRUST.md
+    - https://genai.owasp.org/llm-top-10/
+author: Imran Hafeez
+date: 2026-08-07
+modified: 2026-08-07
+logsource:
+    product: cohaera
+    service: session_verdict
+detection:
+    selection:
+        type: 'cohaera_session_verdict'
+        data.triggered_rules|contains: 'CH06_evidence_integrity'
+    condition: selection
+fields:
+    - session_id
+    - agent_name
+    - user
+    - host
+    - data.tool_sequence
+    - data.coverage.completeness
+falsepositives:
+    - A collector restart that resets a stream's sequence without a new
+      stream_id. Fix the collector; a sequence that restarts is a sequence that
+      cannot detect deletion.
+    - Delivery reordering beyond Cohaera's reorder window, which is bounded at
+      max_reorder_window records. Check
+      data.findings[].evidence.integrity.codes for
+      INTEGRITY_REORDER_BUDGET_EXHAUSTED, which says the gap call was forced by
+      that bound rather than concluded from the evidence.
+level: critical

@@ -38,10 +38,40 @@ from dataclasses import dataclass, field
 from itertools import pairwise
 from typing import Any
 
+from .capabilities import CapabilityManifest
+from .evidence import (
+    BINDING_TRUSTED,
+    BOUND_ARG_MISMATCH,
+    BOUND_EXACT,
+    BOUND_NONE,
+    BOUND_SPAN_ONLY,
+    DECISION_DENY,
+    ENFORCEMENT_ADVISORY,
+    ENFORCEMENT_BLOCKING,
+    ENFORCEMENT_UNDECLARED,
+    R_CHAIN_BROKEN,
+    R_KEY_UNKNOWN,
+    R_NO_COLLECTOR_KEYS,
+    R_NO_INTEGRITY,
+    R_PARTIAL_INTEGRITY,
+    R_SEQUENCE_GAP,
+    R_SEQUENCE_REPLAY,
+    R_SIGNATURE_INVALID,
+    R_UNSIGNED,
+    SessionIntegrity,
+)
 from .identity import digest
 from .limits import DEFAULT_LIMITS, Limits
 from .model import POLICY_EVENTS, SOURCE_MANIFEST, Finding, Session, ToolCall, cap_list
 from .validate import sanitise_display
+
+# Re-exported so that every reason code an operator can see is importable from
+# one module, even though the integrity ones are produced in ``evidence``.
+__all__ = [
+    "R_CHAIN_BROKEN", "R_KEY_UNKNOWN", "R_NO_COLLECTOR_KEYS", "R_NO_INTEGRITY",
+    "R_PARTIAL_INTEGRITY", "R_SEQUENCE_GAP", "R_SEQUENCE_REPLAY",
+    "R_SIGNATURE_INVALID", "R_UNSIGNED",
+]
 
 # ---------------------------------------------------------------------------
 # CH01  Sequence order violation
@@ -668,8 +698,110 @@ def ch03_untrusted_to_consequential(session: Session,
 # ---------------------------------------------------------------------------
 
 CH04_FAMILY = "CH04_guardrail_overrun"
+# Retained ID and retained wording. This is the UNDECLARED case -- a policy
+# event fired, nothing said whether it blocks, and Cohaera reports the sequence
+# without attributing a bypass. The name is older than the distinction and
+# renaming it would break every Sigma rule written against it, so it stays and
+# the docstring carries the correction.
 CH04_COMPLETED = "CH04_guardrail_bypass_completed"
 CH04_ATTEMPTED = "CH04_post_guardrail_attempt"
+# New, and the only check in this file that may use the word "bypass" and mean
+# it: the control was DECLARED blocking, work completed after it, and no
+# approval bound to that work. Additive, so existing content keeps matching what
+# it always matched.
+CH04_BYPASSED = "CH04_blocking_control_bypassed"
+
+# Where the enforcement semantics came from. An operator's manifest outranks the
+# event, because the event is written by the thing being watched.
+ENFORCEMENT_FROM_MANIFEST = "manifest"
+ENFORCEMENT_FROM_EVENT = "policy_event"
+ENFORCEMENT_FROM_NOWHERE = "undeclared"
+
+
+def _resolved_enforcement(event: Any, manifest: CapabilityManifest
+                          ) -> tuple[str, str]:
+    """(enforcement, source) for one policy event.
+
+    Precedence exists here for the same reason it exists on ``ToolCall.klass``.
+    ``enforcement`` arrives in band, and unlike every other field the checks
+    read, a value of ``advisory`` SUPPRESSES a finding. A producer that wanted
+    CH04 quiet would send it. So an operator-supplied declaration wins, and the
+    verdict records which of the two it used -- a bypass suppressed on the
+    strength of the agent's own say-so is a different fact from one suppressed
+    on the strength of the operator's, and an analyst has to be able to tell.
+    """
+    declared = manifest.policy(event.data.get("policy_id"), event.event_type)
+    if declared is not None:
+        return declared.enforcement, ENFORCEMENT_FROM_MANIFEST
+    in_band = event.enforcement
+    if in_band != ENFORCEMENT_UNDECLARED:
+        return in_band, ENFORCEMENT_FROM_EVENT
+    return ENFORCEMENT_UNDECLARED, ENFORCEMENT_FROM_NOWHERE
+
+
+def _policy_semantics(session: Session) -> dict[str, Any]:
+    """Where this session's policy events got their semantics from.
+
+    ``undeclared`` is true if ANY policy event lacks a declaration, not if all
+    of them do. A session with one declared control and one undeclared one has
+    a gap, and averaging it away would report the better half.
+    """
+    sources = [_resolved_enforcement(e, session.manifest)[1]
+               for e in session.events if e.event_type in POLICY_EVENTS]
+    return {
+        "undeclared": ENFORCEMENT_FROM_NOWHERE in sources,
+        "in_band_only": (ENFORCEMENT_FROM_NOWHERE not in sources
+                         and ENFORCEMENT_FROM_EVENT in sources),
+        "sources": sorted(set(sources)),
+    }
+
+
+def _approval_state(session: Session, call: ToolCall) -> tuple[str, Any]:
+    """How this call stands with respect to the approvals in its session.
+
+    Five outcomes, and the middle three are the ones that make the mechanism
+    worth building. ``none`` is a call nobody approved. ``covered`` is a call an
+    approval actually fits. Between them sit the failures a broad approval used
+    to hide: an approval for different arguments, an approval outside its
+    window, and an explicit refusal.
+    """
+    matches = session.approvals_for(call)
+    if not matches:
+        return APPROVAL_NONE, None
+    for m in matches:
+        if m.approval.decision == DECISION_DENY and m.binding in BINDING_TRUSTED:
+            return APPROVAL_DENIED, m
+    covering = session.covering_approval(call)
+    if covering is not None:
+        return APPROVAL_COVERED, covering
+    for m in matches:
+        if m.binding == BOUND_ARG_MISMATCH:
+            return APPROVAL_ARG_MISMATCH, m
+    for m in matches:
+        if m.fresh is False:
+            return APPROVAL_EXPIRED, m
+    return APPROVAL_NONE, None
+
+
+APPROVAL_NONE = "no_approval"
+APPROVAL_COVERED = "approved"
+APPROVAL_DENIED = "denied"
+APPROVAL_ARG_MISMATCH = "approval_for_other_arguments"
+APPROVAL_EXPIRED = "approval_expired"
+
+# The states in which a completed call after a control is NOT covered. Named
+# rather than written as "!= APPROVAL_COVERED" so that adding a sixth state
+# later cannot silently make it count as approval.
+UNAPPROVED_STATES = frozenset({APPROVAL_NONE, APPROVAL_DENIED,
+                               APPROVAL_ARG_MISMATCH, APPROVAL_EXPIRED})
+
+_APPROVAL_WORDING = {
+    APPROVAL_NONE: "no approval was presented for it",
+    APPROVAL_DENIED: "an approval bound to it recorded the decision DENY",
+    APPROVAL_ARG_MISMATCH: "the only approval naming it was granted for "
+                           "different arguments",
+    APPROVAL_EXPIRED: "the approval naming it was outside its validity window",
+}
 
 # Scalar policy fields worth carrying into evidence. An unbounded copy of the
 # producer's data bag is how regulated content and secrets reach a SIEM by
@@ -743,9 +875,18 @@ def ch04_guardrail_overrun(session: Session,
 
     for etype in sorted(earliest):
         e = earliest[etype]
+        enforcement, source = _resolved_enforcement(e, session.manifest)
         cand = [c for c in consequential
                 if c.clock_valid and c.started_at > e.timestamp]
-        completed = [c for c in cand if c.executed]
+        # Partition the completed calls by whether an approval actually fits
+        # them. This is the whole of P1.3: before it, "a call happened after a
+        # control fired" was the entire finding, and a deployment that approves
+        # its exceptions properly had no way to say so.
+        states = {id(c): _approval_state(session, c) for c in cand}
+        completed = [c for c in cand if c.executed
+                     and states[id(c)][0] in UNAPPROVED_STATES]
+        approved = [c for c in cand if c.executed
+                    and states[id(c)][0] == APPROVAL_COVERED]
         attempted = [c for c in cand if not c.executed]
         if not completed and not attempted:
             continue
@@ -756,8 +897,69 @@ def ch04_guardrail_overrun(session: Session,
             "policy_event_count": counts[etype],
             "policy_events_with_invalid_clock": unusable_clock,
             "policy_event_data": _policy_evidence(e.data, limits),
-            "policy_semantics_declared": False,
+            "policy_semantics_declared": enforcement != ENFORCEMENT_UNDECLARED,
+            "policy_enforcement": enforcement,
+            "policy_enforcement_source": source,
+            "approved_continuations": len(approved),
+            "approval_states": sorted({states[id(c)][0] for c in completed}),
         }
+
+        if enforcement == ENFORCEMENT_ADVISORY:
+            # The control is a notification and continuing past it is the
+            # intended behaviour. Firing here is the corpus's single largest
+            # source of false positives, and it was never a detection -- it was
+            # Cohaera not being told what the control was for.
+            #
+            # Nothing is emitted, INCLUDING for the attempted calls: an attempt
+            # after an advisory notice is an agent doing its job and failing at
+            # it, which is not a security finding in any reading.
+            #
+            # ONE EXCEPTION, and it is not a special case so much as a
+            # precedence rule. An advisory THRESHOLD is a suggestion about a
+            # class of behaviour. A DENY bound to this exact span and these
+            # exact arguments is a refusal of this exact call, and a completed
+            # call after one is the policy engine being overruled whatever the
+            # threshold was for. The narrower, later, call-specific decision
+            # wins over the broader ambient one.
+            completed = [c for c in completed
+                         if states[id(c)][0] == APPROVAL_DENIED]
+            if not completed:
+                continue
+            attempted = []
+
+        if (enforcement == ENFORCEMENT_BLOCKING
+                or any(states[id(c)][0] == APPROVAL_DENIED for c in completed)
+                ) and completed:
+            shown, dropped = cap_list([c.brief(limits) for c in completed],
+                                      limits.max_evidence_items)
+            reasons = sorted({_APPROVAL_WORDING[states[id(c)][0]]
+                              for c in completed})
+            findings.append(Finding(
+                check=CH04_BYPASSED,
+                family=CH04_FAMILY,
+                severity="critical" if any(c.klass == "egress" for c in completed)
+                else "high",
+                session_id=session.session_id,
+                title=f"BLOCKING control {etype} was bypassed",
+                detail=(
+                    f"{etype} fired at t={e.timestamp:.3f} and is declared "
+                    f"BLOCKING by the {source}. {len(completed)} consequential "
+                    f"call(s) COMPLETED after it, and "
+                    f"{'; '.join(reasons)}. Unlike the undeclared case, this "
+                    "does state a bypass: the control's semantics are on the "
+                    "record, so a completed consequential action after it with "
+                    "nothing authorising it is the control failing to control."
+                    + (f" {len(approved)} further call(s) after this control "
+                       "WERE covered by a bound approval and are not reported."
+                       if approved else "")
+                ),
+                evidence={**base, "completed_after": shown,
+                          "completed_after_truncated": dropped,
+                          "completed_total": len(completed),
+                          "also_attempted": len(attempted),
+                          "approvals_seen": len(session.approvals)},
+            ))
+            completed = []          # reported; do not also report as undeclared
 
         if completed:
             shown, dropped = cap_list([c.brief(limits) for c in completed],
@@ -875,6 +1077,224 @@ def ch05_unpaired_calls(session: Session,
 
 
 # ---------------------------------------------------------------------------
+# CH06  Evidence integrity: is this stream admissible at all?
+# ---------------------------------------------------------------------------
+
+CH06_INTEGRITY = "CH06_evidence_integrity"
+
+# How much of the telemetry's own trustworthiness Cohaera established. Carried
+# on every finding, because a verdict built on a stream somebody could have
+# edited should not be presented at the same confidence as one built on a stream
+# that chained and verified.
+EVIDENCE_VERIFIED = "verified"          # chained AND signature-checked
+EVIDENCE_CHAINED = "chained_unsigned"   # chained, nothing to verify it against
+EVIDENCE_UNATTESTED = "unattested"      # no sidecars at all: today's default
+EVIDENCE_INADMISSIBLE = "inadmissible"  # a gap, a break or a bad signature
+
+
+def evidence_status(session: Session) -> str:
+    """One word for how far the telemetry's own integrity was established.
+
+    ``unattested`` is the important value and the one nearly every deployment
+    will see. It does NOT mean tampering was ruled out; it means nothing was
+    ever in a position to rule it in. Reporting that as ``verified`` would be
+    the same fault as a check that cannot run reporting itself as clean, which
+    is the objection this project was started over.
+    """
+    audit = session.integrity
+    if audit is None or audit.with_integrity == 0:
+        return EVIDENCE_UNATTESTED
+    if audit.inadmissible:
+        return EVIDENCE_INADMISSIBLE
+    if audit.signatures_verified > 0:
+        return EVIDENCE_VERIFIED
+    return EVIDENCE_CHAINED
+
+
+def ch06_evidence_integrity(session: Session,
+                            limits: Limits = DEFAULT_LIMITS) -> list[Finding]:
+    """The collector's chain did not hold for this session's records.
+
+    This is not a check of the same KIND as CH01 to CH05. Those are statements
+    about the agent's behaviour. This is a statement about whether the evidence
+    for any of them is admissible, which is why it is critical whatever it
+    finds and why every other finding in the session is stamped with
+    ``evidence_status`` rather than left to be read at face value.
+
+    What it can and cannot say, stated because the difference is the whole
+    value of the mechanism:
+
+        CAN say   a record was deleted, altered, replayed, or signed by a key
+                  the operator did not supply.
+        CANNOT say who did it. A collector holding the signing key can produce
+                  a perfectly chained stream of lies, and in a deployment where
+                  the adapter runs inside the agent process, that is not even a
+                  compromise -- it is the normal configuration. See
+                  docs/EVIDENCE-TRUST.md section 2.
+    """
+    audit = session.integrity
+    if audit is None or not audit.inadmissible:
+        return []
+
+    codes = audit.inadmissible
+    parts: list[str] = []
+    if R_SEQUENCE_GAP in codes:
+        missing = sum(g["missing_count"] for g in audit.gaps)
+        parts.append(f"{missing} record(s) are missing from the collector's "
+                     f"sequence")
+    if R_CHAIN_BROKEN in codes:
+        parts.append(f"{len(audit.chain_breaks)} record(s) do not match the hash "
+                     f"chain")
+    if R_SIGNATURE_INVALID in codes:
+        parts.append(f"{len(audit.bad_signatures)} signature(s) did not verify")
+    if R_KEY_UNKNOWN in codes:
+        parts.append(f"{len(audit.unknown_key_ids)} record(s) were signed by a "
+                     f"key that was not supplied")
+    if R_SEQUENCE_REPLAY in codes:
+        parts.append("a record arrived for a sequence position that was already "
+                     "filled")
+    if R_PARTIAL_INTEGRITY in codes:
+        parts.append(f"{audit.without_integrity} of {audit.records} record(s) "
+                     f"carry no integrity evidence at all while the rest do")
+
+    return [Finding(
+        check=CH06_INTEGRITY,
+        family=CH06_INTEGRITY,
+        severity="critical",
+        session_id=session.session_id,
+        title="Telemetry integrity verification FAILED for this session",
+        detail=(
+            f"{'; '.join(parts)}. Every other finding in this session, and every "
+            "absence of one, rests on records that did not verify against what "
+            "the collector attested to. Treat the session as evidence of "
+            "tampering with the telemetry rather than as a behavioural verdict: "
+            "the sequence Cohaera scored is not the sequence that was written."
+        ),
+        evidence={"integrity": audit.as_dict(limits),
+                  "inadmissible_codes": codes},
+    )]
+
+
+# ---------------------------------------------------------------------------
+# CH07  A call reported failure and produced an effect anyway
+# ---------------------------------------------------------------------------
+
+CH07_FAMILY = "CH07_effect_contradiction"
+CH07_CONTRADICTED = "CH07_reported_failure_with_effect_receipt"
+CH07_UNBOUND = "CH07_effect_receipt_does_not_bind"
+
+
+def _receipted_calls(session: Session) -> list[ToolCall]:
+    return [c for c in session.tool_calls if c.receipt is not None]
+
+
+def _receipt_binding(call: ToolCall) -> str:
+    """How well this call's receipt binds to it. See evidence.Binding."""
+    receipt = call.receipt
+    if receipt is None:
+        return BOUND_NONE
+    b = receipt.binding
+    if b.span_id and call.span_id and b.span_id != call.span_id:
+        return BOUND_NONE
+    if b.tool_id and b.tool_id != call.name:
+        return BOUND_NONE
+    if b.arg_digest and call.arg_digest:
+        return (BOUND_EXACT if b.arg_digest == call.arg_digest
+                else BOUND_ARG_MISMATCH)
+    return BOUND_SPAN_ONLY
+
+
+def ch07_effect_contradiction(session: Session,
+                              limits: Limits = DEFAULT_LIMITS) -> list[Finding]:
+    """The asymmetry that makes receipts worth collecting.
+
+    Receipts do not make Cohaera trust ``success`` more. A success with no
+    receipt is exactly as unfalsifiable as it always was, and it is reported
+    through coverage (``NO_EFFECT_RECEIPT``) rather than as a finding, because
+    in any real deployment most tools will have no receipt for a long time and a
+    finding per receiptless call is a pager storm on day one.
+
+    What receipts make falsifiable is the other direction. A call whose terminal
+    event says ``failure`` while carrying a receipt bound to that exact call and
+    those exact arguments is an effect that occurred and telemetry that reported
+    it did not. That is the first thing in this repository that catches a lying
+    emitter rather than routing around it -- every other check assumes the
+    stream is honest and reasons about what it says.
+
+    The second finding here is the guard on the first. A receipt that names a
+    different span, a different tool, or different arguments is a receipt copied
+    from a call that really did happen onto one that did not, and without
+    checking that, the whole mechanism is decorative.
+    """
+    receipted = _receipted_calls(session)
+    if not receipted:
+        return []
+
+    contradicted: list[ToolCall] = []
+    unbound: list[ToolCall] = []
+    for c in receipted:
+        binding = _receipt_binding(c)
+        if binding not in BINDING_TRUSTED:
+            unbound.append(c)
+        elif c.result == "failure" or c.state == "open":
+            contradicted.append(c)
+
+    findings: list[Finding] = []
+    if contradicted:
+        shown, dropped = cap_list(
+            [{**c.brief(limits), "receipt": c.receipt.as_dict()}
+             for c in contradicted], limits.max_evidence_items)
+        findings.append(Finding(
+            check=CH07_CONTRADICTED,
+            family=CH07_FAMILY,
+            severity="critical" if any(c.klass == "egress" for c in contradicted)
+            else "high",
+            session_id=session.session_id,
+            title="Telemetry reports failure for a call that produced an effect",
+            detail=(
+                f"{len(contradicted)} call(s) did not report success, and each "
+                "carries an effect receipt bound to that exact call: an "
+                "identifier minted by the system the action happened to, from a "
+                "namespace the agent does not control. The action took effect "
+                "and the telemetry says it did not. This is a contradiction "
+                "within the record itself, so unlike every other check here it "
+                "does not depend on the stream being honest -- it is evidence "
+                "that the stream is not."
+            ),
+            evidence={"contradicted": shown, "contradicted_truncated": dropped,
+                      "contradicted_total": len(contradicted),
+                      "receipted_calls": len(receipted)},
+        ))
+
+    if unbound:
+        shown, dropped = cap_list(
+            [{**c.brief(limits), "receipt": c.receipt.as_dict(),
+              "binding": _receipt_binding(c)} for c in unbound],
+            limits.max_evidence_items)
+        findings.append(Finding(
+            check=CH07_UNBOUND,
+            family=CH07_FAMILY,
+            severity="medium",
+            session_id=session.session_id,
+            title="Effect receipt does not bind to the call carrying it",
+            detail=(
+                f"{len(unbound)} receipt(s) name a different span, a different "
+                "tool, or different arguments than the call they arrived on. A "
+                "receipt is only worth anything if it is bound: an unbound one "
+                "can be copied from a call that really happened onto one that "
+                "did not. This is equally consistent with an adapter emitting "
+                "the binding incorrectly, which is why it is medium and not "
+                "critical -- but it means the receipts in this session are not "
+                "carrying the guarantee they appear to."
+            ),
+            evidence={"unbound": shown, "unbound_truncated": dropped,
+                      "unbound_total": len(unbound),
+                      "receipted_calls": len(receipted)},
+        ))
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Coverage: a capability contract per check
 # ---------------------------------------------------------------------------
 
@@ -896,6 +1316,12 @@ SURFACE_POLICY_SEMANTICS = "policy_semantics"
 SURFACE_BENIGN_BASELINE = "benign_baseline"
 SURFACE_EVENT_CLOCK = "event_clock"
 SURFACE_CORRELATION_KEY = "correlation_key"
+# P1. Three surfaces nothing emits yet, which is exactly why they are named:
+# an operator can now ask "which of my collectors signs its stream" instead of
+# discovering after an incident that none of them do.
+SURFACE_EVENT_INTEGRITY = "event_integrity"
+SURFACE_EFFECT_RECEIPT = "effect_receipt"
+SURFACE_APPROVAL = "approval_binding"
 
 # Reason codes. Stable, because downstream content will match on them.
 R_NO_BASELINE = "NO_BENIGN_BASELINE_FITTED"
@@ -912,6 +1338,13 @@ R_INVALID_CLOCK = "EVENT_CLOCK_INVALID"
 R_NO_POLICY_SEMANTICS = "POLICY_SEMANTICS_UNDECLARED"
 R_AMBIGUOUS_DISCLOSURE = "DISCLOSURE_AMBIGUOUS_SHARED_TOKENS"
 R_FIELD_DEFECTS = "RECORD_FIELD_DEFECTS_PRESENT"
+# P1. The three absences that are now STATED rather than passed over.
+R_NO_APPROVAL_EVIDENCE = "NO_APPROVAL_EVIDENCE"
+R_APPROVAL_NOT_ARGUMENT_BOUND = "APPROVAL_BOUND_BY_SPAN_ONLY"
+R_ENFORCEMENT_FROM_PRODUCER = "POLICY_ENFORCEMENT_DECLARED_IN_BAND"
+R_NO_EFFECT_RECEIPT = "NO_EFFECT_RECEIPT"
+R_DANGLING_APPROVAL = "APPROVAL_MATCHES_NO_CALL"
+R_ARG_DIGEST_CONTRADICTS = "ARG_DIGEST_CONTRADICTS_CAPTURED_ARGS"
 
 # How much to believe a class that came from a name heuristic rather than a
 # declared capability. Not a measurement; an ordering. It exists so that a
@@ -1186,29 +1619,159 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
     # ---- CH04 -----------------------------------------------------------
     required = [SURFACE_TOOL_CLASS, SURFACE_EVENT_CLOCK, SURFACE_CORRELATION_KEY]
     if has_policy:
-        required = [*required, SURFACE_POLICY_SEMANTICS]
+        required = [*required, SURFACE_POLICY_SEMANTICS, SURFACE_APPROVAL]
     conf = corr_conf * class_conf * clock_conf
     reasons = common_reasons + class_reasons()
+    remedies: list[str] = []
     missing = []
+    assumptions = ["A policy event is a log line. Whether it was enforced is "
+                   "not stated by this telemetry."]
     if has_policy:
-        # No producer declares whether a policy event is advisory or blocking,
-        # so Cohaera can report the sequence but not attribute a bypass. That
-        # limit is the whole substance of the review's BUG-09 and it belongs in
-        # the contract rather than buried in a detail string.
-        conf *= 0.6
-        reasons.append(R_NO_POLICY_SEMANTICS)
-        missing.append(SURFACE_POLICY_SEMANTICS)
+        semantics = _policy_semantics(session)
+        if semantics["undeclared"]:
+            # Nothing declares whether this policy event is advisory or
+            # blocking, so Cohaera can report the sequence but not attribute a
+            # bypass. This was BUG-09's whole substance and it is now the
+            # fallback rather than the only behaviour.
+            conf *= 0.6
+            reasons.append(R_NO_POLICY_SEMANTICS)
+            missing.append(SURFACE_POLICY_SEMANTICS)
+            remedies.append(
+                "Declare per-policy semantics (advisory or blocking), either on "
+                "the policy event as cohaera.approval:1 'enforcement' or in the "
+                "capability manifest's 'policies' section, so a continuation can "
+                "be called a bypass.")
+        elif semantics["in_band_only"]:
+            # Declared, but by the thing being watched. Believing it is a
+            # choice, and a check that suppresses findings on the strength of
+            # an in-band flag has to say so rather than quietly benefit.
+            conf *= 0.85
+            reasons.append(R_ENFORCEMENT_FROM_PRODUCER)
+            remedies.append(
+                "Declare these policies in the capability manifest. An "
+                "'advisory' value on the event SUPPRESSES this check, and it "
+                "arrives from the same path an attacker controls (EVASION.md "
+                "E20).")
+            assumptions.append(
+                "Policy semantics were taken from the producer's own event. An "
+                "agent that declares a blocking control advisory silences CH04.")
+        if not session.approvals:
+            conf *= 0.8
+            reasons.append(R_NO_APPROVAL_EVIDENCE)
+            missing.append(SURFACE_APPROVAL)
+            remedies.append(
+                "Emit cohaera.approval:1 bound to the span and argument digest "
+                "so an authorised continuation can be told from a bypass.")
+        elif any(m.binding == BOUND_SPAN_ONLY
+                 for c in session.consequential_calls
+                 for m in session.approvals_for(c)):
+            conf *= 0.9
+            reasons.append(R_APPROVAL_NOT_ARGUMENT_BOUND)
+            assumptions.append(
+                "At least one approval bound by span alone. An approval for "
+                "send_email to one recipient then covers send_email to any "
+                "recipient, which is the failure argument binding exists to "
+                "prevent.")
+        if session.dangling_approvals:
+            reasons.append(R_DANGLING_APPROVAL)
     contracts.append(CheckContract(
         check=CH04_FAMILY,
         status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
         confidence=conf, required_surfaces=required,
         present_surfaces=[s for s in required if s not in missing],
         missing_surfaces=missing, reasons=reasons,
-        remedies=(["Declare per-policy semantics (advisory or blocking) with the "
-                   "policy event so a continuation can be called a bypass."]
-                  if has_policy else []),
-        assumptions=["A policy event is a log line. Whether it was enforced is "
-                     "not stated by this telemetry."]))
+        remedies=remedies, assumptions=assumptions))
+
+    # ---- CH06 -----------------------------------------------------------
+    audit = session.integrity or SessionIntegrity()
+    required = [SURFACE_EVENT_INTEGRITY]
+    if audit.with_integrity == 0:
+        # THE DEFAULT STATE, and the one every current deployment is in. It is
+        # reported as a stated absence rather than a pass, for the same reason
+        # CH01's vocabulary contract and CH03's scanner contract are: "Cohaera
+        # did not detect tampering" and "Cohaera was never in a position to
+        # detect tampering" are different sentences and only one of them is
+        # true here.
+        contracts.append(CheckContract(
+            check=CH06_INTEGRITY, status=STATUS_NOT_EVALUATED, confidence=0.0,
+            required_surfaces=required, present_surfaces=[],
+            missing_surfaces=required, reasons=[R_NO_INTEGRITY],
+            remedies=["Run a collector that adds cohaera.integrity:1 to each "
+                      "record before it leaves the host, and supply its public "
+                      "key with --collector-keys."],
+            assumptions=["No integrity evidence means tampering was not ruled "
+                         "out, not that it was ruled out."]))
+    else:
+        int_reasons = sorted(audit.codes)
+        int_remedies: list[str] = []
+        conf = 1.0
+        if audit.without_integrity:
+            conf *= 0.5
+        if audit.signatures_verified == 0:
+            # A chain with nothing to verify it against establishes internal
+            # consistency and nothing about origin: anyone who can rewrite a
+            # record can rewrite the chain over it.
+            conf *= 0.6
+            int_remedies.append(
+                "Supply the collector's public key with --collector-keys. An "
+                "unsigned chain proves the stream is self-consistent, which an "
+                "attacker who rewrote the whole stream can also arrange.")
+        if audit.inadmissible:
+            conf = 0.0
+        contracts.append(CheckContract(
+            check=CH06_INTEGRITY,
+            status=(STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED),
+            confidence=conf, required_surfaces=required,
+            present_surfaces=required, missing_surfaces=[],
+            reasons=int_reasons, remedies=int_remedies,
+            assumptions=["Verification is against a key the OPERATOR supplied. "
+                         "It says these records are the ones that collector "
+                         "wrote; it does not say the collector was truthful.",
+                         "A collector running in the agent's own process is "
+                         "inside the blast radius, and this check gains nothing "
+                         "in that deployment."]))
+
+    # ---- CH07 -----------------------------------------------------------
+    required = [SURFACE_EFFECT_RECEIPT, SURFACE_TOOL_CLASS]
+    receipted = _receipted_calls(session)
+    consequential_total = len(session.consequential_calls)
+    if not receipted:
+        contracts.append(CheckContract(
+            check=CH07_FAMILY, status=STATUS_NOT_EVALUATED, confidence=0.0,
+            required_surfaces=required, present_surfaces=[SURFACE_TOOL_CLASS],
+            missing_surfaces=[SURFACE_EFFECT_RECEIPT],
+            reasons=[R_NO_EFFECT_RECEIPT],
+            remedies=["Surface the identifier the target system returned -- a "
+                      "Message-ID, a version ID, a transaction ID -- as "
+                      "cohaera.receipt:1 bound to the call."],
+            assumptions=["A reported success with no receipt is the agent's "
+                         "claim about itself and is not checkable here."]))
+    else:
+        # Confidence is the SHARE of consequential calls carrying a receipt,
+        # because that is literally how much of the session this check could
+        # look at. A mixed deployment -- and every real one is mixed for a long
+        # time -- lands in the middle and says so.
+        share = (len(receipted) / consequential_total
+                 if consequential_total else 1.0)
+        conf = min(1.0, share) * corr_conf * class_conf
+        r7 = common_reasons + class_reasons()
+        if share < 1.0:
+            r7.append(R_NO_EFFECT_RECEIPT)
+        if any(c.arg_digest_disagrees for c in session.tool_calls):
+            conf *= 0.5
+            r7.append(R_ARG_DIGEST_CONTRADICTS)
+        contracts.append(CheckContract(
+            check=CH07_FAMILY,
+            status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
+            confidence=conf, required_surfaces=required,
+            present_surfaces=required, missing_surfaces=[],
+            reasons=r7,
+            remedies=([f"{consequential_total - len(receipted)} consequential "
+                       "call(s) carry no receipt; their reported outcome is "
+                       "unfalsifiable."] if share < 1.0 else []),
+            assumptions=["A receipt is not verified with the authority that "
+                         "minted it. Cohaera is offline; it checks that the "
+                         "receipt BINDS to this call, not that it is real."]))
 
     # ---- CH05 -----------------------------------------------------------
     required = [SURFACE_TOOL_LIFECYCLE, SURFACE_CORRELATION_KEY]
@@ -1264,8 +1827,10 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
 
 ALL_CHECKS = ["CH01_sequence_order", "CH02_concealment_gap",
               CH03_COMPLETED, CH03_ATTEMPTED,
-              CH04_COMPLETED, CH04_ATTEMPTED,
-              "CH05_unpaired_calls"]
+              CH04_COMPLETED, CH04_ATTEMPTED, CH04_BYPASSED,
+              "CH05_unpaired_calls",
+              CH06_INTEGRITY,
+              CH07_CONTRADICTED, CH07_UNBOUND]
 
 # check id -> the coverage contract that governs it
 CHECK_FAMILIES = {
@@ -1275,7 +1840,11 @@ CHECK_FAMILIES = {
     CH03_ATTEMPTED: CH03_FAMILY,
     CH04_COMPLETED: CH04_FAMILY,
     CH04_ATTEMPTED: CH04_FAMILY,
+    CH04_BYPASSED: CH04_FAMILY,
     "CH05_unpaired_calls": "CH05_unpaired_calls",
+    CH06_INTEGRITY: CH06_INTEGRITY,
+    CH07_CONTRADICTED: CH07_FAMILY,
+    CH07_UNBOUND: CH07_FAMILY,
 }
 
 
@@ -1288,11 +1857,21 @@ def run_all(session: Session, grammar: SequenceGrammar | None = None,
     findings += ch03_untrusted_to_consequential(session, limits=limits)
     findings += ch04_guardrail_overrun(session, limits=limits)
     findings += ch05_unpaired_calls(session, limits=limits)
+    findings += ch06_evidence_integrity(session, limits=limits)
+    findings += ch07_effect_contradiction(session, limits=limits)
 
     cov = coverage(session, grammar, limits=limits)
     # Attach the governing contract's confidence to each finding, so a verdict
     # read on its own still says how much of it rests on guesswork.
     by_check = {c["check"]: c["confidence"] for c in cov["checks"]}
+    # ...and how far the telemetry underneath it was itself established. A
+    # finding on an inadmissible stream is a finding about a record somebody
+    # could have written, and it should not arrive looking like one that
+    # chained and verified. CH06's own finding is exempt: it IS the statement
+    # that the evidence failed, and marking it as resting on failed evidence
+    # would be circular.
+    status = evidence_status(session)
     for f in findings:
         f.confidence = by_check.get(f.family, by_check.get(f.check, 1.0))
+        f.evidence_status = EVIDENCE_VERIFIED if f.check == CH06_INTEGRITY else status
     return findings, cov

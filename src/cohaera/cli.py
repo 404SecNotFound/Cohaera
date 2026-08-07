@@ -39,6 +39,7 @@ import sys
 from . import __version__
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest, ManifestError
 from .checks import SequenceGrammar, run_all
+from .evidence import EMPTY_KEYS, CollectorKeyError, CollectorKeys
 from .identity import Correlator, run_id
 from .ingest import load
 from .limits import DEFAULT_LIMITS, Limits, LimitsError
@@ -126,6 +127,17 @@ def _load_manifest(path: str | None,
     return manifest
 
 
+def _load_keys(path: str | None,
+               limits: Limits = DEFAULT_LIMITS) -> CollectorKeys:
+    if not path:
+        return EMPTY_KEYS
+    keys = CollectorKeys.from_file(path, limits=limits)
+    _err(f"[cohaera] collector keys {sanitise_display(path, 160)}: "
+         f"{len(keys.keys)} key(s), file digest {keys.file_digest}, "
+         f"semantic digest {keys.semantic_digest}")
+    return keys
+
+
 def _correlator(args: argparse.Namespace, limits: Limits) -> Correlator:
     secret = os.environ.get(args.correlation_secret_env or SECRET_ENV)
     if not secret:
@@ -160,6 +172,16 @@ def cmd_score(args: argparse.Namespace) -> int:
     except (ManifestError, OSError) as exc:
         _err(f"[cohaera] capability manifest rejected: {sanitise_display(str(exc), 300)}")
         return EXIT_ERROR
+    try:
+        keys = _load_keys(args.collector_keys, limits)
+    except (CollectorKeyError, OSError) as exc:
+        # Refused, not degraded. An operator who passed --collector-keys asked
+        # for signatures to be verified; carrying on without them would report
+        # an unverified stream as merely unsigned, which is the wrong answer to
+        # the question they asked.
+        _err(f"[cohaera] collector key file rejected: "
+             f"{sanitise_display(str(exc), 300)}")
+        return EXIT_ERROR
 
     if args.reject_log:
         try:
@@ -190,7 +212,7 @@ def cmd_score(args: argparse.Namespace) -> int:
                  "a partial normal.")
 
     sessions = load(args.telemetry, limits=limits, correlator=correlator,
-                    manifest=manifest, report=report)
+                    manifest=manifest, report=report, keys=keys)
     _err(f"[cohaera] {sanitise_display(str(args.telemetry), 160)}: "
          f"{sum(len(s.events) for s in sessions)} events in {len(sessions)} sessions, "
          f"{report.rejected} record(s) quarantined\n")
@@ -210,6 +232,7 @@ def cmd_score(args: argparse.Namespace) -> int:
         "config_hash": limits.digest(),
         "baseline_hash": baseline_hash,
         "capability_manifest": manifest.as_dict(),
+        "collector_keys": keys.as_dict(),
         "correlation_key_version": correlator.key_version,
         "correlation_keyed": correlator.keyed,
         "ingest": report.summary(),
@@ -302,6 +325,11 @@ def _add_common(p: argparse._ActionsContainer) -> None:
                    help="JSON capability manifest keyed on exact tool ID. Declared "
                         "capabilities outrank the name heuristic and the producer's "
                         "reversible flag.")
+    p.add_argument("--collector-keys", metavar="PATH",
+                   help="JSON file of collector public keys (cohaera.collector_keys:1) "
+                        "used to verify cohaera.integrity:1 signatures. Without it, "
+                        "signed records are parsed and NOT verified, and the verdict "
+                        "says so with NO_COLLECTOR_KEYS.")
     p.add_argument("--correlation-secret-env", metavar="NAME", default=SECRET_ENV,
                    help=f"Environment variable holding the HMAC key for anonymous "
                         f"correlation keys (default {SECRET_ENV}).")

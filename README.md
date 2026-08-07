@@ -66,7 +66,7 @@ fitted on those same twelve near-identical sessions. That is a smoke test wearin
 a lab coat.
 
 So there is a file in this repository called [EVASION.md](EVASION.md) whose
-entire job is to break this one. 17 constructed evasions, 16 of them still
+entire job is to break this one. 19 constructed evasions, 18 of them still
 working, each backed by a test that passes when the evasion succeeds. Read it
 before you trust anything else here — including the entry for the one that has
 been closed, which cost 32 new false positives and says so.
@@ -841,12 +841,12 @@ prevention claim collapses.
 - [x] Measured TPR and FPR with task-disjoint splits ([eval/](eval/EVALUATION-CARD.md))
 - [ ] CH02 semantic matching, currently lexical and its weakest point
 - [ ] Praxen Worker Remit compiler, remit sections to runtime predicates
-- [x] Sigma content pack, 9 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
+- [x] Sigma content pack, 13 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 318 passing across unit, hostile-input and content conformance
+- [x] Tests, 401 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
-- [x] Adversarial self-test, 19 evasions ([EVASION.md](EVASION.md))
+- [x] Adversarial self-test, 22 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger
 - [x] Typed capability manifests per producer, replacing name heuristics
 - [x] Stable verdict, run and config identity for replay and dedup
@@ -931,7 +931,7 @@ tests/
                       resource amplification, correlation forgery, exit codes
   test_content.py     asserts every field the Sigma pack names exists in a real
                       record. Sigma validation cannot check this.
-  test_evasion.py     20 adversarial tests that PASS when an evasion works
+  test_evasion.py     22 adversarial tests that PASS when an evasion works
   fuzz_smoke.py       seeded malformed-input fuzz, runs in CI
   make_fixtures.py    labelled benign and suspect telemetry
 

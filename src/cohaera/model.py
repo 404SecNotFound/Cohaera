@@ -26,8 +26,17 @@ from dataclasses import asdict, dataclass, field
 from functools import cached_property
 from typing import Any, ClassVar
 
-from . import validate
+from . import evidence, validate
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest
+from .evidence import (
+    ARGS_ABSENT,
+    ARGS_DECLARED,
+    ARGS_RECOMPUTED,
+    Approval,
+    EffectReceipt,
+    Integrity,
+    SessionIntegrity,
+)
 from .identity import CorrelationKey, canonical, digest
 from .identity import verdict_id as _verdict_id
 from .limits import DEFAULT_LIMITS, DEFECT_RESPONSE_TEXT_TYPE, Limits
@@ -245,10 +254,53 @@ class Event:
     def view(self) -> validate.RecordView:
         return validate.view(self.raw, self.limits)
 
+    @cached_property
+    def _evidence(self) -> tuple[Any, Any, Any, tuple[str, ...]]:
+        """Parse the three P1 sidecars once. See :mod:`cohaera.evidence`.
+
+        Cached on the frozen record for the same reason every other derived
+        value is: a sidecar parse is a canonical-JSON hash away from being
+        expensive, and the record cannot change underneath the cache.
+        """
+        codes: list[str] = []
+
+        def take(pair):
+            value, c = pair
+            codes.extend(c)
+            return value
+
+        integrity = take(Integrity.parse(self.raw.get(evidence.INTEGRITY_FIELD),
+                                         self.limits))
+        data = self.data
+        receipt = take(EffectReceipt.parse(data.get(evidence.RECEIPT_FIELD),
+                                           self.limits))
+        approval = take(Approval.parse(data.get(evidence.APPROVAL_FIELD),
+                                       self.limits))
+        if self.event_type in POLICY_EVENTS:
+            take(evidence.enforcement_of(data))
+        return integrity, receipt, approval, tuple(dict.fromkeys(codes))
+
+    @property
+    def integrity(self) -> Integrity | None:
+        return self._evidence[0]
+
+    @property
+    def effect_receipt(self) -> EffectReceipt | None:
+        return self._evidence[1]
+
+    @property
+    def approval(self) -> Approval | None:
+        return self._evidence[2]
+
+    @property
+    def enforcement(self) -> str:
+        """A policy event's declared semantics, or ``undeclared``."""
+        return evidence.enforcement_of(self.data)[0]
+
     @property
     def defects(self) -> tuple[str, ...]:
         """Fields that were not what they claimed to be, as reason codes."""
-        return self.view.defects
+        return tuple(dict.fromkeys(self.view.defects + self._evidence[3]))
 
     @property
     def event_type(self) -> str:
@@ -362,6 +414,17 @@ class ToolCall:
     state: str = "open"
     manifest: CapabilityManifest = field(default=EMPTY_MANIFEST, repr=False,
                                          compare=False)
+    # ---- P1 evidence ----------------------------------------------------
+    # The call's argument identity, and where it came from. Approvals and
+    # receipts bind on this, so a call that has none can be bound only by span,
+    # which is a weaker claim that the verdict has to state rather than assume.
+    arg_digest: str | None = None
+    arg_digest_source: str = ARGS_ABSENT
+    # True when the producer declared a digest AND Cohaera could recompute one
+    # from the captured arguments, and they disagree. That is the producer
+    # contradicting itself about its own call, which no honest emitter does.
+    arg_digest_disagrees: bool = False
+    receipt: EffectReceipt | None = None
 
     @property
     def capability(self):
@@ -443,6 +506,53 @@ def _num(value: Any) -> float | None:
     return v
 
 
+def _argument_identity(data: dict[str, Any]) -> tuple[str | None, str, bool]:
+    """(digest, source, disagrees) for one call's arguments.
+
+    Two sources, and they are not equivalent. A producer-DECLARED digest is what
+    the policy engine's approval was written against, so it is what a binding
+    has to compare with. A RECOMPUTED one is a hash of the arguments Cohaera
+    actually saw, which is the stronger claim about what the call did but is
+    only available when the adapter captured arguments at all -- and observra
+    strips them on the hot path, so in most deployments it will not be.
+
+    When both exist they must agree. A producer whose declared digest does not
+    match its own emitted arguments is contradicting itself, and that is worth
+    surfacing: it is the shape of an agent declaring the digest an approval
+    covers while sending different arguments.
+    """
+    declared = evidence.digest_text(data.get(evidence.ARG_DIGEST_FIELD))
+    args = data.get("tool_args")
+    computed = evidence.arg_digest(args) if args is not None else None
+    if declared and computed:
+        return declared, ARGS_DECLARED, declared != computed
+    if declared:
+        return declared, ARGS_DECLARED, False
+    if computed:
+        return computed, ARGS_RECOMPUTED, False
+    return None, ARGS_ABSENT, False
+
+
+@dataclass(frozen=True)
+class ApprovalMatch:
+    """One approval, weighed against one call.
+
+    ``fresh`` is deliberately tri-state. False is an expired or not-yet-valid
+    approval; None is an approval that declared no window at all, which is a
+    weaker artefact than a fresh one and a different thing from a stale one.
+    Collapsing the two would report "approval expired" about an approval that
+    never claimed to expire.
+    """
+
+    approval: Approval
+    binding: str
+    fresh: bool | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"binding": self.binding, "fresh": self.fresh,
+                **self.approval.as_dict()}
+
+
 class SealedSessionError(RuntimeError):
     """An attempt to mutate a session that has already been scored against."""
 
@@ -478,6 +588,12 @@ class Session:
     limits: Limits = field(default=DEFAULT_LIMITS, repr=False, compare=False)
     manifest: CapabilityManifest = field(default=EMPTY_MANIFEST, repr=False,
                                          compare=False)
+    # What the stream verifier concluded about this session's records. Set by
+    # :func:`cohaera.ingest.assemble`, because sequence verification is a
+    # whole-input property and cannot be recomputed from one session's events.
+    # None means no verification was run at all, which is NOT the same as
+    # "verification found nothing" and must not be reported as clean.
+    integrity: SessionIntegrity | None = field(default=None, compare=False)
     _caches: dict[str, tuple[Any, Any]] = field(default_factory=dict, repr=False,
                                                 compare=False)
     _revision: int = field(default=0, repr=False, compare=False)
@@ -653,6 +769,7 @@ class Session:
         for e in self.ordered_events:
             etype = e.event_type
             if etype == "tool_start":
+                adigest, asource, adisagrees = _argument_identity(e.data)
                 tc = ToolCall(
                     name=e.tool_name or "<unnamed>",
                     started_at=e.timestamp,
@@ -661,6 +778,9 @@ class Session:
                     had_args=e.data.get("tool_args") is not None,
                     state="open",
                     manifest=self.manifest,
+                    arg_digest=adigest,
+                    arg_digest_source=asource,
+                    arg_digest_disagrees=adisagrees,
                 )
                 idx = len(calls)
                 calls.append(tc)
@@ -706,6 +826,7 @@ class Session:
                                else "mismatched_end" if sid
                                else "orphan_end"),
                         manifest=self.manifest,
+                        receipt=e.effect_receipt,
                     ))
                     continue
 
@@ -723,6 +844,7 @@ class Session:
                 if rev is not None:
                     tc.reversible = rev
                 tc.had_result = e.data.get("tool_result") is not None
+                tc.receipt = e.effect_receipt
                 tc.state = "complete"
 
         return calls
@@ -829,6 +951,96 @@ class Session:
     def policy_events(self) -> list[str]:
         return [e.event_type for e in self.events if e.event_type in POLICY_EVENTS]
 
+    # ---- P1 approvals ---------------------------------------------------
+    @property
+    def approvals(self) -> list[Approval]:
+        """Every well-formed approval in this session, in arrival order.
+
+        Bounded. An approval is a producer-supplied object and a session that
+        claims a hundred thousand of them is a resource attack, not a
+        well-governed agent.
+        """
+        def build() -> list[Approval]:
+            out: list[Approval] = []
+            for e in self.ordered_events:
+                if len(out) >= self.limits.max_approvals_per_session:
+                    break
+                a = e.approval
+                if a is not None:
+                    out.append(a)
+            return out
+        return self._cached("approvals", build)
+
+    @property
+    def _approvals_by_span(self) -> dict[str, list[Approval]]:
+        def build() -> dict[str, list[Approval]]:
+            index: dict[str, list[Approval]] = {}
+            for a in self.approvals:
+                if a.subject.span_id:
+                    index.setdefault(a.subject.span_id, []).append(a)
+            return index
+        return self._cached("approvals_by_span", build)
+
+    def approvals_for(self, call: ToolCall) -> list[ApprovalMatch]:
+        """Every approval naming this call's span, and how well each one bound.
+
+        Span alone is not a binding. An approval that names the span but a
+        different tool does not cover this call; one that names the span and the
+        tool but a different argument digest is the reuse case this schema
+        exists to catch, and it is reported as a mismatch rather than silently
+        dropped, because "an approval was presented for this call and did not
+        fit it" is a stronger statement than "no approval was presented".
+        """
+        if not call.span_id:
+            return []
+        out: list[ApprovalMatch] = []
+        for a in self._approvals_by_span.get(call.span_id, ()):
+            if a.subject.tool_id and a.subject.tool_id != call.name:
+                continue
+            if a.subject.arg_digest and call.arg_digest:
+                binding = (evidence.BOUND_EXACT
+                           if a.subject.arg_digest == call.arg_digest
+                           else evidence.BOUND_ARG_MISMATCH)
+            else:
+                # Either the approval or the call declined to identify the
+                # arguments. The span still binds; the arguments do not, and a
+                # verdict built on this has to say which of the two it got.
+                binding = evidence.BOUND_SPAN_ONLY
+            out.append(ApprovalMatch(approval=a, binding=binding,
+                                     fresh=a.covers_clock(call.started_at)))
+        return out
+
+    def covering_approval(self, call: ToolCall) -> ApprovalMatch | None:
+        """The strongest ALLOW that actually covers this call, if any.
+
+        Order matters and is the mechanism: an exact argument binding outranks a
+        span-only one, and an approval outside its validity window does not
+        cover anything at all. An expired approval is not an approval.
+        """
+        best: ApprovalMatch | None = None
+        for m in self.approvals_for(call):
+            if m.approval.decision != evidence.DECISION_ALLOW:
+                continue
+            if m.binding not in evidence.BINDING_TRUSTED or m.fresh is False:
+                continue
+            if best is None or (best.binding != evidence.BOUND_EXACT
+                                and m.binding == evidence.BOUND_EXACT):
+                best = m
+        return best
+
+    @property
+    def dangling_approvals(self) -> list[Approval]:
+        """Approvals whose subject matches no call in this session.
+
+        Either the emitter is wrong, or an approval was harvested for reuse
+        somewhere Cohaera cannot see. Both are worth a line in the record.
+        """
+        def build() -> list[Approval]:
+            spans = {c.span_id for c in self.tool_calls if c.span_id}
+            return [a for a in self.approvals
+                    if a.subject.span_id not in spans]
+        return self._cached("dangling_approvals", build)
+
     @property
     def total_cost_usd(self) -> float:
         """Finite, or zero. An infinite cost is not a cost, it is a bad field."""
@@ -925,6 +1137,12 @@ class Finding:
     evidence: dict[str, Any] = field(default_factory=dict)
     family: str = ""
     confidence: float = 1.0
+    # How far the telemetry underneath this finding was itself established.
+    # Defaults to ``unattested`` rather than to a verified value, because that
+    # is the true state of every deployment that emits no integrity evidence,
+    # and a default that reads as "checked" would be the exact failure this
+    # field exists to remove. See cohaera.checks.evidence_status.
+    evidence_status: str = "unattested"
 
     _ORDER: ClassVar[dict[str, int]] = {
         "info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}

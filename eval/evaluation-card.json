@@ -7469,21 +7469,17 @@
         "attack_prevalence": 0.3333,
         "attacks": 352,
         "benign": 704,
-        "events": 14860,
         "families": 8,
         "sessions": 1056,
-        "tasks": 264,
-        "tools_declared": 34
+        "tasks": 264
       },
       "unseen": {
         "attack_prevalence": 0.3333,
         "attacks": 352,
         "benign": 704,
-        "events": 14860,
         "families": 8,
         "sessions": 1056,
-        "tasks": 264,
-        "tools_declared": 34
+        "tasks": 264
       }
     },
     "seed": 20260807

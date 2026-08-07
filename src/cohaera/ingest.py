@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest
+from .evidence import EMPTY_KEYS, CollectorKeys, StreamVerifier
 from .identity import ANON_WINDOW_S, Correlator
 from .limits import (
     DEFAULT_LIMITS,
@@ -296,7 +297,8 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
              correlator: Correlator | None = None,
              manifest: CapabilityManifest = EMPTY_MANIFEST,
              report: IngestReport | None = None,
-             quiet: bool = False) -> list[Session]:
+             quiet: bool = False,
+             keys: CollectorKeys = EMPTY_KEYS) -> list[Session]:
     """Group a flat event stream into Sessions.
 
     Keyed on session_id, then trace_id, then a scoped anonymous key, then
@@ -308,6 +310,15 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
     Every session carries the correlation kind and confidence it was built from,
     so a verdict assembled out of guesswork cannot present itself as one
     assembled from a producer-supplied session ID.
+
+    INTEGRITY IS VERIFIED IN ARRIVAL ORDER, NOT IN SORTED ORDER
+        Sessions are assembled from events sorted by clock, because that is what
+        pairing and ordering checks need. Collector sequence numbers are about
+        the order records were WRITTEN, so verifying them over the sorted list
+        would reorder the stream before checking whether it had been reordered,
+        and every clock skew in the input would read as a delivery fault. The
+        verifier therefore gets the events as they arrived, after the sorted
+        pass has established which session each one belongs to.
     """
     corr = correlator or Correlator(limits=limits)
     rep = report if report is not None else IngestReport()
@@ -315,7 +326,12 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
     dropped_sessions = 0
     dropped_events = 0
 
-    ordered = sorted(events, key=lambda e: e.sort_key)
+    # Materialised rather than consumed by ``sorted`` alone: arrival order is a
+    # second, independent reading of the same events and both are needed.
+    incoming = list(events)
+    session_of: dict[int, str] = {}
+
+    ordered = sorted(incoming, key=lambda e: e.sort_key)
     for e in ordered:
         rv = e.view
         # e.digest is passed uncalled: only the isolation branch needs it.
@@ -331,7 +347,18 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
         if len(s.events) >= limits.max_events_per_session:
             dropped_events += 1
             continue
+        session_of[id(e)] = key.value
         s.events.append(e)
+
+    # A dropped event still occupies a position in its collector stream, so it
+    # is observed for sequence continuity and attributed to no session. Omitting
+    # it would manufacture a gap out of Cohaera's own budget.
+    verifier = StreamVerifier(keys=keys, limits=limits)
+    for e in incoming:
+        verifier.observe(e.raw, e.integrity, session_of.get(id(e), ""))
+    verifier.finalise()
+    for key_value, s in buckets.items():
+        s.integrity = verifier.for_session(key_value)
 
     if dropped_sessions:
         rep.aborted = True
@@ -363,9 +390,10 @@ def load(path: str | Path, limits: Limits = DEFAULT_LIMITS,
          correlator: Correlator | None = None,
          manifest: CapabilityManifest = EMPTY_MANIFEST,
          report: IngestReport | None = None,
-         quiet: bool = False) -> list[Session]:
+         quiet: bool = False,
+         keys: CollectorKeys = EMPTY_KEYS) -> list[Session]:
     """Read and group one telemetry file. The report is filled in as a side effect."""
     rep = report if report is not None else IngestReport()
     events = list(read_events(path, limits=limits, report=rep, quiet=quiet))
     return assemble(events, limits=limits, correlator=correlator,
-                    manifest=manifest, report=rep, quiet=quiet)
+                    manifest=manifest, report=rep, quiet=quiet, keys=keys)

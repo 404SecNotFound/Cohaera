@@ -1,0 +1,68 @@
+title: Agent Reported A Failed Call That Produced A Real Effect
+id: c81d6f45-2a93-4e70-b6c4-9d05e3a7182b
+status: experimental
+description: |
+  A tool call whose terminal event reports failure -- or which never reported at
+  all -- carries an effect receipt bound to that exact call: an identifier minted
+  by the system the action happened to, drawn from a namespace the agent does not
+  control. An SMTP Message-ID, an object version ID, a transaction ID.
+
+  The action took effect. The telemetry says it did not.
+
+  WHY THIS RULE IS DIFFERENT FROM EVERY OTHER RULE IN THIS PACK. All the others
+  read the stream and reason about what it says, which means all of them assume
+  the stream is honest. This one is a contradiction INSIDE the record: two fields
+  of the same session disagree about whether something happened, and one of them
+  is not the agent's to choose. It is the only detection here that catches a
+  lying emitter rather than routing around one.
+
+  Triage as a possible compromise of the agent or its adapter, not as a tool
+  fault. A genuine failure does not produce a receipt, because the authority
+  never minted one. The realistic benign case is an adapter that emits the
+  receipt on the wrong event, which is why the sibling rule
+  9f4c2b18-7e05-4d3a-8c61-2b7f9e04d5a6 exists for receipts that fail to bind:
+  if the binding is wrong, look there first.
+
+  NOTE THE ASYMMETRY, because it is the point of collecting receipts at all.
+  Receipts do NOT make a reported success more trustworthy -- a success with no
+  receipt is exactly as unfalsifiable as it always was, and Cohaera reports that
+  through coverage (NO_EFFECT_RECEIPT) rather than as an alert, because in a
+  mixed deployment most tools have no receipt and a finding per receiptless call
+  is a pager storm. What receipts make falsifiable is failure and silence.
+
+  Requires Cohaera and tool adapters emitting cohaera.receipt:1.
+references:
+    - https://github.com/404SecNotFound/Cohaera
+    - https://github.com/404SecNotFound/Cohaera/blob/main/docs/EVIDENCE-TRUST.md
+    - https://genai.owasp.org/llm-top-10/
+author: Imran Hafeez
+date: 2026-08-07
+modified: 2026-08-07
+related:
+    - id: 9f4c2b18-7e05-4d3a-8c61-2b7f9e04d5a6
+      type: similar
+logsource:
+    product: cohaera
+    service: session_verdict
+detection:
+    selection:
+        type: 'cohaera_session_verdict'
+        data.triggered_rules|contains: 'CH07_reported_failure_with_effect_receipt'
+    condition: selection
+fields:
+    - session_id
+    - agent_name
+    - user
+    - host
+    - data.tool_sequence
+    - data.egress_count
+    - data.state_change_count
+    - data.coverage.completeness
+falsepositives:
+    - An adapter that attaches the receipt to a retry's terminal event rather
+      than to the attempt that succeeded. Check the binding -- a receipt bound
+      by span and argument digest to a call that failed is not this case.
+    - A partial effect -- the action reached the authority, was recorded, and
+      then failed downstream. This is a real and reportable condition even when
+      it is not an attack -- the session's summary and the world disagree.
+level: high

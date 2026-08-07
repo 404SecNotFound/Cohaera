@@ -28,6 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from cohaera.capabilities import CapabilityManifest
 from cohaera.checks import (
     SequenceGrammar,
     ambiguous_disclosures,
@@ -698,6 +699,64 @@ def test_evasion_17_pad_with_unknown_tools_to_suppress_CH01():
                 if c["check"] == "CH01_sequence_order")
     assert ch01["status"] == "not_evaluated"
     assert ch01["reasons"] == ["BASELINE_VOCABULARY_MISMATCH"]
+
+
+def test_evasion_20_declare_a_blocking_control_advisory_to_silence_CH04():
+    """E20. INTRODUCED BY THE P1.3 FIX, and the reason the manifest exists.
+
+    CH04's enforcement split reads ``enforcement`` off the policy event, and
+    ``advisory`` SUPPRESSES the check entirely. That field arrives in band, from
+    the same path an attacker controls -- it is SEC-03's producer ``reversible``
+    flag all over again, on the check whose whole job is to notice a bypass.
+
+    So the attack is one string. Fire a genuinely blocking control, stamp it
+    ``advisory``, and continue: Cohaera says nothing at all.
+
+    NOTE THE ASYMMETRY, because it decides how bad this is. A producer cannot
+    MANUFACTURE a bypass finding by declaring ``blocking`` -- that only makes
+    Cohaera louder about the producer's own behaviour. It can only SUPPRESS one.
+    Every in-band declaration is therefore safe to believe in the direction that
+    costs the attacker something and unsafe in the direction that helps them,
+    which is exactly why the manifest outranks it and why the coverage contract
+    charges confidence for believing the event
+    (POLICY_ENFORCEMENT_DECLARED_IN_BAND).
+
+    WHY IT IS STILL THE RIGHT TRADE. Before the split, CH04 fired on every
+    advisory threshold in the evaluation corpus -- the single largest source of
+    false positives it has. The alternative to trusting the declaration is
+    paging an analyst for every soft limit forever, and an alarm nobody can act
+    on is not a control either.
+    """
+    evs = [ev("cost_threshold_exceeded", 5, "adv", action="policy_event",
+              threshold_usd=0.5, session_cost_usd=9.0, policy_id="cost-guard",
+              enforcement="advisory")]
+    evs += call("adv", 8, "wire_transfer_send", reversible=False)
+    session = sess(evs, "adv")
+    assert ch04_guardrail_overrun(session) == [], (
+        "an in-band advisory declaration no longer silences CH04")
+
+
+def test_evasion_20b_the_manifest_takes_the_declaration_back():
+    """...and the same session, with the operator's declaration, is caught.
+
+    This is the half of E20 that is closed. It is a separate test because the
+    remedy needs to be exercised, not merely described in prose next to the
+    weakness: a mitigation nobody runs is a mitigation nobody knows is broken.
+    """
+    manifest = CapabilityManifest.from_obj({
+        "tools": {"wire_transfer_send": {"effects": ["egress"],
+                                         "reversible": False}},
+        "policies": {"cost-guard": {"enforcement": "blocking"}},
+    })
+    evs = [ev("cost_threshold_exceeded", 5, "adv", action="policy_event",
+              threshold_usd=0.5, session_cost_usd=9.0, policy_id="cost-guard",
+              enforcement="advisory")]
+    evs += call("adv", 8, "wire_transfer_send", reversible=False)
+    session = Session(session_id="adv", manifest=manifest,
+                      events=sorted(evs, key=lambda e: e.timestamp))
+    findings = ch04_guardrail_overrun(session)
+    assert [f.check for f in findings] == ["CH04_blocking_control_bypassed"]
+    assert findings[0].evidence["policy_enforcement_source"] == "manifest"
 
 
 if __name__ == "__main__":

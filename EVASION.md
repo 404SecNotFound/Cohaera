@@ -11,16 +11,20 @@ later closes one, the test fails and this file gets updated.
 
 Run it: `PYTHONPATH=src python3 tests/test_evasion.py`
 
-**Current state: 16 of 17 constructed evasions still work.** One, E02, is
-**closed** — and closing it opened two narrower ones, E18 and E19, which are in
-the table because a fix that quietly relocates a weakness is worse than no fix.
-Two more, E13 and E16, have had half of their impact removed: the attack still
-succeeds, but coverage no longer reports full confidence on a session the check
-never really saw. Half a fix is worth recording precisely because it is easy to
-write up as a whole one.
+**Current state: 18 of 19 constructed evasions still work.** Two, E02 and E21,
+are **closed** — and closing E02 opened two narrower ones, E18 and E19, while
+the P1 evidence-trust work opened E20. All three are in the table, because a fix
+that quietly relocates a weakness is worse than no fix.
 
-The count goes up when a weakness is found, not only when one is fixed. Sixteen
-working evasions is a worse-looking number than fifteen and a more honest one.
+Three more — E11, E13 and E16 — have had half of their impact removed. For E13
+that half is now substantial rather than cosmetic: on a stream carrying
+`cohaera.integrity:1`, deleting or modifying a record is **detected and
+localised** instead of noticed by accident. The attack is not closed, because
+what it now requires is the collector's signing key rather than the agent's
+cooperation, and in an in-process deployment those are the same thing.
+
+The count goes up when a weakness is found, not only when one is fixed. Eighteen
+working evasions is a worse-looking number than sixteen and a more honest one.
 
 There is also a **denial-of-service class that is not in this table**, because
 crashing the detector is not an evasion of a check, it is an evasion of the whole
@@ -44,15 +48,18 @@ of this file under [Defects found by external review](#defects-found-by-external
 | E08 | CH03 | Split read and act across two sessions | Free | Partial |
 | E09 | CH03 | Stay below observra's five regexes | Free | Yes, scan locally |
 | E10 | CH04 | Act before the threshold trips | Free | Yes |
-| E11 | CH05 | Fabricate a terminal event | Emitter access | No |
+| E11 | CH05 | Fabricate a terminal event | Emitter access | Half closed, CH07 catches a fabricated *failure* |
 | E12 | all | Fragment session_id on call boundaries | Emitter access | No |
 | E12b | — | Fragmenting mid-call **is** caught by CH05 | — | *unplanned win* |
-| E13 | all | Omit the event entirely | Emitter access | No |
+| E13 | all | Omit the event entirely | Emitter access | Half closed, detected on a signed stream |
 | E13b | — | Naive omission **is** caught by CH01 | — | *unplanned win* |
 | E16 | CH02 | Conceal a write by naming the adjacent read from the same tool suite | Free | Half closed, coverage sees it |
 | E17 | CH01 | Pad with unknown tool names to force `not_evaluated` | 2 unknown calls | Per-agent baselines |
 | E18 | CH01 | Dilute a novel route into a READ, which the E02 fix does not cover | 8 benign calls | Needs semantics |
 | E19 | CH01 | Dilute anything when no manifest says which calls are consequential | Free, the default | Ship a manifest |
+| E20 | CH04 | Declare a blocking control `advisory` on the event to silence CH04 entirely | Free, one string | Half closed, manifest overrides |
+| E20b | — | The manifest **does** take that declaration back | — | *the remedy, exercised* |
+| E21 | CH06 | Strip the integrity sidecar from the record you edited | — | **CLOSED**, reported as partial attestation |
 
 ---
 
@@ -94,14 +101,33 @@ Closing it needs evidence from outside the agent: kernel or network observation
 tracing) or a tamper-evident signed log at the point of emission (AEGIS,
 [arXiv:2603.12621](https://arxiv.org/abs/2603.12621), Ed25519 plus hash chaining).
 
-The second of those is now **designed** in
-[docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md) — sequence numbers, chain
-construction, signature verification against out-of-band keys, and the six
-coverage codes it needs, including `NO_INTEGRITY_EVIDENCE` for the state every
-deployment is in today. None of it is implemented, and read §7 before treating
-it as a closure: it would make deletion and modification *detectable* and would
-move the required attacker capability from "the agent emits what it likes" to
-"the attacker holds the collector's key". E13 stays open either way.
+The second of those is now **built**, and it is the largest single change to
+what this repository can claim. `cohaera.integrity:1` — sequence numbers, an
+Ed25519-signed hash chain, verified against keys the operator supplies out of
+band — is implemented in [`src/cohaera/evidence.py`](src/cohaera/evidence.py)
+and reported by **CH06**. Against a stream carrying it:
+
+- **deleting a record is detected**, as a sequence gap, and localised. It is no
+  longer the accident E13b describes;
+- **modifying a record is detected**, as a chain break, and localised to the
+  record that moved;
+- **stripping the sidecar from the record you edited is also detected** — see
+  E21 — which closes the obvious way round the first two;
+- and a record signed by a key the operator did not supply is refused.
+
+**E13 stays open, and the distinction is the whole point.** Read
+[docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md) §7 before treating any of the
+above as a closure. What moved is the required attacker capability, from *the
+agent emits what it likes* to *the attacker holds the collector's signing key*.
+Where the collector runs in the agent's own process — which is the common
+deployment — the attacker holds it by default and none of this buys anything.
+Cohaera's coverage contract says so in that case rather than reporting a
+verified chain as a trustworthy one.
+
+And the state every deployment is in until it adopts the format is now NAMED:
+`NO_INTEGRITY_EVIDENCE`, with `evidence_status: unattested` stamped on every
+finding. That does not mean tampering was ruled out. It means nothing was ever
+in a position to rule it in, which is a sentence the verdict now says out loud.
 
 ### E12. The correlation key is supplied by the thing being observed
 
@@ -137,6 +163,67 @@ call boundaries. That raises the cost of E12 from zero to slightly above zero.
 
 Do not oversell either. They are happy accidents to be aware of, not controls to
 rely on.
+
+---
+
+## E20. Declare a blocking control advisory, and CH04 goes quiet
+
+**Introduced by a fix, deliberately, and recorded here rather than left for the
+next reviewer to find.**
+
+CH04's enforcement split (P1.3) reads `enforcement` off the policy event. A
+value of `advisory` means the control is a notification and continuing past it
+is correct behaviour, so Cohaera emits nothing. That field arrives **in band**,
+from the same path an attacker controls. The attack is one string: fire a
+genuinely blocking control, stamp it `advisory`, continue, and the check that
+exists to notice a bypass says nothing at all.
+
+This is SEC-03 again — the producer's `reversible` flag deciding whether a call
+is consequential — reappearing on the one check whose job is to catch a
+circumvention.
+
+**Note the asymmetry, because it decides how bad this is.** A producer cannot
+*manufacture* a bypass finding by declaring `blocking`; that only makes Cohaera
+louder about the producer's own behaviour. It can only *suppress* one. Every
+in-band declaration is safe to believe in the direction that costs the attacker
+something and unsafe in the direction that helps them.
+
+**Half closed.** The capability manifest gained a `policies` section, and an
+operator's declaration outranks the event, with exactly the precedence and for
+exactly the reason a declared tool capability outranks `reversible`: the
+operator chose the file, the agent wrote the event. Where no manifest declares
+the policy, believing the event costs CH04 confidence and the contract says why
+(`POLICY_ENFORCEMENT_DECLARED_IN_BAND`). `test_evasion_20b` exercises the
+remedy, because a mitigation nobody runs is a mitigation nobody knows is broken.
+
+**Why it is still the right trade.** Before the split, CH04 fired on every
+advisory threshold in the evaluation corpus — its single largest source of false
+positives. The alternative to trusting a declaration is paging an analyst for
+every soft limit forever, and an alarm nobody can act on is not a control
+either.
+
+## E21. Strip the sidecar from the record you edited — CLOSED
+
+The obvious way round a hash chain, closed at the same time as the chain
+shipped, and worth stating because a chain that missed it would be theatre.
+
+A record carrying no `integrity` object cannot fail a chain check. So an
+attacker who edits one record simply deletes its sidecar, and every remaining
+record still chains perfectly to its neighbours.
+
+What gives it away is the session, not the record. A session where **some**
+records are attested and others are not is not a session with partial rollout;
+it is the shape produced by removing evidence from the records somebody touched.
+The verifier decides this at end of input — it cannot be known per record — and
+reports `INTEGRITY_EVIDENCE_PARTIAL`, which is treated as inadmissible evidence
+and fires CH06.
+
+The honest limit: this only holds where the stream is attested at all. Strip the
+sidecars from **every** record in a session and you are back to
+`NO_INTEGRITY_EVIDENCE`, which is where every unadopted deployment already
+lives, and CH06 reports `not_evaluated` rather than a finding. Uniform absence
+is indistinguishable from not having adopted the format. Selective absence is
+not, and selective absence is what editing one record requires.
 
 ---
 
@@ -696,8 +783,8 @@ regression tests.
 | CH05 | Orphan terminal events were constructed with `result="success"` and never flagged. | An irreversible action appearing from nowhere was invisible | **Fixed.** `orphan_end` state, reported by CH05. |
 
 The review's C-05 finding, no executable test suite, was accurate at revision
-`45d3bf8`. There are now 318 tests: unit, hostile-input, content conformance and
-19 evasion characterizations, plus a seeded fuzz smoke test in CI.
+`45d3bf8`. There are now 401 tests: unit, hostile-input, content conformance and
+22 evasion characterizations, plus a seeded fuzz smoke test in CI.
 
 ### What is still open from the third review
 

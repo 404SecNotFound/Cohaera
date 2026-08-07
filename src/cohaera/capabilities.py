@@ -90,7 +90,7 @@ _STATE_CHANGE = {EFFECT_WRITE, EFFECT_DELETE, EFFECT_EXECUTE}
 # covers, not just their values. When a later version starts parsing a field it
 # ignores today, that field joins the semantics; bumping this tag makes every
 # digest visibly change rather than silently mean something new.
-SEMANTICS_SCHEMA = "cohaera.manifest.semantics:1"
+SEMANTICS_SCHEMA = "cohaera.manifest.semantics:2"
 
 
 class ManifestError(ValueError):
@@ -144,6 +144,43 @@ class Capability:
 
 
 @dataclass(frozen=True)
+class PolicyDeclaration:
+    """What one guardrail is declared to DO when it fires.
+
+    P1.3 gives the policy engine a place to say ``enforcement`` on the event
+    itself, and that field alone would be a mistake to act on. It arrives in
+    band, from the same path an attacker controls, and it SUPPRESSES a finding:
+    an agent that wanted CH04 quiet would stamp ``advisory`` on a control that
+    blocks and never be contradicted. That is SEC-03 exactly -- the producer's
+    ``reversible`` flag deciding whether a call is consequential -- reappearing
+    on the check that is supposed to catch a bypass.
+
+    So the manifest gets a ``policies`` section, and it outranks the event, for
+    the same reason and with the same precedence as ``tools``: the operator
+    chose this file, the agent wrote the event. A deployment that declares its
+    blocking controls here cannot be talked out of them by the thing being
+    watched.
+
+    Keyed on ``policy_id`` where the producer emits one, and on the event type
+    otherwise, because observra's ``cost_threshold_exceeded`` and
+    ``depth_exceeded`` carry no policy identifier at all.
+    """
+
+    policy_id: str
+    enforcement: str
+    description: str = ""
+
+    def semantics(self) -> dict[str, Any]:
+        return {"enforcement": self.enforcement}
+
+
+# Values a policy may declare. Mirrors cohaera.evidence.VALID_ENFORCEMENT, and
+# is spelled out here rather than imported because ``evidence`` imports
+# ``identity`` and ``validate``, and nothing on the manifest path needs either.
+VALID_ENFORCEMENT = frozenset({"blocking", "advisory"})
+
+
+@dataclass(frozen=True)
 class CapabilityManifest:
     """A producer's declaration of its tool surface."""
 
@@ -151,6 +188,7 @@ class CapabilityManifest:
     manifest_version: str = ""
     producer_schema_version: str = ""
     tools: dict[str, Capability] = field(default_factory=dict)
+    policies: dict[str, PolicyDeclaration] = field(default_factory=dict)
     # See the module docstring. file_digest is the tamper signal and is empty
     # for a manifest built in memory; semantic_digest is defined for every
     # manifest, file-backed or not, because it is computed from the records.
@@ -166,6 +204,19 @@ class CapabilityManifest:
             return None
         return self.tools.get(tool_id)
 
+    def policy(self, *candidates: Any) -> PolicyDeclaration | None:
+        """The operator's declaration for a policy, by ``policy_id`` then type.
+
+        Takes the candidates in preference order so the caller does not have to
+        care which of them the producer happened to emit.
+        """
+        for key in candidates:
+            if isinstance(key, str) and key:
+                found = self.policies.get(key)
+                if found is not None:
+                    return found
+        return None
+
     def klass_for(self, tool_id: Any) -> str | None:
         cap = self.get(tool_id)
         return cap.klass if cap is not None else None
@@ -176,6 +227,7 @@ class CapabilityManifest:
             "manifest_version": self.manifest_version,
             "producer_schema_version": self.producer_schema_version,
             "tool_count": len(self.tools),
+            "policy_count": len(self.policies),
             "file_digest": self.file_digest,
             "semantic_digest": self.semantic_digest,
         }
@@ -259,6 +311,39 @@ class CapabilityManifest:
                 sensitive_args=tuple(sensitive),
             )
 
+        policies: dict[str, PolicyDeclaration] = {}
+        policies_raw = obj.get("policies")
+        if policies_raw is not None:
+            if not isinstance(policies_raw, dict):
+                raise ManifestError("manifest 'policies' must be an object")
+            if len(policies_raw) > limits.max_manifest_tools:
+                raise ManifestError(
+                    f"manifest declares {len(policies_raw)} policies, exceeding "
+                    f"max_manifest_tools={limits.max_manifest_tools}")
+            for policy_id, spec in policies_raw.items():
+                if not isinstance(policy_id, str) or not policy_id:
+                    raise ManifestError(
+                        f"policy id must be a non-empty string: {policy_id!r}")
+                _bounded_str(policy_id, f"policy id {policy_id[:64]!r}")
+                if not isinstance(spec, dict):
+                    raise ManifestError(f"policy {policy_id!r} must map to an object")
+                enforcement = spec.get("enforcement")
+                if enforcement not in VALID_ENFORCEMENT:
+                    # No default. A policy declared here with no usable
+                    # enforcement is the operator saying something Cohaera
+                    # cannot act on, and guessing which way they meant it is how
+                    # a suppression gets shipped as a feature.
+                    raise ManifestError(
+                        f"policy {policy_id!r} must declare 'enforcement' as one "
+                        f"of {sorted(VALID_ENFORCEMENT)}, got {enforcement!r}")
+                description = spec.get("description", "")
+                if description != "":
+                    description = _bounded_str(
+                        description, f"policy {policy_id!r} 'description'")
+                policies[policy_id] = PolicyDeclaration(
+                    policy_id=policy_id, enforcement=enforcement,
+                    description=description)
+
         # These three are emitted verbatim into every verdict's provenance, so
         # they are bounded too rather than coerced with str(): str({...}) on a
         # dict produced a repr that then travelled to the SIEM as a "producer".
@@ -267,8 +352,8 @@ class CapabilityManifest:
             value = obj.get(key, "")
             meta[key] = "" if value == "" else _bounded_str(value, f"'{key}'")
 
-        return cls(tools=tools, file_digest=file_digest,
-                   semantic_digest=semantic_digest(tools), **meta)
+        return cls(tools=tools, policies=policies, file_digest=file_digest,
+                   semantic_digest=semantic_digest(tools, policies), **meta)
 
     @classmethod
     def from_file(cls, path: str | Path,
@@ -293,7 +378,8 @@ class CapabilityManifest:
                             limits=limits)
 
 
-def semantic_digest(tools: dict[str, Capability]) -> str:
+def semantic_digest(tools: dict[str, Capability],
+                    policies: dict[str, PolicyDeclaration] | None = None) -> str:
     """Hash what the manifest MEANS: every parsed field, canonically ordered.
 
     Deliberately not routed through ``identity.canonical``. Everything hashed
@@ -308,11 +394,13 @@ def semantic_digest(tools: dict[str, Capability]) -> str:
     nothing" are different states, and only one of them should be reported as a
     policy identity.
     """
-    if not tools:
+    policies = policies or {}
+    if not tools and not policies:
         return ""
     payload = {
         "schema": SEMANTICS_SCHEMA,
         "tools": {tool_id: cap.semantics() for tool_id, cap in tools.items()},
+        "policies": {pid: p.semantics() for pid, p in policies.items()},
     }
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]

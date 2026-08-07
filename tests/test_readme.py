@@ -56,9 +56,13 @@ def test_every_claim_pattern_still_matches_the_readme():
 def test_derived_facts_are_plausible():
     """Guards against a derivation that silently returns zero."""
     assert readme_facts.count_tests() > 100
-    assert readme_facts.count_sigma_rules() == 9
+    assert readme_facts.count_sigma_rules() == 13
     assert readme_facts.count_evasions() >= 13
-    assert readme_facts.count_checks() == 5
+    # CH01..CH07. CH06 and CH07 arrived with P1 evidence trust and are the
+    # first two checks here that read something other than agent behaviour:
+    # one asks whether the telemetry verified, the other whether it contradicts
+    # itself. See docs/EVIDENCE-TRUST.md.
+    assert readme_facts.count_checks() == 7
     assert readme_facts.count_evasion_tests() >= readme_facts.count_evasions() - 2
 
 

@@ -68,6 +68,19 @@ DEFECT_DATA_TYPE = "INVALID_DATA_BAG_TYPE"
 DEFECT_REVERSIBLE_TYPE = "INVALID_REVERSIBLE_TYPE"
 DEFECT_NUMERIC_NONFINITE = "NONFINITE_NUMERIC_FIELD"
 
+# --- P1 evidence sidecars (docs/EVIDENCE-TRUST.md) -------------------------
+# A malformed evidence object is treated as ABSENT, never as a weaker version of
+# itself. That direction matters more here than anywhere else in the firewall:
+# a half-parsed approval that still binds to a span would let a producer buy a
+# bypass with a type error, and a half-parsed integrity object would let one buy
+# silence. Absent is fail-closed for all three -- no approval means an
+# unapproved continuation, no integrity means the session is reported as
+# unattested.
+DEFECT_INTEGRITY_TYPE = "INVALID_INTEGRITY_OBJECT"
+DEFECT_RECEIPT_TYPE = "INVALID_EFFECT_RECEIPT"
+DEFECT_APPROVAL_TYPE = "INVALID_APPROVAL_OBJECT"
+DEFECT_ENFORCEMENT_TYPE = "INVALID_POLICY_ENFORCEMENT"
+
 ALL_REJECT_CODES = (
     REJECT_MALFORMED_JSON, REJECT_NOT_AN_OBJECT, REJECT_LINE_TOO_LONG,
     REJECT_NESTING_TOO_DEEP, REJECT_UNDECODABLE, REJECT_TOO_MANY_EVENTS,
@@ -80,7 +93,8 @@ ALL_DEFECT_CODES = (
     DEFECT_SESSION_KEY_TYPE, DEFECT_TOOL_NAME_TYPE, DEFECT_TOOL_NAME_LENGTH,
     DEFECT_RESPONSE_TEXT_TYPE, DEFECT_RESPONSE_TEXT_LENGTH, DEFECT_TIMESTAMP,
     DEFECT_IDENTITY_TYPE, DEFECT_DATA_TYPE, DEFECT_REVERSIBLE_TYPE,
-    DEFECT_NUMERIC_NONFINITE,
+    DEFECT_NUMERIC_NONFINITE, DEFECT_INTEGRITY_TYPE, DEFECT_RECEIPT_TYPE,
+    DEFECT_APPROVAL_TYPE, DEFECT_ENFORCEMENT_TYPE,
 )
 
 
@@ -166,6 +180,23 @@ class Limits:
     max_manifest_tools: int = 10_000
     max_manifest_field_chars: int = 256      # tool id, destination, arg name
     max_manifest_sensitive_args: int = 64    # per tool
+
+    # ---- P1 evidence (docs/EVIDENCE-TRUST.md) ---------------------------
+    # Every one of these bounds an attacker-chosen quantity. A producer picks
+    # how many streams it claims, how far out of order it delivers, and how many
+    # signatures it asks to have checked -- and a signature check is five
+    # milliseconds of pure-Python scalar multiplication, which is the most
+    # expensive thing in this codebase per unit of attacker effort.
+    max_integrity_streams: int = 10_000
+    # How far a record may arrive out of order before the gap ahead of it is
+    # called a deletion. This is the reordering-versus-deletion decision from
+    # EVIDENCE-TRUST section 2, and it is a bound rather than a heuristic
+    # because the buffer it governs is producer-controlled.
+    max_reorder_window: int = 64
+    max_signature_verifications: int = 100_000
+    max_approvals_per_session: int = 1_000
+    max_collector_keys: int = 1_000
+    max_keyfile_bytes: int = 1_048_576
 
     # ---- CLI reject policy ----------------------------------------------
     max_rejects: int | None = None           # None = unlimited
