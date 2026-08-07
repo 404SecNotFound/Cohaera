@@ -1,9 +1,18 @@
-title: Agent Took A Consequential Action After Reading Untrusted Content
+title: Agent Completed A Consequential Action After Reading Untrusted Content
 id: 6e972919-fc68-45cb-9bf9-30475720e2c1
 status: experimental
 description: |
   Injection markers were observed in an agent session, and a state-changing or
-  egress tool call ran afterwards in the same session.
+  egress tool call COMPLETED SUCCESSFULLY afterwards in the same session.
+
+  This rule matches the completed case only. Its sibling
+  b74578b4-e979-5f21-ab43-83af8f1b2159 matches calls that were merely attempted.
+  They were one rule until an external review pointed out that a session whose
+  only candidate call had ERRORED was being reported with the same title, the
+  same wording and the same severity as one where an irreversible action
+  actually happened. An attempt and an effect are different facts and an analyst
+  acts on them differently, so they are now different check IDs at different
+  levels.
 
   This is a simplified taint-flow signal. Full information-flow control (Fides
   arXiv:2505.23643, CaMeL arXiv:2503.18813) labels every value; Cohaera has
@@ -17,6 +26,11 @@ description: |
   Observra's own demo data contains exactly this pattern, and in that case the
   agent behaved correctly and ignored the embedded instruction. Treat the rule
   as a review trigger with a real benign rate.
+
+  BEFORE DEPLOYING, read data.coverage.checks. CH03 reports not_evaluated when
+  nothing in the stream carries an injection-marker field, because with no
+  upstream scanner there is nothing to order against. A quiet rule and a blind
+  rule look identical unless you check.
 references:
     - https://github.com/404SecNotFound/Cohaera
     - https://arxiv.org/abs/2505.23643
@@ -24,6 +38,10 @@ references:
     - https://genai.owasp.org/llm-top-10/
 author: Imran Hafeez
 date: 2026-08-07
+modified: 2026-08-07
+related:
+    - id: b74578b4-e979-5f21-ab43-83af8f1b2159
+      type: similar
 # Tags intentionally omitted. Sigma validation rejects private namespaces
 # (owasp.*, cohaera.*) and MITRE ATLAS IDs were not verified against the
 # current matrix. Add them in your own pipeline if it accepts them.
@@ -33,7 +51,7 @@ logsource:
 detection:
     selection:
         type: 'cohaera_session_verdict'
-        data.triggered_rules|contains: 'CH03_untrusted_to_consequential'
+        data.triggered_rules|contains: 'CH03_untrusted_to_completed_action'
     condition: selection
 fields:
     - session_id
@@ -43,6 +61,8 @@ fields:
     - data.tool_sequence
     - data.egress_count
     - data.state_change_count
+    - data.coverage.completeness
+    - data.coverage.classification_confidence
 falsepositives:
     - |
       EXPECTED AND COMMON. A correctly-behaving agent that reads hostile

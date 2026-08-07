@@ -1,0 +1,64 @@
+title: Agent Attempted A Consequential Action After A Guardrail Fired
+id: d9fc7fc6-ac5e-58c6-a9df-164d229fbb96
+status: experimental
+description: |
+  A policy control fired during an agent session, and a state-changing or egress
+  tool call STARTED afterwards WITHOUT completing successfully.
+
+  THIS RULE MAKES NO CLAIM ABOUT ENFORCEMENT. That is the whole reason it was
+  split out of aa4b5aa2-7fa0-4d59-aed2-db47bfb71196. The merged rule fired at
+  level high on a session whose only post-guardrail call had errored, and told
+  the analyst "the control produced a log line but did not stop the behaviour".
+  Both halves of that sentence were unsupported: the action did not happen, and
+  nothing in the telemetry says which of the guardrail, the tool, the model or
+  an unrelated failure prevented it.
+
+  Two readings, and Cohaera cannot distinguish them:
+
+    THE CONTROL WORKED. The guardrail refused the call and the refusal surfaced
+    as an error. This is the good outcome and it should not be alerted on.
+
+    THE CONTROL DID NOTHING. The call was attempted freely and failed for an
+    unrelated reason. The guardrail was ignored; the attempt just missed.
+
+  Deploy this as a dashboard or a hunting input rather than an alert. What makes
+  it useful is REPETITION: an agent that keeps attempting consequential work
+  after its guardrails fire is behaving the way a compromised or misconfigured
+  agent behaves, regardless of the per-attempt outcome. Aggregate it per agent
+  over a long window in Exabeam ABA rather than firing per session.
+references:
+    - https://github.com/404SecNotFound/Cohaera
+    - https://github.com/open-agent-ai-security/observra/issues/108
+author: Imran Hafeez
+date: 2026-08-07
+related:
+    - id: aa4b5aa2-7fa0-4d59-aed2-db47bfb71196
+      type: similar
+logsource:
+    product: cohaera
+    service: session_verdict
+detection:
+    selection:
+        type: 'cohaera_session_verdict'
+        data.triggered_rules|contains: 'CH04_post_guardrail_attempt'
+    condition: selection
+fields:
+    - session_id
+    - agent_name
+    - user
+    - host
+    - data.policy_events
+    - data.policy_event_count
+    - data.unpaired_consequential_count
+    - data.error_count
+    - data.total_cost_usd
+    - data.coverage.completeness
+falsepositives:
+    - |
+      A CORRECTLY ENFORCED GUARDRAIL LOOKS EXACTLY LIKE THIS. If your policy
+      layer refuses the call and the refusal surfaces as a tool_error, this rule
+      fires on the control WORKING. That is the expected steady state for a
+      well-configured agent and it is why the level is informational.
+    - Transient tool failures in any agent that also trips a cost or depth
+      threshold.
+level: informational

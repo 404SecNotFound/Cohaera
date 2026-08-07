@@ -152,8 +152,8 @@ Run with no tuning, no baseline, against `demo/data.jsonl` as shipped:
 
 ```
 session 01KZ21ZR6B9X78G6BYWSMXYHQ1  agent=kb-research-agent  cost=$0.6413
-   [CRIT] CH03_untrusted_to_consequential
-   [HIGH] CH04_guardrail_overrun
+   [CRIT] CH03_untrusted_to_completed_action
+   [HIGH] CH04_guardrail_bypass_completed
 ```
 
 **CH04 is unambiguous and worth showing.** `cost_threshold_exceeded` fired at

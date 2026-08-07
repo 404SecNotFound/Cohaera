@@ -6,14 +6,29 @@ Cohaera's job starts by giving the stream a shape: a Session, with derived
 behavioural features that only exist once events are grouped.
 
 Everything here is deliberately dependency-free stdlib so it runs anywhere.
+
+Type handling lives in :mod:`cohaera.validate`, not here. Every accessor on
+``Event`` reads through it, so a directly-constructed ``Event`` is as safe as one
+that came through the ingest firewall. That is the fix for the whole class of
+"unhashable type" and "'dict' object has no attribute 'lower'" faults: there is
+no longer a path that reaches a dict lookup or a ``.lower()`` with a value whose
+type was never checked.
 """
 
 from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass, field, asdict
-from typing import Any, Iterable
+from collections import deque
+from dataclasses import asdict, dataclass, field
+from typing import Any, ClassVar
+
+from . import validate
+from .capabilities import EMPTY_MANIFEST, CapabilityManifest
+from .identity import CorrelationKey, digest
+from .identity import verdict_id as _verdict_id
+from .limits import DEFAULT_LIMITS, DEFECT_RESPONSE_TEXT_TYPE, Limits
+from .validate import json_safe  # re-exported: part of the public API
 
 # ---------------------------------------------------------------------------
 # Vocabulary lifted from observra's schema/cim_schema.toml so Cohaera stays
@@ -49,6 +64,12 @@ TERMINAL_EVENTS = {
 
 POLICY_EVENTS = {"cost_threshold_exceeded", "depth_exceeded"}
 
+# Where a call's class came from. Coverage reads this: a session classified
+# entirely by name heuristic cannot honestly report full confidence.
+SOURCE_MANIFEST = "manifest"
+SOURCE_NAME = "name_heuristic"
+SOURCE_PRODUCER_FLAG = "producer_reversible_flag"
+SOURCE_NONE = "unclassified"
 
 _TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
 
@@ -77,10 +98,10 @@ def _classify(tool_name: Any) -> str:
     Egress still wins over state_change: data leaving the boundary is the more
     consequential property for a concealment check.
 
-    This is still a name heuristic and it will still be wrong. The real fix is
-    producer-signed capability manifests keyed on exact tool ID. Tools that do
-    not match anything return ``unknown``, which must degrade coverage rather
-    than silently read as safe.
+    This is still a name heuristic and it will still be wrong. It is now the
+    LAST resort rather than the only one: see :mod:`cohaera.capabilities` for the
+    exact per-tool declaration that outranks it. Tools that match nothing return
+    ``unknown``, which must degrade coverage rather than silently read as safe.
     """
     if not isinstance(tool_name, str) or not tool_name:
         return "unknown"
@@ -108,11 +129,52 @@ def _classify(tool_name: Any) -> str:
     return "unknown"
 
 
+def cap_list(items: list[Any], limit: int) -> tuple[list[Any], int]:
+    """Return at most ``limit`` items, plus how many were dropped.
+
+    Bounds the OUTPUT. Measuring the previous code found that a session with 300
+    policy events and 300 consequential calls produced a 6.3 MB verdict record
+    from 900 input events, a 61x amplification, because every finding carried
+    every call. An evidence field that grows with the square of a hostile input
+    is a denial of service against the collector, not just against Cohaera.
+    """
+    if limit < 0 or len(items) <= limit:
+        return list(items), 0
+    return list(items[:limit]), len(items) - limit
+
+
+def evidence_list(items: list[Any], limits: Limits) -> dict[str, Any]:
+    """A bounded evidence field that says so when it is bounded."""
+    shown, dropped = cap_list(items, limits.max_evidence_items)
+    out: dict[str, Any] = {"items": shown, "total": len(items)}
+    if dropped:
+        out["truncated"] = dropped
+    return out
+
+
 @dataclass
 class Event:
-    """One observra CIM record, parsed but not interpreted."""
+    """One observra CIM record, parsed but not interpreted.
+
+    ``raw`` is kept verbatim. Every accessor reads it through
+    :mod:`cohaera.validate`, so ``raw`` can contain anything JSON can express
+    without a downstream consumer ever seeing a value of an unexpected type.
+    """
 
     raw: dict[str, Any]
+    limits: Limits = field(default=DEFAULT_LIMITS, repr=False, compare=False)
+    _view: validate.RecordView | None = field(default=None, repr=False, compare=False)
+
+    @property
+    def view(self) -> validate.RecordView:
+        if self._view is None:
+            self._view = validate.view(self.raw, self.limits)
+        return self._view
+
+    @property
+    def defects(self) -> tuple[str, ...]:
+        """Fields that were not what they claimed to be, as reason codes."""
+        return self.view.defects
 
     @property
     def event_type(self) -> str:
@@ -122,55 +184,85 @@ class Event:
         "unhashable type" from ``e.event_type not in {...}`` inside CH04. A
         malformed field in one record should never abort scoring the session.
         """
-        v = self.raw.get("event_type")
-        return v if isinstance(v, str) else ""
+        return self.view.event_type
 
     @property
     def agent_name(self) -> str | None:
-        n = self.raw.get("agent_name")
-        return n if isinstance(n, str) else None
+        return self.view.agent_name
 
     @property
     def timestamp(self) -> float:
         """Never raises. C-08: an unvalidated float() here was a trivial DoS.
 
         A malformed timestamp returns NaN rather than killing the run. NaN sorts
-        last and is detectable downstream via ``timestamp_valid``.
+        last via ``sort_key`` and is detectable downstream via ``timestamp_valid``.
         """
-        raw = self.raw.get("timestamp")
-        if isinstance(raw, bool):
-            return float("nan")            # True is not a timestamp
-        if isinstance(raw, (int, float)):
-            return float(raw) if math.isfinite(raw) else float("nan")
-        if isinstance(raw, str):
-            try:
-                v = float(raw)
-            except ValueError:
-                return float("nan")
-            return v if math.isfinite(v) else float("nan")  # rejects "inf"/"nan"
-        return float("nan")
+        return self.view.ts
 
     @property
     def timestamp_valid(self) -> bool:
-        t = self.timestamp
+        t = self.view.ts
         return math.isfinite(t) and t > 0
+
+    @property
+    def sort_key(self) -> tuple[int, float]:
+        """Total order that a NaN cannot corrupt.
+
+        ``sorted(events, key=lambda e: e.timestamp)`` is not merely unstable
+        with a NaN in the list, it is wrong: NaN compares False against
+        everything, so the partition step of the sort leaves elements on
+        whichever side they started. Events with no usable clock now sort to the
+        end as a block, in arrival order.
+        """
+        t = self.view.ts
+        return (0, t) if math.isfinite(t) else (1, 0.0)
+
+    @property
+    def span_id(self) -> str | None:
+        """A bounded non-empty string, or None.
+
+        BUG-01 and BUG-04 both die here. A list or dict span reached
+        ``open_by_span[sid]`` and raised ``unhashable type``. A boolean span
+        aliased an integer one, because Python hashes ``True`` and ``1``
+        identically, so a terminal event for span ``1`` closed the call opened
+        with span ``true``. Neither is possible once a span must be a string.
+        """
+        return self.view.span_id
 
     @property
     def tool_name(self) -> str | None:
         """Always a string or None. Producers do send non-strings."""
-        n = self.raw.get("tool_name")
-        return n if isinstance(n, str) else None
+        return self.view.tool_name
 
     @property
     def data(self) -> dict[str, Any]:
         d = self.raw.get("data")
         return d if isinstance(d, dict) else {}
 
+    @property
+    def response_text(self) -> str | None:
+        """Bounded string, or None.
+
+        BUG-02. A truthy dict, list, int or float here became the session's
+        final response and CH02 called ``.lower()`` on it. That is an
+        AttributeError raised from inside a security check, which takes the
+        whole scoring run down: denial of service, and detection suppression for
+        every other session in the same file.
+        """
+        text, _ = validate.semantic_text(
+            self.data.get("response_text"), self.limits.max_response_chars,
+            "x", "x")
+        return text
+
     def get(self, key: str, default: Any = None) -> Any:
         """Look in the envelope first, then the data bag."""
         if key in self.raw and self.raw[key] is not None:
             return self.raw[key]
         return self.data.get(key, default)
+
+    def digest(self) -> str:
+        """Content identity for this record. Stable across runs."""
+        return digest(self.raw, 16)
 
 
 @dataclass
@@ -191,27 +283,48 @@ class ToolCall:
     #   open           tool_start with no terminal event yet
     #   complete       start and terminal seen exactly once
     #   orphan_end     terminal event with no matching start
+    #   mismatched_end terminal event whose span does not match any open call
     #   duplicate_end  a second terminal event arrived for a completed call
     state: str = "open"
+    manifest: CapabilityManifest = field(default=EMPTY_MANIFEST, repr=False,
+                                         compare=False)
+
+    @property
+    def capability(self):
+        return self.manifest.get(self.name)
+
+    @property
+    def klass_source(self) -> str:
+        """Where this call's class came from. Coverage weights on it."""
+        if self.capability is not None:
+            return SOURCE_MANIFEST
+        if _classify(self.name) == "egress":
+            return SOURCE_NAME
+        if self.reversible is not None:
+            return SOURCE_PRODUCER_FLAG
+        return SOURCE_NAME if _classify(self.name) != "unknown" else SOURCE_NONE
 
     @property
     def klass(self) -> str:
         """read_only | state_change | egress | unknown.
 
-        C-03 fix. The producer's ``reversible`` flag is now authoritative in
-        BOTH directions, and it no longer only rescues names already classified
-        as read_only.
-
         Precedence:
-          1. egress by name always wins. Data leaving the boundary is the
-             property that matters most and reversibility says nothing about it.
-          2. reversible is False  -> state_change
-          3. reversible is True   -> read_only
-          4. fall back to the name heuristic
+          1. an exact capability manifest entry. Declared out of band by the
+             operator, so it outranks anything on the event itself.
+          2. egress by name. Data leaving the boundary is the property that
+             matters most and reversibility says nothing about it.
+          3. the producer's ``reversible`` flag, authoritative in BOTH
+             directions (C-03).
+          4. the name heuristic.
 
-        Still a heuristic. The real fix is typed capability manifests per
-        producer, which is Phase 1 work, not this.
+        Steps 2 to 4 are all guesses about an attacker-supplied string. Step 1
+        is the only one that is a statement of fact, which is why unknown
+        classification now degrades the confidence of every check that reads it
+        rather than being reported as a standalone gap.
         """
+        cap = self.capability
+        if cap is not None:
+            return cap.klass
         by_name = _classify(self.name)
         if by_name == "egress":
             return "egress"
@@ -234,15 +347,68 @@ class ToolCall:
         """
         return self.state == "complete" and self.result == "success"
 
+    @property
+    def clock_valid(self) -> bool:
+        return math.isfinite(self.started_at)
+
+    def brief(self, limits: Limits = DEFAULT_LIMITS) -> dict[str, Any]:
+        """The bounded evidence row used by every check."""
+        return {
+            "tool": validate.sanitise_display(self.name, limits.max_evidence_value_chars),
+            "class": self.klass,
+            "class_source": self.klass_source,
+            "at": self.started_at if math.isfinite(self.started_at) else None,
+            "state": self.state,
+            "result": self.result,
+            "completed": self.executed,
+        }
+
+
+def _num(value: Any) -> float | None:
+    v, _ = validate.finite_number(value)
+    return v
+
 
 @dataclass
 class Session:
-    """A correlated agent session. This is the object observra never builds."""
+    """A correlated agent session. This is the object observra never builds.
+
+    Derived values are cached, and the cache is keyed on the length of the event
+    list. BUG-05: the previous cache was populated on first access and never
+    invalidated, so appending a terminal event to ``session.events`` left the
+    call reported as still open. Batch loading hid it because the list was fully
+    populated before any check ran. A streaming service would have shipped wrong
+    verdicts. Prefer :meth:`add_event`; direct ``.events.append`` is still
+    handled, because somebody will do it.
+    """
 
     session_id: str
     events: list[Event] = field(default_factory=list)
-    _calls_cache: list[ToolCall] | None = field(default=None, repr=False,
+    correlation: CorrelationKey | None = field(default=None, compare=False)
+    limits: Limits = field(default=DEFAULT_LIMITS, repr=False, compare=False)
+    manifest: CapabilityManifest = field(default=EMPTY_MANIFEST, repr=False,
+                                         compare=False)
+    _caches: dict[str, tuple[int, Any]] = field(default_factory=dict, repr=False,
                                                 compare=False)
+
+    # ---- cache plumbing --------------------------------------------------
+    def _cached(self, key: str, build):
+        token = len(self.events)
+        hit = self._caches.get(key)
+        if hit is not None and hit[0] == token:
+            return hit[1]
+        value = build()
+        self._caches[key] = (token, value)
+        return value
+
+    def invalidate(self) -> None:
+        """Drop every derived value. Call after mutating ``events`` in place."""
+        self._caches.clear()
+
+    def add_event(self, event: Event) -> None:
+        """Append an event and invalidate everything derived from the old set."""
+        self.events.append(event)
+        self.invalidate()
 
     # ---- identity -------------------------------------------------------
     @property
@@ -256,21 +422,36 @@ class Session:
 
     @property
     def framework(self) -> str:
-        return next((e.raw.get("framework") for e in self.events
-                     if e.raw.get("framework")), "unknown")
+        return next((e.view.framework for e in self.events if e.view.framework),
+                    "unknown")
 
     @property
     def host(self) -> str | None:
-        return next((e.raw.get("host") for e in self.events if e.raw.get("host")), None)
+        return next((e.view.host for e in self.events if e.view.host), None)
 
     @property
     def user(self) -> str | None:
-        return next((e.raw.get("user") for e in self.events if e.raw.get("user")), None)
+        return next((e.view.user for e in self.events if e.view.user), None)
+
+    @property
+    def correlation_confidence(self) -> float:
+        return self.correlation.confidence if self.correlation else 1.0
+
+    @property
+    def integrity_defects(self) -> dict[str, int]:
+        """Field-level defect codes seen in this session, with counts."""
+        def build() -> dict[str, int]:
+            counts: dict[str, int] = {}
+            for e in self.events:
+                for code in e.defects:
+                    counts[code] = counts.get(code, 0) + 1
+            return dict(sorted(counts.items()))
+        return self._cached("defects", build)
 
     # ---- time -----------------------------------------------------------
     @property
     def _valid_ts(self) -> list[float]:
-        return [e.timestamp for e in self.events if e.timestamp == e.timestamp]
+        return [e.timestamp for e in self.events if e.timestamp_valid]
 
     @property
     def started_at(self) -> float:
@@ -284,6 +465,15 @@ class Session:
     def duration_s(self) -> float:
         return round(self.ended_at - self.started_at, 3)
 
+    @property
+    def clock_defects(self) -> int:
+        return sum(1 for e in self.events if not e.timestamp_valid)
+
+    @property
+    def ordered_events(self) -> list[Event]:
+        return self._cached("ordered", lambda: sorted(self.events,
+                                                      key=lambda e: e.sort_key))
+
     # ---- tool calls -----------------------------------------------------
     @property
     def tool_calls(self) -> list[ToolCall]:
@@ -292,52 +482,64 @@ class Session:
         Pairing is by span_id where available, falling back to tool_name FIFO,
         because not every adapter propagates span_id consistently.
         """
-        if self._calls_cache is not None:
-            return self._calls_cache
+        return self._cached("calls", self._build_calls)
+
+    def _build_calls(self) -> list[ToolCall]:
         calls: list[ToolCall] = []
         # C-02 fix. Previously a span match popped the call out of open_by_span
         # but left it in open_by_name, so a later name-only terminal event could
         # find the SAME call again and overwrite a recorded success with a
         # failure. One identity, removed from every index atomically.
-        open_by_span: dict[str, int] = {}          # span_id -> index into calls
-        open_by_name: dict[str, list[int]] = {}    # name    -> indices, FIFO
+        #
+        # The name index is a deque with LAZY deletion rather than a list with
+        # ``idx in bucket`` followed by ``bucket.remove(idx)``. Both of those
+        # are O(n) scans, so N same-name calls cost O(N^2) to pair, and the
+        # cache only hid the cost from the second access onwards. Closed calls
+        # are now marked in a set and skipped when the front of the queue is
+        # popped, which is amortised O(1) per call.
+        open_by_span: dict[str, int] = {}            # span_id -> index into calls
+        open_by_name: dict[str, deque[int]] = {}     # name    -> indices, FIFO
         closed: set[int] = set()
-        seen_spans: set[str] = set()      # every span we have ever closed
+        seen_spans: set[str] = set()                 # every span we have closed
 
         def _release(idx: int) -> None:
-            """Remove this call from BOTH indices. The whole point of the fix."""
+            """Retire this call from BOTH indices. The whole point of the fix."""
             tc = calls[idx]
             if tc.span_id and open_by_span.get(tc.span_id) == idx:
                 open_by_span.pop(tc.span_id, None)
-            bucket = open_by_name.get(tc.name)
-            if bucket and idx in bucket:
-                bucket.remove(idx)
             closed.add(idx)
 
-        for e in sorted(self.events, key=lambda x: x.timestamp):
-            if e.event_type == "tool_start":
+        def _next_open_by_name(name: str) -> int | None:
+            bucket = open_by_name.get(name)
+            if not bucket:
+                return None
+            while bucket and bucket[0] in closed:
+                bucket.popleft()
+            return bucket[0] if bucket else None
+
+        for e in self.ordered_events:
+            etype = e.event_type
+            if etype == "tool_start":
                 tc = ToolCall(
                     name=e.tool_name or "<unnamed>",
                     started_at=e.timestamp,
-                    span_id=e.raw.get("span_id"),
-                    reversible=e.data.get("reversible"),
+                    span_id=e.span_id,
+                    reversible=validate.tri_state_bool(e.data.get("reversible"))[0],
                     had_args=e.data.get("tool_args") is not None,
                     state="open",
+                    manifest=self.manifest,
                 )
                 idx = len(calls)
                 calls.append(tc)
-                if tc.span_id:
-                    if tc.span_id in open_by_span:
-                        # Span collision: two open calls claim the same span.
-                        # Do not silently overwrite; leave the first indexed and
-                        # let this one fall back to name matching.
-                        pass
-                    else:
-                        open_by_span[tc.span_id] = idx
-                open_by_name.setdefault(tc.name, []).append(idx)
+                if tc.span_id and tc.span_id not in open_by_span:
+                    # Span collision: two open calls claiming the same span are
+                    # not merged. The first keeps the index; the second falls
+                    # back to name matching rather than silently overwriting.
+                    open_by_span[tc.span_id] = idx
+                open_by_name.setdefault(tc.name, deque()).append(idx)
 
-            elif e.event_type in {"tool_end", "tool_error"}:
-                sid = e.raw.get("span_id")
+            elif etype in {"tool_end", "tool_error"}:
+                sid = e.span_id
                 name = e.tool_name or "<unnamed>"
                 idx: int | None = None
 
@@ -351,26 +553,27 @@ class Session:
                     if idx is not None and calls[idx].name != name:
                         idx = None                       # span/name disagreement
                 else:
-                    bucket = open_by_name.get(name) or []
-                    idx = bucket[0] if bucket else None
+                    idx = _next_open_by_name(name)
 
                 if idx is None or idx in closed:
                     # No open start to match. Record it as an orphan terminal
                     # rather than inventing a successful call out of nothing.
-                    orphan = ToolCall(
+                    calls.append(ToolCall(
                         name=name, started_at=e.timestamp, span_id=sid,
                         ended_at=e.timestamp,
-                        result="failure" if e.event_type == "tool_error" else "success",
-                        duration_ms=e.data.get("duration_ms"),
-                        reversible=e.data.get("reversible"),
+                        result="failure" if etype == "tool_error" else "success",
+                        duration_ms=_num(e.data.get("duration_ms")),
+                        reversible=validate.tri_state_bool(
+                            e.data.get("reversible"))[0],
                         had_result=e.data.get("tool_result") is not None,
-                        error_class=(e.data.get("error_class")
-                                     or e.data.get("error_type_name")),
+                        error_class=validate.identity_text(
+                            e.data.get("error_class") or e.data.get("error_type_name"),
+                            self.limits.max_identity_chars, "x", "x")[0],
                         state=("duplicate_end" if (sid and sid in seen_spans)
                                else "mismatched_end" if sid
                                else "orphan_end"),
-                    )
-                    calls.append(orphan)
+                        manifest=self.manifest,
+                    ))
                     continue
 
                 tc = calls[idx]
@@ -378,16 +581,17 @@ class Session:
                     seen_spans.add(tc.span_id)
                 _release(idx)
                 tc.ended_at = e.timestamp
-                tc.result = "failure" if e.event_type == "tool_error" else "success"
-                tc.duration_ms = e.data.get("duration_ms")
-                tc.error_class = (e.data.get("error_class")
-                                  or e.data.get("error_type_name"))
-                if e.data.get("reversible") is not None:
-                    tc.reversible = e.data.get("reversible")
+                tc.result = "failure" if etype == "tool_error" else "success"
+                tc.duration_ms = _num(e.data.get("duration_ms"))
+                tc.error_class = validate.identity_text(
+                    e.data.get("error_class") or e.data.get("error_type_name"),
+                    self.limits.max_identity_chars, "x", "x")[0]
+                rev, _ = validate.tri_state_bool(e.data.get("reversible"))
+                if rev is not None:
+                    tc.reversible = rev
                 tc.had_result = e.data.get("tool_result") is not None
                 tc.state = "complete"
 
-        self._calls_cache = calls
         return calls
 
     @property
@@ -396,13 +600,29 @@ class Session:
 
     @property
     def consequential_calls(self) -> list[ToolCall]:
-        return [tc for tc in self.tool_calls if tc.consequential]
+        """Cached. CH03 and CH04 both walk this, and CH04 walked it once per
+        policy event, which is where the O(policy_events * calls) blow-up came
+        from."""
+        return self._cached("consequential",
+                            lambda: [tc for tc in self.tool_calls if tc.consequential])
+
+    @property
+    def unclassified_calls(self) -> list[ToolCall]:
+        return [tc for tc in self.tool_calls if tc.klass == "unknown"]
 
     # ---- text surfaces (privacy-gated upstream) --------------------------
     @property
     def user_messages(self) -> list[str]:
-        return [e.data["user_message_text"] for e in self.events
-                if e.event_type == "user_message" and e.data.get("user_message_text")]
+        out = []
+        for e in self.events:
+            if e.event_type != "user_message":
+                continue
+            text, _ = validate.semantic_text(
+                e.data.get("user_message_text"), self.limits.max_user_message_chars,
+                "x", "x")
+            if text:
+                out.append(text)
+        return out
 
     @property
     def final_response(self) -> str | None:
@@ -411,35 +631,65 @@ class Session:
         observra strips strings on the hot path (core/hot_cold.py) and
         response_text is a claude-adapter extra, so this is frequently None.
         That absence is a finding, not an error. See checks.coverage.
+
+        A non-string here used to become the response and crash CH02. It is now
+        treated as absent, with INVALID_RESPONSE_TEXT_TYPE recorded on the event
+        so coverage can say CH02 was blinded rather than clean.
         """
-        texts = [e.data.get("response_text") for e in sorted(
-            self.events, key=lambda x: x.timestamp)
-            if e.event_type == "model_response" and e.data.get("response_text")]
-        return texts[-1] if texts else None
+        def build() -> str | None:
+            texts = [e.response_text for e in self.ordered_events
+                     if e.event_type == "model_response" and e.response_text]
+            return texts[-1] if texts else None
+        return self._cached("final_response", build)
+
+    @property
+    def response_text_rejected(self) -> bool:
+        """True if a model_response carried a response_text of the wrong type."""
+        return DEFECT_RESPONSE_TEXT_TYPE in self.integrity_defects
 
     # ---- security-relevant counters -------------------------------------
     @property
     def injection_markers(self) -> list[str]:
-        out: list[str] = []
-        for e in self.events:
-            pats = e.data.get("injection_patterns")
-            if isinstance(pats, list):
-                out.extend(pats)
-            elif isinstance(pats, str) and pats:
-                out.extend(p.strip() for p in pats.split(",") if p.strip())
-        return out
+        def build() -> list[str]:
+            out: list[str] = []
+            cap = self.limits.max_injection_markers
+            for e in self.events:
+                if len(out) >= cap:
+                    break
+                pats = e.data.get("injection_patterns")
+                if isinstance(pats, list):
+                    items = pats
+                elif isinstance(pats, str) and pats:
+                    items = [p.strip() for p in pats.split(",") if p.strip()]
+                else:
+                    continue
+                for p in items:
+                    if len(out) >= cap:
+                        break
+                    if isinstance(p, str) and p:
+                        out.append(p[:self.limits.max_marker_chars])
+            return out
+        return self._cached("markers", build)
 
     @property
     def max_delegation_depth(self) -> int:
         depths = [e.data.get("current_depth") for e in self.events
-                  if isinstance(e.data.get("current_depth"), int)]
+                  if isinstance(e.data.get("current_depth"), int)
+                  and not isinstance(e.data.get("current_depth"), bool)]
         return max(depths) if depths else 0
 
     @property
     def handoffs(self) -> list[tuple[str, str]]:
-        return [(e.data.get("source_agent") or "?", e.data.get("target_agent") or "?")
-                for e in self.events
-                if e.event_type in {"agent_handoff", "agent_handoff_error"}]
+        out = []
+        for e in self.events:
+            if e.event_type not in {"agent_handoff", "agent_handoff_error"}:
+                continue
+            src = validate.identity_text(e.data.get("source_agent"),
+                                         self.limits.max_identity_chars, "x", "x")[0]
+            dst = validate.identity_text(e.data.get("target_agent"),
+                                         self.limits.max_identity_chars, "x", "x")[0]
+            out.append((src or "?", dst or "?"))
+        return out
 
     @property
     def policy_events(self) -> list[str]:
@@ -447,22 +697,28 @@ class Session:
 
     @property
     def total_cost_usd(self) -> float:
-        c = [e.data.get("session_cost_usd") for e in self.events
-             if isinstance(e.data.get("session_cost_usd"), (int, float))]
-        if c:
-            return round(max(c), 6)
-        per_call = sum(e.data.get("cost_usd", 0) or 0 for e in self.events
-                       if isinstance(e.data.get("cost_usd"), (int, float)))
+        """Finite, or zero. An infinite cost is not a cost, it is a bad field."""
+        session_costs = [v for v in (_num(e.data.get("session_cost_usd"))
+                                     for e in self.events) if v is not None]
+        if session_costs:
+            return round(max(session_costs), 6)
+        per_call = sum(v for v in (_num(e.data.get("cost_usd"))
+                                   for e in self.events) if v is not None)
         return round(per_call, 6)
 
     @property
     def error_count(self) -> int:
         return sum(1 for e in self.events
-                   if e.event_type in {"tool_error", "model_error", "agent_handoff_error"})
+                   if e.event_type in {"tool_error", "model_error",
+                                       "agent_handoff_error"})
 
     def features(self) -> dict[str, Any]:
         """The derived feature vector. This is what a SIEM should receive."""
+        return self._cached("features", self._build_features)
+
+    def _build_features(self) -> dict[str, Any]:
         calls = self.tool_calls
+        seq, seq_dropped = cap_list(self.tool_sequence, self.limits.max_evidence_items)
         return {
             "session_id": self.session_id,
             "agent_names": self.agent_names,
@@ -474,11 +730,14 @@ class Session:
             "event_count": len(self.events),
             "tool_call_count": len(calls),
             "distinct_tools": len({c.name for c in calls}),
-            "tool_sequence": self.tool_sequence,
+            "tool_sequence": seq,
+            "tool_sequence_truncated": seq_dropped,
             "read_only_count": sum(1 for c in calls if c.klass == "read_only"),
             "state_change_count": sum(1 for c in calls if c.klass == "state_change"),
             "egress_count": sum(1 for c in calls if c.klass == "egress"),
             "unknown_class_count": sum(1 for c in calls if c.klass == "unknown"),
+            "manifest_classified_count": sum(1 for c in calls
+                                             if c.klass_source == SOURCE_MANIFEST),
             "unpaired_calls": sum(1 for c in calls
                                   if c.state in {"open", "orphan_end",
                                                  "mismatched_end", "duplicate_end"}),
@@ -492,11 +751,20 @@ class Session:
             "injection_markers": self.injection_markers,
             "max_delegation_depth": self.max_delegation_depth,
             "handoff_count": len(self.handoffs),
-            "handoff_chain": [f"{a}->{b}" for a, b in self.handoffs],
-            "policy_events": self.policy_events,
+            "handoff_chain": [f"{a}->{b}" for a, b in
+                              self.handoffs[:self.limits.max_evidence_items]],
+            "policy_events": self.policy_events[:self.limits.max_evidence_items],
+            "policy_event_count": len(self.policy_events),
             "total_cost_usd": self.total_cost_usd,
             "has_final_response_text": self.final_response is not None,
             "tool_results_captured": sum(1 for c in calls if c.had_result),
+            # ---- telemetry integrity, not agent behaviour -----------------
+            "correlation": (self.correlation.as_dict() if self.correlation
+                            else {"kind": "session_id", "confidence": 1.0,
+                                  "key_version": "producer-supplied", "keyed": False}),
+            "integrity_defects": self.integrity_defects,
+            "integrity_defect_count": sum(self.integrity_defects.values()),
+            "invalid_timestamp_count": self.clock_defects,
         }
 
 
@@ -507,6 +775,12 @@ class Finding:
     Shaped to survive the trip into a SIEM. Deliberately carries the security
     fields that observra issue #108 reports the published parser drops:
     triggered_rules, max_severity, source_agent, target_agent, injection_patterns.
+
+    ``family`` groups the split checks. CH03 and CH04 each became two check IDs
+    because a completed action and a failed attempt are different facts and the
+    old shared wording asserted the stronger one for both. Content that wants
+    either can match ``family``; content that wants only the completed case
+    matches ``check``.
     """
 
     check: str
@@ -515,49 +789,52 @@ class Finding:
     title: str
     detail: str
     evidence: dict[str, Any] = field(default_factory=dict)
+    family: str = ""
+    confidence: float = 1.0
 
-    _ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+    _ORDER: ClassVar[dict[str, int]] = {
+        "info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
     @property
     def rank(self) -> int:
         return self._ORDER.get(self.severity, 0)
 
-
-def json_safe(o: Any) -> Any:
-    """Coerce a value tree into something json.dumps(allow_nan=False) accepts.
-
-    R2-02. Producers send non-finite floats and unhashable values. Emitting
-    Infinity or NaN produces output that is not valid JSON, and crashing on
-    serialisation turns a bad input line into a lost verdict. Neither is
-    acceptable for a security control, so values that cannot be represented are
-    replaced with a typed marker that an analyst can see.
-    """
-    if isinstance(o, float):
-        return o if math.isfinite(o) else {"_invalid_number": repr(o)}
-    if isinstance(o, dict):
-        return {(k if isinstance(k, str) else repr(k)): json_safe(v)
-                for k, v in o.items()}
-    if isinstance(o, (list, tuple, set)):
-        return [json_safe(v) for v in o]
-    if o is None or isinstance(o, (str, int, bool)):
-        return o
-    return repr(o)
+    def as_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        d.pop("_ORDER", None)
+        return d
 
 
 def to_cim_event(session: Session, findings: list[Finding],
-                 schema: str = "cohaera:0.1") -> dict[str, Any]:
+                 schema: str = "cohaera:0.2",
+                 coverage: dict[str, Any] | None = None,
+                 provenance: dict[str, Any] | None = None,
+                 sequence: int | None = None) -> dict[str, Any]:
     """Emit one correlation-grade CIM record per session.
 
     Note the ``type`` and ``schema`` keys. observra issue #108 records that the
     Exabeam sender emits ``event_type`` where the published ABA parser expects
     ``type``, and never emits ``schema`` at all, so no correlation rule can
     match. Cohaera emits both, plus ``event_type`` for backwards compatibility.
+
+    ``verdict_id`` is a digest of the run identity, the session and the findings
+    (SEC-06). Scoring the same input twice under the same configuration produces
+    the same ID, so a SIEM can recognise a retry; changing the input, the
+    bounds, the baseline or the detector version changes it, so a genuine
+    re-analysis is visibly new.
     """
     fired = sorted({f.check for f in findings})
+    families = sorted({f.family for f in findings if f.family})
     max_sev = max(findings, key=lambda f: f.rank).severity if findings else "info"
     feats = session.features()
+    prov = dict(provenance or {})
 
-    return json_safe({
+    finding_dicts = [f.as_dict() for f in findings]
+    fdigest = digest(finding_dicts, 32)
+    vid = _verdict_id(run=str(prov.get("analysis_run_id", "")),
+                      session_id=session.session_id, findings_digest=fdigest)
+
+    record = {
         "type": "cohaera_session_verdict",
         "schema": schema,
         "event_type": "cohaera_session_verdict",
@@ -569,11 +846,19 @@ def to_cim_event(session: Session, findings: list[Finding],
         "host": session.host,
         "user": session.user,
         "log_source_type": "cohaera",
+        "verdict_id": vid,
+        "findings_digest": fdigest,
+        "sequence": sequence,
         "data": {
             **feats,
             "triggered_rules": fired,
+            "triggered_families": families,
             "max_severity": max_sev,
             "finding_count": len(findings),
-            "findings": [asdict(f) for f in findings],
+            "findings": finding_dicts,
+            "provenance": prov,
         },
-    })
+    }
+    if coverage is not None:
+        record["data"]["coverage"] = coverage
+    return json_safe(record)

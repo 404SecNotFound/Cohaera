@@ -1,10 +1,14 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+# Upper bounds as well as lower. SEC-09: an unpinned build requirement means the
+# artefact you ship is a function of the day you built it, and "setuptools>=68"
+# accepts every future major release sight unseen. Bounded here so a release is
+# reproducible; raise the ceilings deliberately, not by accident.
+requires = ["setuptools>=68,<81", "wheel>=0.42,<1"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "cohaera"
-version = "0.1.0"
+version = "0.2.0"
 description = "The correlation layer for agent telemetry. Turns observra's per-event stream into correlation-grade events a SIEM can fire rules on."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,7 +27,19 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.6"]
+# Bounded for the same reason as the build requirements. PyYAML and sigma-cli
+# are needed only by tests/test_content.py, which asserts that every field the
+# Sigma pack references actually exists in an emitted verdict. Sigma validation
+# alone proves a rule is well-formed, not that it can ever match.
+dev = [
+  "pytest>=8.0,<10",
+  # Floor raised to 0.15: the explicit lint select in [tool.ruff.lint]
+  # names rules (RUF034, PLE2502) that older releases do not implement,
+  # and ruff errors on an unknown rule code rather than skipping it.
+  "ruff>=0.15,<1",
+  "PyYAML>=6.0,<7",
+]
+content = ["sigma-cli>=3.1,<4"]
 
 [project.scripts]
 cohaera = "cohaera.cli:main"
@@ -37,3 +53,34 @@ where = ["src"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+# The rule set is declared HERE, not inherited from whatever ruff's default
+# happens to be on the day CI runs.
+#
+# This is a real failure this repo hit. `ruff>=0.6,<1` let CI resolve a version
+# whose DEFAULT selection was broader than the one used locally, so `ruff check`
+# passed on a developer machine and produced 43 findings in CI on identical
+# source. A linter whose rule set changes underneath you is not a gate, it is a
+# coin flip, and pinning the version alone only defers the problem to the next
+# bump. Declaring the selection makes the check mean the same thing everywhere.
+#
+# It is the same class of defect the third security review raised as SEC-09
+# about build requirements, found one layer up in the tooling that was supposed
+# to enforce it.
+[tool.ruff.lint]
+select = [
+  "E4", "E7", "E9",  # pycodestyle: imports, statements, syntax
+  "F",               # pyflakes
+  "I",               # isort
+  "B",               # flake8-bugbear
+  "UP",              # pyupgrade
+  "RUF",             # ruff-specific
+  "PLE", "PLW", "PLC",  # pylint errors, warnings, conventions
+]
+# PLR (refactor) is deliberately out: too-many-arguments and magic-value-comparison
+# fire constantly on detection code where the magic values ARE the specification.
+
+[tool.ruff.lint.per-file-ignores]
+# The evasion suite documents weaknesses in prose that is the point of the file.
+# Test files legitimately construct hostile literals.
+"tests/*" = ["B011"]
