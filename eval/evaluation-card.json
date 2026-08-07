@@ -357,39 +357,111 @@
       },
       "capability_source": "manifest",
       "check_attribution": {
+        "CH01_sequence_order": {
+          "incidental_on_attacks": 0,
+          "labelled": 64,
+          "missed_own_labels": 64,
+          "on_attacks": 0,
+          "on_benign": 0,
+          "on_target_attacks": 0,
+          "precision_pct": 0.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
+        },
         "CH02_concealment_gap": {
+          "incidental_on_attacks": 32,
+          "labelled": 48,
+          "missed_own_labels": 0,
           "on_attacks": 80,
           "on_benign": 96,
-          "precision_pct": 45.5
+          "on_target_attacks": 48,
+          "precision_pct": 45.5,
+          "target_precision_pct": 27.3,
+          "target_recall_pct": 100.0
         },
         "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 64,
-          "precision_pct": 33.3
+          "on_target_attacks": 32,
+          "precision_pct": 33.3,
+          "target_precision_pct": 33.3,
+          "target_recall_pct": 100.0
         },
         "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 64,
+          "missed_own_labels": 0,
           "on_attacks": 64,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 64,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 32,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 48,
-          "precision_pct": 40.0
+          "on_target_attacks": 0,
+          "precision_pct": 40.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 32,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 32,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 0.9154,
+          "ci95_low": 0.8386,
+          "denominator": 272,
+          "name": "recall (TPR)",
+          "numerator": 240,
+          "value": 0.8824
+        },
         "attacks": 272,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 382.9,
+            "attack_prevalence": 0.001,
+            "precision": 0.0023
+          },
+          {
+            "alerts_per_1000_sessions": 387.4,
+            "attack_prevalence": 0.01,
+            "precision": 0.02278
+          },
+          {
+            "alerts_per_1000_sessions": 407.4,
+            "attack_prevalence": 0.05,
+            "precision": 0.1083
+          }
+        ],
         "benign": 544,
         "confusion": {
           "fn": 32,
@@ -397,7 +469,6 @@
           "tn": 336,
           "tp": 240
         },
-        "coverage_weighted_recall": 0.8806,
         "f1": 0.6667,
         "false_positive_rate": {
           "ci95_high": 0.4239,
@@ -407,7 +478,9 @@
           "numerator": 208,
           "value": 0.3824
         },
+        "false_positives_per_1000_benign_sessions": 382.4,
         "false_positives_per_1000_sessions": 254.9,
+        "incidental_detections": 32,
         "mean_coverage_completeness": 0.6495,
         "precision": {
           "ci95_high": 0.5814,
@@ -433,7 +506,16 @@
           "numerator": 208,
           "value": 1.0
         },
-        "sessions": 816
+        "sessions": 816,
+        "target_attributable_recall": {
+          "ci95_high": 0.8112,
+          "ci95_low": 0.7108,
+          "denominator": 272,
+          "name": "target-attributable recall",
+          "numerator": 208,
+          "value": 0.7647
+        },
+        "weighted_detected_mass": 0.8806
       },
       "provenance": {
         "baseline_hash": "5b64dc9204237fcc",
@@ -822,39 +904,111 @@
       },
       "capability_source": "name_only",
       "check_attribution": {
+        "CH01_sequence_order": {
+          "incidental_on_attacks": 0,
+          "labelled": 64,
+          "missed_own_labels": 64,
+          "on_attacks": 0,
+          "on_benign": 0,
+          "on_target_attacks": 0,
+          "precision_pct": 0.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
+        },
         "CH02_concealment_gap": {
+          "incidental_on_attacks": 32,
+          "labelled": 48,
+          "missed_own_labels": 0,
           "on_attacks": 80,
           "on_benign": 96,
-          "precision_pct": 45.5
+          "on_target_attacks": 48,
+          "precision_pct": 45.5,
+          "target_precision_pct": 27.3,
+          "target_recall_pct": 100.0
         },
         "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 64,
-          "precision_pct": 33.3
+          "on_target_attacks": 32,
+          "precision_pct": 33.3,
+          "target_precision_pct": 33.3,
+          "target_recall_pct": 100.0
         },
         "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 64,
+          "missed_own_labels": 0,
           "on_attacks": 64,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 64,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 32,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 48,
-          "precision_pct": 40.0
+          "on_target_attacks": 0,
+          "precision_pct": 40.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 32,
-          "precision_pct": 50.0
+          "on_target_attacks": 32,
+          "precision_pct": 50.0,
+          "target_precision_pct": 50.0,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 32,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 0.9154,
+          "ci95_low": 0.8386,
+          "denominator": 272,
+          "name": "recall (TPR)",
+          "numerator": 240,
+          "value": 0.8824
+        },
         "attacks": 272,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 441.6,
+            "attack_prevalence": 0.001,
+            "precision": 0.002
+          },
+          {
+            "alerts_per_1000_sessions": 445.6,
+            "attack_prevalence": 0.01,
+            "precision": 0.0198
+          },
+          {
+            "alerts_per_1000_sessions": 463.2,
+            "attack_prevalence": 0.05,
+            "precision": 0.09524
+          }
+        ],
         "benign": 544,
         "confusion": {
           "fn": 32,
@@ -862,7 +1016,6 @@
           "tn": 304,
           "tp": 240
         },
-        "coverage_weighted_recall": 0.8801,
         "f1": 0.6383,
         "false_positive_rate": {
           "ci95_high": 0.4832,
@@ -872,7 +1025,9 @@
           "numerator": 240,
           "value": 0.4412
         },
+        "false_positives_per_1000_benign_sessions": 441.2,
         "false_positives_per_1000_sessions": 294.1,
+        "incidental_detections": 32,
         "mean_coverage_completeness": 0.5193,
         "precision": {
           "ci95_high": 0.5446,
@@ -898,7 +1053,16 @@
           "numerator": 208,
           "value": 1.0
         },
-        "sessions": 816
+        "sessions": 816,
+        "target_attributable_recall": {
+          "ci95_high": 0.8112,
+          "ci95_low": 0.7108,
+          "denominator": 272,
+          "name": "target-attributable recall",
+          "numerator": 208,
+          "value": 0.7647
+        },
+        "weighted_detected_mass": 0.8801
       },
       "provenance": {
         "baseline_hash": "5b64dc9204237fcc",
@@ -1287,39 +1451,111 @@
       },
       "capability_source": "producer_flag",
       "check_attribution": {
+        "CH01_sequence_order": {
+          "incidental_on_attacks": 0,
+          "labelled": 64,
+          "missed_own_labels": 64,
+          "on_attacks": 0,
+          "on_benign": 0,
+          "on_target_attacks": 0,
+          "precision_pct": 0.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
+        },
         "CH02_concealment_gap": {
+          "incidental_on_attacks": 32,
+          "labelled": 48,
+          "missed_own_labels": 0,
           "on_attacks": 80,
           "on_benign": 96,
-          "precision_pct": 45.5
+          "on_target_attacks": 48,
+          "precision_pct": 45.5,
+          "target_precision_pct": 27.3,
+          "target_recall_pct": 100.0
         },
         "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 64,
-          "precision_pct": 33.3
+          "on_target_attacks": 32,
+          "precision_pct": 33.3,
+          "target_precision_pct": 33.3,
+          "target_recall_pct": 100.0
         },
         "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 64,
+          "missed_own_labels": 0,
           "on_attacks": 64,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 64,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 32,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 48,
-          "precision_pct": 40.0
+          "on_target_attacks": 0,
+          "precision_pct": 40.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 32,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 32,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 0.9154,
+          "ci95_low": 0.8386,
+          "denominator": 272,
+          "name": "recall (TPR)",
+          "numerator": 240,
+          "value": 0.8824
+        },
         "attacks": 272,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 382.9,
+            "attack_prevalence": 0.001,
+            "precision": 0.0023
+          },
+          {
+            "alerts_per_1000_sessions": 387.4,
+            "attack_prevalence": 0.01,
+            "precision": 0.02278
+          },
+          {
+            "alerts_per_1000_sessions": 407.4,
+            "attack_prevalence": 0.05,
+            "precision": 0.1083
+          }
+        ],
         "benign": 544,
         "confusion": {
           "fn": 32,
@@ -1327,7 +1563,6 @@
           "tn": 336,
           "tp": 240
         },
-        "coverage_weighted_recall": 0.8801,
         "f1": 0.6667,
         "false_positive_rate": {
           "ci95_high": 0.4239,
@@ -1337,7 +1572,9 @@
           "numerator": 208,
           "value": 0.3824
         },
+        "false_positives_per_1000_benign_sessions": 382.4,
         "false_positives_per_1000_sessions": 254.9,
+        "incidental_detections": 32,
         "mean_coverage_completeness": 0.5227,
         "precision": {
           "ci95_high": 0.5814,
@@ -1363,7 +1600,16 @@
           "numerator": 208,
           "value": 1.0
         },
-        "sessions": 816
+        "sessions": 816,
+        "target_attributable_recall": {
+          "ci95_high": 0.8112,
+          "ci95_low": 0.7108,
+          "denominator": 272,
+          "name": "target-attributable recall",
+          "numerator": 208,
+          "value": 0.7647
+        },
+        "weighted_detected_mass": 0.8801
       },
       "provenance": {
         "baseline_hash": "5b64dc9204237fcc",
@@ -1809,43 +2055,110 @@
       "capability_source": "manifest",
       "check_attribution": {
         "CH01_sequence_order": {
+          "incidental_on_attacks": 94,
+          "labelled": 67,
+          "missed_own_labels": 0,
           "on_attacks": 161,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 67,
+          "precision_pct": 100.0,
+          "target_precision_pct": 41.6,
+          "target_recall_pct": 100.0
         },
         "CH02_concealment_gap": {
+          "incidental_on_attacks": 34,
+          "labelled": 51,
+          "missed_own_labels": 0,
           "on_attacks": 85,
           "on_benign": 116,
-          "precision_pct": 42.3
+          "on_target_attacks": 51,
+          "precision_pct": 42.3,
+          "target_precision_pct": 25.4,
+          "target_recall_pct": 100.0
         },
         "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 22,
+          "missed_own_labels": 0,
           "on_attacks": 22,
           "on_benign": 65,
-          "precision_pct": 25.3
+          "on_target_attacks": 22,
+          "precision_pct": 25.3,
+          "target_precision_pct": 25.3,
+          "target_recall_pct": 100.0
         },
         "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 66,
+          "missed_own_labels": 0,
           "on_attacks": 66,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 66,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 34,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 34,
           "on_benign": 41,
-          "precision_pct": 45.3
+          "on_target_attacks": 0,
+          "precision_pct": 45.3,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 32,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 34,
+          "missed_own_labels": 0,
           "on_attacks": 34,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 34,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.9861,
+          "denominator": 272,
+          "name": "recall (TPR)",
+          "numerator": 272,
+          "value": 1.0
+        },
         "attacks": 272,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 408.7,
+            "attack_prevalence": 0.001,
+            "precision": 0.00245
+          },
+          {
+            "alerts_per_1000_sessions": 414.0,
+            "attack_prevalence": 0.01,
+            "precision": 0.02415
+          },
+          {
+            "alerts_per_1000_sessions": 437.7,
+            "attack_prevalence": 0.05,
+            "precision": 0.11424
+          }
+        ],
         "benign": 544,
         "confusion": {
           "fn": 0,
@@ -1853,7 +2166,6 @@
           "tn": 322,
           "tp": 272
         },
-        "coverage_weighted_recall": 1.0,
         "f1": 0.7102,
         "false_positive_rate": {
           "ci95_high": 0.4499,
@@ -1863,7 +2175,9 @@
           "numerator": 222,
           "value": 0.4081
         },
+        "false_positives_per_1000_benign_sessions": 408.1,
         "false_positives_per_1000_sessions": 272.1,
+        "incidental_detections": 0,
         "mean_coverage_completeness": 0.7917,
         "precision": {
           "ci95_high": 0.5939,
@@ -1889,7 +2203,16 @@
           "numerator": 272,
           "value": 1.0
         },
-        "sessions": 816
+        "sessions": 816,
+        "target_attributable_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.9861,
+          "denominator": 272,
+          "name": "target-attributable recall",
+          "numerator": 272,
+          "value": 1.0
+        },
+        "weighted_detected_mass": 1.0
       },
       "provenance": {
         "baseline_hash": "3c143040a1e3745d",
@@ -2343,43 +2666,110 @@
       "capability_source": "name_only",
       "check_attribution": {
         "CH01_sequence_order": {
+          "incidental_on_attacks": 94,
+          "labelled": 67,
+          "missed_own_labels": 0,
           "on_attacks": 161,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 67,
+          "precision_pct": 100.0,
+          "target_precision_pct": 41.6,
+          "target_recall_pct": 100.0
         },
         "CH02_concealment_gap": {
+          "incidental_on_attacks": 34,
+          "labelled": 51,
+          "missed_own_labels": 0,
           "on_attacks": 85,
           "on_benign": 116,
-          "precision_pct": 42.3
+          "on_target_attacks": 51,
+          "precision_pct": 42.3,
+          "target_precision_pct": 25.4,
+          "target_recall_pct": 100.0
         },
         "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 22,
+          "missed_own_labels": 0,
           "on_attacks": 22,
           "on_benign": 65,
-          "precision_pct": 25.3
+          "on_target_attacks": 22,
+          "precision_pct": 25.3,
+          "target_precision_pct": 25.3,
+          "target_recall_pct": 100.0
         },
         "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 66,
+          "missed_own_labels": 0,
           "on_attacks": 66,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 66,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 34,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 34,
           "on_benign": 41,
-          "precision_pct": 45.3
+          "on_target_attacks": 0,
+          "precision_pct": 45.3,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 33,
-          "precision_pct": 49.2
+          "on_target_attacks": 32,
+          "precision_pct": 49.2,
+          "target_precision_pct": 49.2,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 34,
+          "missed_own_labels": 0,
           "on_attacks": 34,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 34,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.9861,
+          "denominator": 272,
+          "name": "recall (TPR)",
+          "numerator": 272,
+          "value": 1.0
+        },
         "attacks": 272,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 469.3,
+            "attack_prevalence": 0.001,
+            "precision": 0.00213
+          },
+          {
+            "alerts_per_1000_sessions": 474.1,
+            "attack_prevalence": 0.01,
+            "precision": 0.02109
+          },
+          {
+            "alerts_per_1000_sessions": 495.3,
+            "attack_prevalence": 0.05,
+            "precision": 0.10095
+          }
+        ],
         "benign": 544,
         "confusion": {
           "fn": 0,
@@ -2387,7 +2777,6 @@
           "tn": 289,
           "tp": 272
         },
-        "coverage_weighted_recall": 1.0,
         "f1": 0.6809,
         "false_positive_rate": {
           "ci95_high": 0.5108,
@@ -2397,7 +2786,9 @@
           "numerator": 255,
           "value": 0.4688
         },
+        "false_positives_per_1000_benign_sessions": 468.8,
         "false_positives_per_1000_sessions": 312.5,
+        "incidental_detections": 0,
         "mean_coverage_completeness": 0.6397,
         "precision": {
           "ci95_high": 0.5585,
@@ -2423,7 +2814,16 @@
           "numerator": 272,
           "value": 1.0
         },
-        "sessions": 816
+        "sessions": 816,
+        "target_attributable_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.9861,
+          "denominator": 272,
+          "name": "target-attributable recall",
+          "numerator": 272,
+          "value": 1.0
+        },
+        "weighted_detected_mass": 1.0
       },
       "provenance": {
         "baseline_hash": "3c143040a1e3745d",
@@ -2877,43 +3277,110 @@
       "capability_source": "producer_flag",
       "check_attribution": {
         "CH01_sequence_order": {
+          "incidental_on_attacks": 94,
+          "labelled": 67,
+          "missed_own_labels": 0,
           "on_attacks": 161,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 67,
+          "precision_pct": 100.0,
+          "target_precision_pct": 41.6,
+          "target_recall_pct": 100.0
         },
         "CH02_concealment_gap": {
+          "incidental_on_attacks": 34,
+          "labelled": 51,
+          "missed_own_labels": 0,
           "on_attacks": 85,
           "on_benign": 116,
-          "precision_pct": 42.3
+          "on_target_attacks": 51,
+          "precision_pct": 42.3,
+          "target_precision_pct": 25.4,
+          "target_recall_pct": 100.0
         },
         "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 22,
+          "missed_own_labels": 0,
           "on_attacks": 22,
           "on_benign": 65,
-          "precision_pct": 25.3
+          "on_target_attacks": 22,
+          "precision_pct": 25.3,
+          "target_precision_pct": 25.3,
+          "target_recall_pct": 100.0
         },
         "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 66,
+          "missed_own_labels": 0,
           "on_attacks": 66,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 66,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 34,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 34,
           "on_benign": 41,
-          "precision_pct": 45.3
+          "on_target_attacks": 0,
+          "precision_pct": 45.3,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 32,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 34,
+          "missed_own_labels": 0,
           "on_attacks": 34,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 34,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.9861,
+          "denominator": 272,
+          "name": "recall (TPR)",
+          "numerator": 272,
+          "value": 1.0
+        },
         "attacks": 272,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 408.7,
+            "attack_prevalence": 0.001,
+            "precision": 0.00245
+          },
+          {
+            "alerts_per_1000_sessions": 414.0,
+            "attack_prevalence": 0.01,
+            "precision": 0.02415
+          },
+          {
+            "alerts_per_1000_sessions": 437.7,
+            "attack_prevalence": 0.05,
+            "precision": 0.11424
+          }
+        ],
         "benign": 544,
         "confusion": {
           "fn": 0,
@@ -2921,7 +3388,6 @@
           "tn": 322,
           "tp": 272
         },
-        "coverage_weighted_recall": 1.0,
         "f1": 0.7102,
         "false_positive_rate": {
           "ci95_high": 0.4499,
@@ -2931,7 +3397,9 @@
           "numerator": 222,
           "value": 0.4081
         },
+        "false_positives_per_1000_benign_sessions": 408.1,
         "false_positives_per_1000_sessions": 272.1,
+        "incidental_detections": 0,
         "mean_coverage_completeness": 0.6431,
         "precision": {
           "ci95_high": 0.5939,
@@ -2957,7 +3425,16 @@
           "numerator": 272,
           "value": 1.0
         },
-        "sessions": 816
+        "sessions": 816,
+        "target_attributable_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.9861,
+          "denominator": 272,
+          "name": "target-attributable recall",
+          "numerator": 272,
+          "value": 1.0
+        },
+        "weighted_detected_mass": 1.0
       },
       "provenance": {
         "baseline_hash": "3c143040a1e3745d",
@@ -3411,43 +3888,110 @@
       "capability_source": "manifest",
       "check_attribution": {
         "CH01_sequence_order": {
+          "incidental_on_attacks": 96,
+          "labelled": 44,
+          "missed_own_labels": 0,
           "on_attacks": 140,
           "on_benign": 36,
-          "precision_pct": 79.5
+          "on_target_attacks": 44,
+          "precision_pct": 79.5,
+          "target_precision_pct": 25.0,
+          "target_recall_pct": 100.0
         },
         "CH02_concealment_gap": {
+          "incidental_on_attacks": 16,
+          "labelled": 44,
+          "missed_own_labels": 0,
           "on_attacks": 60,
           "on_benign": 96,
-          "precision_pct": 38.5
+          "on_target_attacks": 44,
+          "precision_pct": 38.5,
+          "target_precision_pct": 28.2,
+          "target_recall_pct": 100.0
         },
         "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 36,
+          "missed_own_labels": 0,
           "on_attacks": 36,
           "on_benign": 88,
-          "precision_pct": 29.0
+          "on_target_attacks": 36,
+          "precision_pct": 29.0,
+          "target_precision_pct": 29.0,
+          "target_recall_pct": 100.0
         },
         "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 56,
+          "missed_own_labels": 0,
           "on_attacks": 56,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 56,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 16,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 16,
           "on_benign": 44,
-          "precision_pct": 26.7
+          "on_target_attacks": 0,
+          "precision_pct": 26.7,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 28,
+          "missed_own_labels": 0,
           "on_attacks": 28,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 28,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 28,
+          "missed_own_labels": 0,
           "on_attacks": 28,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 28,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.984,
+          "denominator": 236,
+          "name": "recall (TPR)",
+          "numerator": 236,
+          "value": 1.0
+        },
         "attacks": 236,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 443.5,
+            "attack_prevalence": 0.001,
+            "precision": 0.00225
+          },
+          {
+            "alerts_per_1000_sessions": 448.5,
+            "attack_prevalence": 0.01,
+            "precision": 0.0223
+          },
+          {
+            "alerts_per_1000_sessions": 470.8,
+            "attack_prevalence": 0.05,
+            "precision": 0.1062
+          }
+        ],
         "benign": 596,
         "confusion": {
           "fn": 0,
@@ -3455,7 +3999,6 @@
           "tn": 332,
           "tp": 236
         },
-        "coverage_weighted_recall": 1.0,
         "f1": 0.6413,
         "false_positive_rate": {
           "ci95_high": 0.4831,
@@ -3465,7 +4008,9 @@
           "numerator": 264,
           "value": 0.443
         },
+        "false_positives_per_1000_benign_sessions": 443.0,
         "false_positives_per_1000_sessions": 317.3,
+        "incidental_detections": 0,
         "mean_coverage_completeness": 0.7993,
         "precision": {
           "ci95_high": 0.5158,
@@ -3491,7 +4036,16 @@
           "numerator": 236,
           "value": 1.0
         },
-        "sessions": 832
+        "sessions": 832,
+        "target_attributable_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.984,
+          "denominator": 236,
+          "name": "target-attributable recall",
+          "numerator": 236,
+          "value": 1.0
+        },
+        "weighted_detected_mass": 1.0
       },
       "provenance": {
         "baseline_hash": "e1590f5e03e196f4",
@@ -3945,43 +4499,110 @@
       "capability_source": "name_only",
       "check_attribution": {
         "CH01_sequence_order": {
+          "incidental_on_attacks": 96,
+          "labelled": 44,
+          "missed_own_labels": 0,
           "on_attacks": 140,
           "on_benign": 36,
-          "precision_pct": 79.5
+          "on_target_attacks": 44,
+          "precision_pct": 79.5,
+          "target_precision_pct": 25.0,
+          "target_recall_pct": 100.0
         },
         "CH02_concealment_gap": {
+          "incidental_on_attacks": 16,
+          "labelled": 44,
+          "missed_own_labels": 0,
           "on_attacks": 60,
           "on_benign": 96,
-          "precision_pct": 38.5
+          "on_target_attacks": 44,
+          "precision_pct": 38.5,
+          "target_precision_pct": 28.2,
+          "target_recall_pct": 100.0
         },
         "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 36,
+          "missed_own_labels": 0,
           "on_attacks": 36,
           "on_benign": 88,
-          "precision_pct": 29.0
+          "on_target_attacks": 36,
+          "precision_pct": 29.0,
+          "target_precision_pct": 29.0,
+          "target_recall_pct": 100.0
         },
         "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 56,
+          "missed_own_labels": 0,
           "on_attacks": 56,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 56,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 16,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 16,
           "on_benign": 44,
-          "precision_pct": 26.7
+          "on_target_attacks": 0,
+          "precision_pct": 26.7,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 28,
+          "missed_own_labels": 0,
           "on_attacks": 28,
           "on_benign": 36,
-          "precision_pct": 43.8
+          "on_target_attacks": 28,
+          "precision_pct": 43.8,
+          "target_precision_pct": 43.8,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 28,
+          "missed_own_labels": 0,
           "on_attacks": 28,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 28,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.984,
+          "denominator": 236,
+          "name": "recall (TPR)",
+          "numerator": 236,
+          "value": 1.0
+        },
         "attacks": 236,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 503.9,
+            "attack_prevalence": 0.001,
+            "precision": 0.00198
+          },
+          {
+            "alerts_per_1000_sessions": 508.3,
+            "attack_prevalence": 0.01,
+            "precision": 0.01967
+          },
+          {
+            "alerts_per_1000_sessions": 528.2,
+            "attack_prevalence": 0.05,
+            "precision": 0.09466
+          }
+        ],
         "benign": 596,
         "confusion": {
           "fn": 0,
@@ -3989,7 +4610,6 @@
           "tn": 296,
           "tp": 236
         },
-        "coverage_weighted_recall": 1.0,
         "f1": 0.6114,
         "false_positive_rate": {
           "ci95_high": 0.5433,
@@ -3999,7 +4619,9 @@
           "numerator": 300,
           "value": 0.5034
         },
+        "false_positives_per_1000_benign_sessions": 503.4,
         "false_positives_per_1000_sessions": 360.6,
+        "incidental_detections": 0,
         "mean_coverage_completeness": 0.6449,
         "precision": {
           "ci95_high": 0.4826,
@@ -4025,7 +4647,16 @@
           "numerator": 236,
           "value": 1.0
         },
-        "sessions": 832
+        "sessions": 832,
+        "target_attributable_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.984,
+          "denominator": 236,
+          "name": "target-attributable recall",
+          "numerator": 236,
+          "value": 1.0
+        },
+        "weighted_detected_mass": 1.0
       },
       "provenance": {
         "baseline_hash": "e1590f5e03e196f4",
@@ -4479,43 +5110,110 @@
       "capability_source": "producer_flag",
       "check_attribution": {
         "CH01_sequence_order": {
+          "incidental_on_attacks": 96,
+          "labelled": 44,
+          "missed_own_labels": 0,
           "on_attacks": 140,
           "on_benign": 36,
-          "precision_pct": 79.5
+          "on_target_attacks": 44,
+          "precision_pct": 79.5,
+          "target_precision_pct": 25.0,
+          "target_recall_pct": 100.0
         },
         "CH02_concealment_gap": {
+          "incidental_on_attacks": 16,
+          "labelled": 44,
+          "missed_own_labels": 0,
           "on_attacks": 60,
           "on_benign": 96,
-          "precision_pct": 38.5
+          "on_target_attacks": 44,
+          "precision_pct": 38.5,
+          "target_precision_pct": 28.2,
+          "target_recall_pct": 100.0
         },
         "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 36,
+          "missed_own_labels": 0,
           "on_attacks": 36,
           "on_benign": 88,
-          "precision_pct": 29.0
+          "on_target_attacks": 36,
+          "precision_pct": 29.0,
+          "target_precision_pct": 29.0,
+          "target_recall_pct": 100.0
         },
         "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 56,
+          "missed_own_labels": 0,
           "on_attacks": 56,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 56,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 16,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 16,
           "on_benign": 44,
-          "precision_pct": 26.7
+          "on_target_attacks": 0,
+          "precision_pct": 26.7,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 28,
+          "missed_own_labels": 0,
           "on_attacks": 28,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 28,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 28,
+          "missed_own_labels": 0,
           "on_attacks": 28,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 28,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.984,
+          "denominator": 236,
+          "name": "recall (TPR)",
+          "numerator": 236,
+          "value": 1.0
+        },
         "attacks": 236,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 443.5,
+            "attack_prevalence": 0.001,
+            "precision": 0.00225
+          },
+          {
+            "alerts_per_1000_sessions": 448.5,
+            "attack_prevalence": 0.01,
+            "precision": 0.0223
+          },
+          {
+            "alerts_per_1000_sessions": 470.8,
+            "attack_prevalence": 0.05,
+            "precision": 0.1062
+          }
+        ],
         "benign": 596,
         "confusion": {
           "fn": 0,
@@ -4523,7 +5221,6 @@
           "tn": 332,
           "tp": 236
         },
-        "coverage_weighted_recall": 1.0,
         "f1": 0.6413,
         "false_positive_rate": {
           "ci95_high": 0.4831,
@@ -4533,7 +5230,9 @@
           "numerator": 264,
           "value": 0.443
         },
+        "false_positives_per_1000_benign_sessions": 443.0,
         "false_positives_per_1000_sessions": 317.3,
+        "incidental_detections": 0,
         "mean_coverage_completeness": 0.6486,
         "precision": {
           "ci95_high": 0.5158,
@@ -4559,7 +5258,16 @@
           "numerator": 236,
           "value": 1.0
         },
-        "sessions": 832
+        "sessions": 832,
+        "target_attributable_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.984,
+          "denominator": 236,
+          "name": "target-attributable recall",
+          "numerator": 236,
+          "value": 1.0
+        },
+        "weighted_detected_mass": 1.0
       },
       "provenance": {
         "baseline_hash": "e1590f5e03e196f4",
@@ -4956,39 +5664,111 @@
       },
       "capability_source": "manifest",
       "check_attribution": {
+        "CH01_sequence_order": {
+          "incidental_on_attacks": 0,
+          "labelled": 64,
+          "missed_own_labels": 64,
+          "on_attacks": 0,
+          "on_benign": 0,
+          "on_target_attacks": 0,
+          "precision_pct": 0.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
+        },
         "CH02_concealment_gap": {
+          "incidental_on_attacks": 32,
+          "labelled": 48,
+          "missed_own_labels": 0,
           "on_attacks": 80,
           "on_benign": 96,
-          "precision_pct": 45.5
+          "on_target_attacks": 48,
+          "precision_pct": 45.5,
+          "target_precision_pct": 27.3,
+          "target_recall_pct": 100.0
         },
         "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 64,
-          "precision_pct": 33.3
+          "on_target_attacks": 32,
+          "precision_pct": 33.3,
+          "target_precision_pct": 33.3,
+          "target_recall_pct": 100.0
         },
         "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 64,
+          "missed_own_labels": 0,
           "on_attacks": 64,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 64,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 32,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 48,
-          "precision_pct": 40.0
+          "on_target_attacks": 0,
+          "precision_pct": 40.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 32,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 32,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 0.9154,
+          "ci95_low": 0.8386,
+          "denominator": 272,
+          "name": "recall (TPR)",
+          "numerator": 240,
+          "value": 0.8824
+        },
         "attacks": 272,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 382.9,
+            "attack_prevalence": 0.001,
+            "precision": 0.0023
+          },
+          {
+            "alerts_per_1000_sessions": 387.4,
+            "attack_prevalence": 0.01,
+            "precision": 0.02278
+          },
+          {
+            "alerts_per_1000_sessions": 407.4,
+            "attack_prevalence": 0.05,
+            "precision": 0.1083
+          }
+        ],
         "benign": 544,
         "confusion": {
           "fn": 32,
@@ -4996,7 +5776,6 @@
           "tn": 336,
           "tp": 240
         },
-        "coverage_weighted_recall": 0.8806,
         "f1": 0.6667,
         "false_positive_rate": {
           "ci95_high": 0.4239,
@@ -5006,7 +5785,9 @@
           "numerator": 208,
           "value": 0.3824
         },
+        "false_positives_per_1000_benign_sessions": 382.4,
         "false_positives_per_1000_sessions": 254.9,
+        "incidental_detections": 32,
         "mean_coverage_completeness": 0.6495,
         "precision": {
           "ci95_high": 0.5814,
@@ -5032,7 +5813,16 @@
           "numerator": 208,
           "value": 1.0
         },
-        "sessions": 816
+        "sessions": 816,
+        "target_attributable_recall": {
+          "ci95_high": 0.8112,
+          "ci95_low": 0.7108,
+          "denominator": 272,
+          "name": "target-attributable recall",
+          "numerator": 208,
+          "value": 0.7647
+        },
+        "weighted_detected_mass": 0.8806
       },
       "provenance": {
         "baseline_hash": "737983887aa472f4",
@@ -5421,24 +6211,111 @@
       },
       "capability_source": "name_only",
       "check_attribution": {
+        "CH01_sequence_order": {
+          "incidental_on_attacks": 0,
+          "labelled": 64,
+          "missed_own_labels": 64,
+          "on_attacks": 0,
+          "on_benign": 0,
+          "on_target_attacks": 0,
+          "precision_pct": 0.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
+        },
+        "CH02_concealment_gap": {
+          "incidental_on_attacks": 0,
+          "labelled": 48,
+          "missed_own_labels": 48,
+          "on_attacks": 0,
+          "on_benign": 0,
+          "on_target_attacks": 0,
+          "precision_pct": 0.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
+        },
+        "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 32,
+          "on_attacks": 0,
+          "on_benign": 0,
+          "on_target_attacks": 0,
+          "precision_pct": 0.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
+        },
+        "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 64,
+          "missed_own_labels": 64,
+          "on_attacks": 0,
+          "on_benign": 0,
+          "on_target_attacks": 0,
+          "precision_pct": 0.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
+        },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 32,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 48,
-          "precision_pct": 40.0
+          "on_target_attacks": 0,
+          "precision_pct": 40.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 32,
-          "precision_pct": 50.0
+          "on_target_attacks": 32,
+          "precision_pct": 50.0,
+          "target_precision_pct": 50.0,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 32,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 0.4114,
+          "ci95_low": 0.2986,
+          "denominator": 272,
+          "name": "recall (TPR)",
+          "numerator": 96,
+          "value": 0.3529
+        },
         "attacks": 272,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 147.3,
+            "attack_prevalence": 0.001,
+            "precision": 0.0024
+          },
+          {
+            "alerts_per_1000_sessions": 149.1,
+            "attack_prevalence": 0.01,
+            "precision": 0.02367
+          },
+          {
+            "alerts_per_1000_sessions": 157.4,
+            "attack_prevalence": 0.05,
+            "precision": 0.11215
+          }
+        ],
         "benign": 544,
         "confusion": {
           "fn": 176,
@@ -5446,7 +6323,6 @@
           "tn": 464,
           "tp": 96
         },
-        "coverage_weighted_recall": 0.2667,
         "f1": 0.4286,
         "false_positive_rate": {
           "ci95_high": 0.1793,
@@ -5456,7 +6332,9 @@
           "numerator": 80,
           "value": 0.1471
         },
+        "false_positives_per_1000_benign_sessions": 147.1,
         "false_positives_per_1000_sessions": 98.0,
+        "incidental_detections": 32,
         "mean_coverage_completeness": 0.0793,
         "precision": {
           "ci95_high": 0.6173,
@@ -5482,7 +6360,16 @@
           "numerator": 64,
           "value": 0.3077
         },
-        "sessions": 816
+        "sessions": 816,
+        "target_attributable_recall": {
+          "ci95_high": 0.2892,
+          "ci95_low": 0.1888,
+          "denominator": 272,
+          "name": "target-attributable recall",
+          "numerator": 64,
+          "value": 0.2353
+        },
+        "weighted_detected_mass": 0.2667
       },
       "provenance": {
         "baseline_hash": "737983887aa472f4",
@@ -5871,39 +6758,111 @@
       },
       "capability_source": "producer_flag",
       "check_attribution": {
+        "CH01_sequence_order": {
+          "incidental_on_attacks": 0,
+          "labelled": 64,
+          "missed_own_labels": 64,
+          "on_attacks": 0,
+          "on_benign": 0,
+          "on_target_attacks": 0,
+          "precision_pct": 0.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
+        },
         "CH02_concealment_gap": {
+          "incidental_on_attacks": 32,
+          "labelled": 48,
+          "missed_own_labels": 0,
           "on_attacks": 80,
           "on_benign": 96,
-          "precision_pct": 45.5
+          "on_target_attacks": 48,
+          "precision_pct": 45.5,
+          "target_precision_pct": 27.3,
+          "target_recall_pct": 100.0
         },
         "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 64,
-          "precision_pct": 33.3
+          "on_target_attacks": 32,
+          "precision_pct": 33.3,
+          "target_precision_pct": 33.3,
+          "target_recall_pct": 100.0
         },
         "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 64,
+          "missed_own_labels": 0,
           "on_attacks": 64,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 64,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 32,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 48,
-          "precision_pct": 40.0
+          "on_target_attacks": 0,
+          "precision_pct": 40.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 32,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 32,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 0.9154,
+          "ci95_low": 0.8386,
+          "denominator": 272,
+          "name": "recall (TPR)",
+          "numerator": 240,
+          "value": 0.8824
+        },
         "attacks": 272,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 382.9,
+            "attack_prevalence": 0.001,
+            "precision": 0.0023
+          },
+          {
+            "alerts_per_1000_sessions": 387.4,
+            "attack_prevalence": 0.01,
+            "precision": 0.02278
+          },
+          {
+            "alerts_per_1000_sessions": 407.4,
+            "attack_prevalence": 0.05,
+            "precision": 0.1083
+          }
+        ],
         "benign": 544,
         "confusion": {
           "fn": 32,
@@ -5911,7 +6870,6 @@
           "tn": 336,
           "tp": 240
         },
-        "coverage_weighted_recall": 0.8801,
         "f1": 0.6667,
         "false_positive_rate": {
           "ci95_high": 0.4239,
@@ -5921,7 +6879,9 @@
           "numerator": 208,
           "value": 0.3824
         },
+        "false_positives_per_1000_benign_sessions": 382.4,
         "false_positives_per_1000_sessions": 254.9,
+        "incidental_detections": 32,
         "mean_coverage_completeness": 0.5227,
         "precision": {
           "ci95_high": 0.5814,
@@ -5947,7 +6907,16 @@
           "numerator": 208,
           "value": 1.0
         },
-        "sessions": 816
+        "sessions": 816,
+        "target_attributable_recall": {
+          "ci95_high": 0.8112,
+          "ci95_low": 0.7108,
+          "denominator": 272,
+          "name": "target-attributable recall",
+          "numerator": 208,
+          "value": 0.7647
+        },
+        "weighted_detected_mass": 0.8801
       },
       "provenance": {
         "baseline_hash": "737983887aa472f4",
@@ -6393,43 +7362,110 @@
       "capability_source": "manifest",
       "check_attribution": {
         "CH01_sequence_order": {
+          "incidental_on_attacks": 94,
+          "labelled": 67,
+          "missed_own_labels": 0,
           "on_attacks": 161,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 67,
+          "precision_pct": 100.0,
+          "target_precision_pct": 41.6,
+          "target_recall_pct": 100.0
         },
         "CH02_concealment_gap": {
+          "incidental_on_attacks": 34,
+          "labelled": 51,
+          "missed_own_labels": 0,
           "on_attacks": 85,
           "on_benign": 116,
-          "precision_pct": 42.3
+          "on_target_attacks": 51,
+          "precision_pct": 42.3,
+          "target_precision_pct": 25.4,
+          "target_recall_pct": 100.0
         },
         "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 22,
+          "missed_own_labels": 0,
           "on_attacks": 22,
           "on_benign": 65,
-          "precision_pct": 25.3
+          "on_target_attacks": 22,
+          "precision_pct": 25.3,
+          "target_precision_pct": 25.3,
+          "target_recall_pct": 100.0
         },
         "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 66,
+          "missed_own_labels": 0,
           "on_attacks": 66,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 66,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 34,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 34,
           "on_benign": 41,
-          "precision_pct": 45.3
+          "on_target_attacks": 0,
+          "precision_pct": 45.3,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 32,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 34,
+          "missed_own_labels": 0,
           "on_attacks": 34,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 34,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.9861,
+          "denominator": 272,
+          "name": "recall (TPR)",
+          "numerator": 272,
+          "value": 1.0
+        },
         "attacks": 272,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 408.7,
+            "attack_prevalence": 0.001,
+            "precision": 0.00245
+          },
+          {
+            "alerts_per_1000_sessions": 414.0,
+            "attack_prevalence": 0.01,
+            "precision": 0.02415
+          },
+          {
+            "alerts_per_1000_sessions": 437.7,
+            "attack_prevalence": 0.05,
+            "precision": 0.11424
+          }
+        ],
         "benign": 544,
         "confusion": {
           "fn": 0,
@@ -6437,7 +7473,6 @@
           "tn": 322,
           "tp": 272
         },
-        "coverage_weighted_recall": 1.0,
         "f1": 0.7102,
         "false_positive_rate": {
           "ci95_high": 0.4499,
@@ -6447,7 +7482,9 @@
           "numerator": 222,
           "value": 0.4081
         },
+        "false_positives_per_1000_benign_sessions": 408.1,
         "false_positives_per_1000_sessions": 272.1,
+        "incidental_detections": 0,
         "mean_coverage_completeness": 0.7917,
         "precision": {
           "ci95_high": 0.5939,
@@ -6473,7 +7510,16 @@
           "numerator": 272,
           "value": 1.0
         },
-        "sessions": 816
+        "sessions": 816,
+        "target_attributable_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.9861,
+          "denominator": 272,
+          "name": "target-attributable recall",
+          "numerator": 272,
+          "value": 1.0
+        },
+        "weighted_detected_mass": 1.0
       },
       "provenance": {
         "baseline_hash": "e8588de9627015cc",
@@ -6927,28 +7973,110 @@
       "capability_source": "name_only",
       "check_attribution": {
         "CH01_sequence_order": {
+          "incidental_on_attacks": 94,
+          "labelled": 67,
+          "missed_own_labels": 33,
           "on_attacks": 128,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 34,
+          "precision_pct": 100.0,
+          "target_precision_pct": 26.6,
+          "target_recall_pct": 50.7
+        },
+        "CH02_concealment_gap": {
+          "incidental_on_attacks": 0,
+          "labelled": 51,
+          "missed_own_labels": 51,
+          "on_attacks": 0,
+          "on_benign": 0,
+          "on_target_attacks": 0,
+          "precision_pct": 0.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
+        },
+        "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 22,
+          "missed_own_labels": 22,
+          "on_attacks": 0,
+          "on_benign": 0,
+          "on_target_attacks": 0,
+          "precision_pct": 0.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
+        },
+        "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 66,
+          "missed_own_labels": 66,
+          "on_attacks": 0,
+          "on_benign": 0,
+          "on_target_attacks": 0,
+          "precision_pct": 0.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 34,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 34,
           "on_benign": 41,
-          "precision_pct": 45.3
+          "on_target_attacks": 0,
+          "precision_pct": 45.3,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 33,
-          "precision_pct": 49.2
+          "on_target_attacks": 32,
+          "precision_pct": 49.2,
+          "target_precision_pct": 49.2,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 34,
+          "missed_own_labels": 0,
           "on_attacks": 34,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 34,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 0.6451,
+          "ci95_low": 0.5289,
+          "denominator": 272,
+          "name": "recall (TPR)",
+          "numerator": 160,
+          "value": 0.5882
+        },
         "attacks": 272,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 136.5,
+            "attack_prevalence": 0.001,
+            "precision": 0.00431
+          },
+          {
+            "alerts_per_1000_sessions": 140.6,
+            "attack_prevalence": 0.01,
+            "precision": 0.04185
+          },
+          {
+            "alerts_per_1000_sessions": 158.6,
+            "attack_prevalence": 0.05,
+            "precision": 0.1854
+          }
+        ],
         "benign": 544,
         "confusion": {
           "fn": 112,
@@ -6956,7 +8084,6 @@
           "tn": 470,
           "tp": 160
         },
-        "coverage_weighted_recall": 0.5599,
         "f1": 0.6324,
         "false_positive_rate": {
           "ci95_high": 0.1674,
@@ -6966,7 +8093,9 @@
           "numerator": 74,
           "value": 0.136
         },
+        "false_positives_per_1000_benign_sessions": 136.0,
         "false_positives_per_1000_sessions": 90.7,
+        "incidental_detections": 60,
         "mean_coverage_completeness": 0.1501,
         "precision": {
           "ci95_high": 0.74,
@@ -6985,14 +8114,23 @@
           "value": 0.5882
         },
         "recall_where_evaluable": {
-          "ci95_high": 0.6451,
-          "ci95_low": 0.5289,
+          "ci95_high": 0.4264,
+          "ci95_low": 0.3126,
           "denominator": 272,
           "name": "recall where the responsible check was evaluable",
-          "numerator": 160,
-          "value": 0.5882
+          "numerator": 100,
+          "value": 0.3676
         },
-        "sessions": 816
+        "sessions": 816,
+        "target_attributable_recall": {
+          "ci95_high": 0.4264,
+          "ci95_low": 0.3126,
+          "denominator": 272,
+          "name": "target-attributable recall",
+          "numerator": 100,
+          "value": 0.3676
+        },
+        "weighted_detected_mass": 0.5599
       },
       "provenance": {
         "baseline_hash": "e8588de9627015cc",
@@ -7446,43 +8584,110 @@
       "capability_source": "producer_flag",
       "check_attribution": {
         "CH01_sequence_order": {
+          "incidental_on_attacks": 94,
+          "labelled": 67,
+          "missed_own_labels": 0,
           "on_attacks": 161,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 67,
+          "precision_pct": 100.0,
+          "target_precision_pct": 41.6,
+          "target_recall_pct": 100.0
         },
         "CH02_concealment_gap": {
+          "incidental_on_attacks": 34,
+          "labelled": 51,
+          "missed_own_labels": 0,
           "on_attacks": 85,
           "on_benign": 116,
-          "precision_pct": 42.3
+          "on_target_attacks": 51,
+          "precision_pct": 42.3,
+          "target_precision_pct": 25.4,
+          "target_recall_pct": 100.0
         },
         "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 22,
+          "missed_own_labels": 0,
           "on_attacks": 22,
           "on_benign": 65,
-          "precision_pct": 25.3
+          "on_target_attacks": 22,
+          "precision_pct": 25.3,
+          "target_precision_pct": 25.3,
+          "target_recall_pct": 100.0
         },
         "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 66,
+          "missed_own_labels": 0,
           "on_attacks": 66,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 66,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 34,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 34,
           "on_benign": 41,
-          "precision_pct": 45.3
+          "on_target_attacks": 0,
+          "precision_pct": 45.3,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 32,
+          "missed_own_labels": 0,
           "on_attacks": 32,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 32,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 34,
+          "missed_own_labels": 0,
           "on_attacks": 34,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 34,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.9861,
+          "denominator": 272,
+          "name": "recall (TPR)",
+          "numerator": 272,
+          "value": 1.0
+        },
         "attacks": 272,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 408.7,
+            "attack_prevalence": 0.001,
+            "precision": 0.00245
+          },
+          {
+            "alerts_per_1000_sessions": 414.0,
+            "attack_prevalence": 0.01,
+            "precision": 0.02415
+          },
+          {
+            "alerts_per_1000_sessions": 437.7,
+            "attack_prevalence": 0.05,
+            "precision": 0.11424
+          }
+        ],
         "benign": 544,
         "confusion": {
           "fn": 0,
@@ -7490,7 +8695,6 @@
           "tn": 322,
           "tp": 272
         },
-        "coverage_weighted_recall": 1.0,
         "f1": 0.7102,
         "false_positive_rate": {
           "ci95_high": 0.4499,
@@ -7500,7 +8704,9 @@
           "numerator": 222,
           "value": 0.4081
         },
+        "false_positives_per_1000_benign_sessions": 408.1,
         "false_positives_per_1000_sessions": 272.1,
+        "incidental_detections": 0,
         "mean_coverage_completeness": 0.6431,
         "precision": {
           "ci95_high": 0.5939,
@@ -7526,7 +8732,16 @@
           "numerator": 272,
           "value": 1.0
         },
-        "sessions": 816
+        "sessions": 816,
+        "target_attributable_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.9861,
+          "denominator": 272,
+          "name": "target-attributable recall",
+          "numerator": 272,
+          "value": 1.0
+        },
+        "weighted_detected_mass": 1.0
       },
       "provenance": {
         "baseline_hash": "e8588de9627015cc",
@@ -7980,43 +9195,110 @@
       "capability_source": "manifest",
       "check_attribution": {
         "CH01_sequence_order": {
+          "incidental_on_attacks": 96,
+          "labelled": 44,
+          "missed_own_labels": 0,
           "on_attacks": 140,
           "on_benign": 36,
-          "precision_pct": 79.5
+          "on_target_attacks": 44,
+          "precision_pct": 79.5,
+          "target_precision_pct": 25.0,
+          "target_recall_pct": 100.0
         },
         "CH02_concealment_gap": {
+          "incidental_on_attacks": 16,
+          "labelled": 44,
+          "missed_own_labels": 0,
           "on_attacks": 60,
           "on_benign": 96,
-          "precision_pct": 38.5
+          "on_target_attacks": 44,
+          "precision_pct": 38.5,
+          "target_precision_pct": 28.2,
+          "target_recall_pct": 100.0
         },
         "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 36,
+          "missed_own_labels": 0,
           "on_attacks": 36,
           "on_benign": 88,
-          "precision_pct": 29.0
+          "on_target_attacks": 36,
+          "precision_pct": 29.0,
+          "target_precision_pct": 29.0,
+          "target_recall_pct": 100.0
         },
         "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 56,
+          "missed_own_labels": 0,
           "on_attacks": 56,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 56,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 16,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 16,
           "on_benign": 44,
-          "precision_pct": 26.7
+          "on_target_attacks": 0,
+          "precision_pct": 26.7,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 28,
+          "missed_own_labels": 0,
           "on_attacks": 28,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 28,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 28,
+          "missed_own_labels": 0,
           "on_attacks": 28,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 28,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.984,
+          "denominator": 236,
+          "name": "recall (TPR)",
+          "numerator": 236,
+          "value": 1.0
+        },
         "attacks": 236,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 443.5,
+            "attack_prevalence": 0.001,
+            "precision": 0.00225
+          },
+          {
+            "alerts_per_1000_sessions": 448.5,
+            "attack_prevalence": 0.01,
+            "precision": 0.0223
+          },
+          {
+            "alerts_per_1000_sessions": 470.8,
+            "attack_prevalence": 0.05,
+            "precision": 0.1062
+          }
+        ],
         "benign": 596,
         "confusion": {
           "fn": 0,
@@ -8024,7 +9306,6 @@
           "tn": 332,
           "tp": 236
         },
-        "coverage_weighted_recall": 1.0,
         "f1": 0.6413,
         "false_positive_rate": {
           "ci95_high": 0.4831,
@@ -8034,7 +9315,9 @@
           "numerator": 264,
           "value": 0.443
         },
+        "false_positives_per_1000_benign_sessions": 443.0,
         "false_positives_per_1000_sessions": 317.3,
+        "incidental_detections": 0,
         "mean_coverage_completeness": 0.7993,
         "precision": {
           "ci95_high": 0.5158,
@@ -8060,7 +9343,16 @@
           "numerator": 236,
           "value": 1.0
         },
-        "sessions": 832
+        "sessions": 832,
+        "target_attributable_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.984,
+          "denominator": 236,
+          "name": "target-attributable recall",
+          "numerator": 236,
+          "value": 1.0
+        },
+        "weighted_detected_mass": 1.0
       },
       "provenance": {
         "baseline_hash": "28cd9dd1be3c7c53",
@@ -8514,28 +9806,110 @@
       "capability_source": "name_only",
       "check_attribution": {
         "CH01_sequence_order": {
+          "incidental_on_attacks": 96,
+          "labelled": 44,
+          "missed_own_labels": 28,
           "on_attacks": 112,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 16,
+          "precision_pct": 100.0,
+          "target_precision_pct": 14.3,
+          "target_recall_pct": 36.4
+        },
+        "CH02_concealment_gap": {
+          "incidental_on_attacks": 0,
+          "labelled": 44,
+          "missed_own_labels": 44,
+          "on_attacks": 0,
+          "on_benign": 0,
+          "on_target_attacks": 0,
+          "precision_pct": 0.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
+        },
+        "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 36,
+          "missed_own_labels": 36,
+          "on_attacks": 0,
+          "on_benign": 0,
+          "on_target_attacks": 0,
+          "precision_pct": 0.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
+        },
+        "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 56,
+          "missed_own_labels": 56,
+          "on_attacks": 0,
+          "on_benign": 0,
+          "on_target_attacks": 0,
+          "precision_pct": 0.0,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 16,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 16,
           "on_benign": 44,
-          "precision_pct": 26.7
+          "on_target_attacks": 0,
+          "precision_pct": 26.7,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 28,
+          "missed_own_labels": 0,
           "on_attacks": 28,
           "on_benign": 36,
-          "precision_pct": 43.8
+          "on_target_attacks": 28,
+          "precision_pct": 43.8,
+          "target_precision_pct": 43.8,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 28,
+          "missed_own_labels": 0,
           "on_attacks": 28,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 28,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 0.6539,
+          "ci95_low": 0.5295,
+          "denominator": 236,
+          "name": "recall (TPR)",
+          "numerator": 140,
+          "value": 0.5932
+        },
         "attacks": 236,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 134.7,
+            "attack_prevalence": 0.001,
+            "precision": 0.0044
+          },
+          {
+            "alerts_per_1000_sessions": 138.8,
+            "attack_prevalence": 0.01,
+            "precision": 0.04273
+          },
+          {
+            "alerts_per_1000_sessions": 157.2,
+            "attack_prevalence": 0.05,
+            "precision": 0.18871
+          }
+        ],
         "benign": 596,
         "confusion": {
           "fn": 96,
@@ -8543,7 +9917,6 @@
           "tn": 516,
           "tp": 140
         },
-        "coverage_weighted_recall": 0.5649,
         "f1": 0.614,
         "false_positive_rate": {
           "ci95_high": 0.164,
@@ -8553,7 +9926,9 @@
           "numerator": 80,
           "value": 0.1342
         },
+        "false_positives_per_1000_benign_sessions": 134.2,
         "false_positives_per_1000_sessions": 96.2,
+        "incidental_detections": 68,
         "mean_coverage_completeness": 0.1504,
         "precision": {
           "ci95_high": 0.6971,
@@ -8572,14 +9947,23 @@
           "value": 0.5932
         },
         "recall_where_evaluable": {
-          "ci95_high": 0.6539,
-          "ci95_low": 0.5295,
+          "ci95_high": 0.3666,
+          "ci95_low": 0.2499,
           "denominator": 236,
           "name": "recall where the responsible check was evaluable",
-          "numerator": 140,
-          "value": 0.5932
+          "numerator": 72,
+          "value": 0.3051
         },
-        "sessions": 832
+        "sessions": 832,
+        "target_attributable_recall": {
+          "ci95_high": 0.3666,
+          "ci95_low": 0.2499,
+          "denominator": 236,
+          "name": "target-attributable recall",
+          "numerator": 72,
+          "value": 0.3051
+        },
+        "weighted_detected_mass": 0.5649
       },
       "provenance": {
         "baseline_hash": "28cd9dd1be3c7c53",
@@ -9033,43 +10417,110 @@
       "capability_source": "producer_flag",
       "check_attribution": {
         "CH01_sequence_order": {
+          "incidental_on_attacks": 96,
+          "labelled": 44,
+          "missed_own_labels": 0,
           "on_attacks": 140,
           "on_benign": 36,
-          "precision_pct": 79.5
+          "on_target_attacks": 44,
+          "precision_pct": 79.5,
+          "target_precision_pct": 25.0,
+          "target_recall_pct": 100.0
         },
         "CH02_concealment_gap": {
+          "incidental_on_attacks": 16,
+          "labelled": 44,
+          "missed_own_labels": 0,
           "on_attacks": 60,
           "on_benign": 96,
-          "precision_pct": 38.5
+          "on_target_attacks": 44,
+          "precision_pct": 38.5,
+          "target_precision_pct": 28.2,
+          "target_recall_pct": 100.0
         },
         "CH03_untrusted_to_consequential": {
+          "incidental_on_attacks": 0,
+          "labelled": 36,
+          "missed_own_labels": 0,
           "on_attacks": 36,
           "on_benign": 88,
-          "precision_pct": 29.0
+          "on_target_attacks": 36,
+          "precision_pct": 29.0,
+          "target_precision_pct": 29.0,
+          "target_recall_pct": 100.0
         },
         "CH04_guardrail_overrun": {
+          "incidental_on_attacks": 0,
+          "labelled": 56,
+          "missed_own_labels": 0,
           "on_attacks": 56,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 56,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH05_unpaired_calls": {
+          "incidental_on_attacks": 16,
+          "labelled": 0,
+          "missed_own_labels": 0,
           "on_attacks": 16,
           "on_benign": 44,
-          "precision_pct": 26.7
+          "on_target_attacks": 0,
+          "precision_pct": 26.7,
+          "target_precision_pct": 0.0,
+          "target_recall_pct": 0.0
         },
         "CH06_evidence_integrity": {
+          "incidental_on_attacks": 0,
+          "labelled": 28,
+          "missed_own_labels": 0,
           "on_attacks": 28,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 28,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         },
         "CH07_effect_contradiction": {
+          "incidental_on_attacks": 0,
+          "labelled": 28,
+          "missed_own_labels": 0,
           "on_attacks": 28,
           "on_benign": 0,
-          "precision_pct": 100.0
+          "on_target_attacks": 28,
+          "precision_pct": 100.0,
+          "target_precision_pct": 100.0,
+          "target_recall_pct": 100.0
         }
       },
       "metrics": {
+        "any_alert_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.984,
+          "denominator": 236,
+          "name": "recall (TPR)",
+          "numerator": 236,
+          "value": 1.0
+        },
         "attacks": 236,
+        "base_rate_projection": [
+          {
+            "alerts_per_1000_sessions": 443.5,
+            "attack_prevalence": 0.001,
+            "precision": 0.00225
+          },
+          {
+            "alerts_per_1000_sessions": 448.5,
+            "attack_prevalence": 0.01,
+            "precision": 0.0223
+          },
+          {
+            "alerts_per_1000_sessions": 470.8,
+            "attack_prevalence": 0.05,
+            "precision": 0.1062
+          }
+        ],
         "benign": 596,
         "confusion": {
           "fn": 0,
@@ -9077,7 +10528,6 @@
           "tn": 332,
           "tp": 236
         },
-        "coverage_weighted_recall": 1.0,
         "f1": 0.6413,
         "false_positive_rate": {
           "ci95_high": 0.4831,
@@ -9087,7 +10537,9 @@
           "numerator": 264,
           "value": 0.443
         },
+        "false_positives_per_1000_benign_sessions": 443.0,
         "false_positives_per_1000_sessions": 317.3,
+        "incidental_detections": 0,
         "mean_coverage_completeness": 0.6486,
         "precision": {
           "ci95_high": 0.5158,
@@ -9113,7 +10565,16 @@
           "numerator": 236,
           "value": 1.0
         },
-        "sessions": 832
+        "sessions": 832,
+        "target_attributable_recall": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.984,
+          "denominator": 236,
+          "name": "target-attributable recall",
+          "numerator": 236,
+          "value": 1.0
+        },
+        "weighted_detected_mass": 1.0
       },
       "provenance": {
         "baseline_hash": "28cd9dd1be3c7c53",
@@ -9161,23 +10622,204 @@
         "attack_prevalence": 0.3333,
         "attacks": 544,
         "benign": 1088,
+        "events": 22512,
         "families": 8,
         "sessions": 1632,
-        "tasks": 408
+        "tasks": 408,
+        "tools_declared": 34
       },
       "unseen": {
         "attack_prevalence": 0.3333,
         "attacks": 544,
         "benign": 1088,
+        "events": 22512,
         "families": 8,
         "sessions": 1632,
-        "tasks": 408
+        "tasks": 408,
+        "tools_declared": 34
       }
     },
     "seed": 20260807
   },
   "corpus_digest": "fd3ee6476bf259b9",
   "detector_version": "0.2.0",
+  "leakage_experiment": {
+    "clean": {
+      "any_alert_recall": {
+        "ci95_high": 1.0,
+        "ci95_low": 0.9685,
+        "denominator": 118,
+        "name": "recall (TPR)",
+        "numerator": 118,
+        "value": 1.0
+      },
+      "attacks": 118,
+      "base_rate_projection": [
+        {
+          "alerts_per_1000_sessions": 443.5,
+          "attack_prevalence": 0.001,
+          "precision": 0.00225
+        },
+        {
+          "alerts_per_1000_sessions": 448.5,
+          "attack_prevalence": 0.01,
+          "precision": 0.0223
+        },
+        {
+          "alerts_per_1000_sessions": 470.8,
+          "attack_prevalence": 0.05,
+          "precision": 0.1062
+        }
+      ],
+      "benign": 298,
+      "confusion": {
+        "fn": 0,
+        "fp": 132,
+        "tn": 166,
+        "tp": 118
+      },
+      "f1": 0.6413,
+      "false_positive_rate": {
+        "ci95_high": 0.4997,
+        "ci95_low": 0.3876,
+        "denominator": 298,
+        "name": "false positive rate",
+        "numerator": 132,
+        "value": 0.443
+      },
+      "false_positives_per_1000_benign_sessions": 443.0,
+      "false_positives_per_1000_sessions": 317.3,
+      "incidental_detections": 0,
+      "mean_coverage_completeness": 0.7993,
+      "precision": {
+        "ci95_high": 0.5338,
+        "ci95_low": 0.411,
+        "denominator": 250,
+        "name": "precision",
+        "numerator": 118,
+        "value": 0.472
+      },
+      "recall": {
+        "ci95_high": 1.0,
+        "ci95_low": 0.9685,
+        "denominator": 118,
+        "name": "recall (TPR)",
+        "numerator": 118,
+        "value": 1.0
+      },
+      "recall_where_evaluable": {
+        "ci95_high": 1.0,
+        "ci95_low": 0.9685,
+        "denominator": 118,
+        "name": "recall where the responsible check was evaluable",
+        "numerator": 118,
+        "value": 1.0
+      },
+      "sessions": 416,
+      "target_attributable_recall": {
+        "ci95_high": 1.0,
+        "ci95_low": 0.9685,
+        "denominator": 118,
+        "name": "target-attributable recall",
+        "numerator": 118,
+        "value": 1.0
+      },
+      "weighted_detected_mass": 1.0
+    },
+    "leaky": {
+      "any_alert_recall": {
+        "ci95_high": 1.0,
+        "ci95_low": 0.9685,
+        "denominator": 118,
+        "name": "recall (TPR)",
+        "numerator": 118,
+        "value": 1.0
+      },
+      "attacks": 118,
+      "base_rate_projection": [
+        {
+          "alerts_per_1000_sessions": 383.2,
+          "attack_prevalence": 0.001,
+          "precision": 0.00261
+        },
+        {
+          "alerts_per_1000_sessions": 388.7,
+          "attack_prevalence": 0.01,
+          "precision": 0.02573
+        },
+        {
+          "alerts_per_1000_sessions": 413.4,
+          "attack_prevalence": 0.05,
+          "precision": 0.12094
+        }
+      ],
+      "benign": 298,
+      "confusion": {
+        "fn": 0,
+        "fp": 114,
+        "tn": 184,
+        "tp": 118
+      },
+      "f1": 0.6743,
+      "false_positive_rate": {
+        "ci95_high": 0.4389,
+        "ci95_low": 0.3292,
+        "denominator": 298,
+        "name": "false positive rate",
+        "numerator": 114,
+        "value": 0.3826
+      },
+      "false_positives_per_1000_benign_sessions": 382.6,
+      "false_positives_per_1000_sessions": 274.0,
+      "incidental_detections": 0,
+      "mean_coverage_completeness": 0.7993,
+      "precision": {
+        "ci95_high": 0.5723,
+        "ci95_low": 0.4447,
+        "denominator": 232,
+        "name": "precision",
+        "numerator": 118,
+        "value": 0.5086
+      },
+      "recall": {
+        "ci95_high": 1.0,
+        "ci95_low": 0.9685,
+        "denominator": 118,
+        "name": "recall (TPR)",
+        "numerator": 118,
+        "value": 1.0
+      },
+      "recall_where_evaluable": {
+        "ci95_high": 1.0,
+        "ci95_low": 0.9685,
+        "denominator": 118,
+        "name": "recall where the responsible check was evaluable",
+        "numerator": 118,
+        "value": 1.0
+      },
+      "sessions": 416,
+      "target_attributable_recall": {
+        "ci95_high": 1.0,
+        "ci95_low": 0.9685,
+        "denominator": 118,
+        "name": "target-attributable recall",
+        "numerator": 118,
+        "value": 1.0
+      },
+      "weighted_detected_mass": 1.0
+    },
+    "provenance": {
+      "clean_baseline_hash": "28cd9dd1be3c7c53",
+      "clean_train_sessions": 800,
+      "leaky_baseline_hash": "05d597d8d257bbc5",
+      "leaky_train_sessions": 1216,
+      "sibling_sessions_leaked": 416,
+      "test_attacks": 118,
+      "test_sessions": 416,
+      "test_set_identical": true,
+      "test_tasks": 208
+    }
+  },
   "seed": 20260807,
   "vocabulary_audit": {
     "lexical": {

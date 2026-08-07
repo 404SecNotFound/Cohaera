@@ -55,9 +55,16 @@ from eval.harness import (
     _sessions_for,
     assert_disjoint,
     fit_grammar,
+    leakage_experiment,
     split,
 )
-from eval.metrics import Outcome, summarise, wilson
+from eval.metrics import (
+    Outcome,
+    base_rate_projection,
+    check_attribution,
+    summarise,
+    wilson,
+)
 from eval.vocabulary import (
     CONDITIONS,
     TOOLS,
@@ -71,7 +78,8 @@ def corpus(condition: str = "unseen") -> list[Labelled]:
     return [
         Labelled(session_id=s.session_id, family=s.family, task_id=s.task_id,
                  kind=s.kind, is_attack=s.is_attack,
-                 target_check=s.target_check, events=tuple(s.events))
+                 target_check=s.target_check, events=tuple(s.events),
+                 attempt=s.attempt)
         for s in gen.generate(condition)
     ]
 
@@ -540,14 +548,102 @@ def test_summarise_counts_the_confusion_matrix_correctly():
     assert s["false_positives_per_1000_sessions"] == pytest.approx(20.0)
 
 
-def test_coverage_weighted_recall_discounts_a_blind_detection():
+def test_weighted_detected_mass_discounts_a_blind_detection():
     """A detection on a session Cohaera says it could barely see is worth less
     than one on a session it saw fully."""
     outcomes = [_outcome(True, True, completeness=0.2),
                 _outcome(True, False, completeness=1.0)]
     s = summarise(outcomes)
     assert s["recall"]["value"] == pytest.approx(0.5)
-    assert s["coverage_weighted_recall"] < s["recall"]["value"]
+    assert s["weighted_detected_mass"] < s["recall"]["value"]
+
+
+def test_weighted_detected_mass_is_not_recall_and_is_not_called_recall():
+    """C5-03. The counterexample the fifth review supplied, pinned.
+
+    Flip the previous test's coverage around -- the DETECTED attack is fully
+    observed and the MISSED one is barely observed -- and the weighted figure
+    rises above raw recall, because a miss with poor telemetry barely enters
+    the denominator. A detector scoring better for missing the attacks it could
+    see least of is precisely the wrong incentive for an end-to-end measurement.
+
+    The metric is kept because "how much observable attack mass did we catch"
+    is a real question. It is never named recall, and this test fails if
+    anything reintroduces the old key.
+    """
+    outcomes = [_outcome(True, True, completeness=1.0),
+                _outcome(True, False, completeness=0.2)]
+    s = summarise(outcomes)
+    assert s["recall"]["value"] == pytest.approx(0.5)
+    assert s["weighted_detected_mass"] > s["recall"]["value"]
+    assert "coverage_weighted_recall" not in s
+
+
+def test_any_alert_recall_and_attributable_recall_are_reported_separately():
+    """C5-01. The regression the fifth review asked for, exactly as specified:
+    the target check misses and a different check fires.
+
+    Before this, such a session was scored as a detection, so a check that
+    declined every one of its own labelled examples was published at full
+    recall.
+    """
+    missed_by_target = Outcome(
+        session_id="s", family="f", task_id="t", kind="k", is_attack=True,
+        target_check="CH01_sequence_order",
+        flagged=True, fired_checks=frozenset({"CH02_concealment_gap"}),
+        completeness=1.0, target_evaluable=True)
+    caught = _outcome(True, True)
+    s = summarise([missed_by_target, caught])
+    assert s["any_alert_recall"]["value"] == pytest.approx(1.0)
+    assert s["target_attributable_recall"]["value"] == pytest.approx(0.5)
+    assert s["incidental_detections"] == 1
+
+    attribution = check_attribution([missed_by_target, caught])
+    assert attribution["CH01_sequence_order"]["missed_own_labels"] == 1
+    assert attribution["CH01_sequence_order"]["on_target_attacks"] == 1
+    # CH02 helped, and must not be credited with a job it was not asked to do.
+    assert attribution["CH02_concealment_gap"]["on_target_attacks"] == 0
+    assert attribution["CH02_concealment_gap"]["incidental_on_attacks"] == 1
+    assert attribution["CH02_concealment_gap"]["target_precision_pct"] == 0.0
+
+
+def test_false_positive_intensity_is_reported_per_benign_session():
+    """C5-02. The per-1000 figure the previous card told operators to plan
+    against moved with the corpus's artificial attack prevalence.
+
+    Ten benign, five attack, two false positives. Per 1000 SESSIONS that is
+    133.3; per 1000 BENIGN sessions it is 200.0. Only the second is a property
+    of the detector.
+    """
+    outcomes = ([_outcome(False, False)] * 8 + [_outcome(False, True)] * 2
+                + [_outcome(True, True)] * 5)
+    s = summarise(outcomes)
+    assert s["false_positives_per_1000_sessions"] == pytest.approx(133.3)
+    assert s["false_positives_per_1000_benign_sessions"] == pytest.approx(200.0)
+
+
+def test_base_rate_projection_collapses_precision_at_realistic_prevalence():
+    """Precision is a property of a detector AND a base rate, and the corpus
+    runs at an absurd one."""
+    rows = {r["attack_prevalence"]: r
+            for r in base_rate_projection(tpr=1.0, fpr=0.443)}
+    assert rows[0.05]["precision"] > rows[0.01]["precision"] > rows[0.001]["precision"]
+    assert rows[0.001]["precision"] < 0.01, (
+        "at a 0.1% base rate this detector is well under 1% precision, and a "
+        "card that does not say so is quoting a corpus artefact")
+
+
+def test_the_leakage_experiment_scores_one_fixed_test_set():
+    """C5-04. The old comparison varied the test sample as well as the training
+    contamination, so the difference could not be attributed to either."""
+    rows = corpus()
+    manifest = in_memory_manifest()
+    clean, leaky, prov = leakage_experiment(rows, gen.SEED, manifest)
+    assert prov["test_set_identical"]
+    assert [o.session_id for o in clean] == [o.session_id for o in leaky], (
+        "the two runs no longer score the same sessions, so the paired "
+        "difference is confounded again")
+    assert prov["sibling_sessions_leaked"] > 0
 
 
 @pytest.mark.parametrize("condition", CONDITIONS)

@@ -29,14 +29,16 @@ is the fixture author's word choice?
 Same behaviours, same sessions, same labels. The only difference is what the
 tools are called, and whether any out-of-band capability declaration exists.
 
-| vocabulary | capability source | recall | false positive rate | precision | self-reported coverage |
-|---|---|---|---|---|---|
-| unseen | manifest | 100.0% [98%-100%] (236/236) | 44.3% [40%-48%] (264/596) | 47.2% [43%-52%] (236/500) | 0.80 |
-| unseen | producer_flag | 100.0% [98%-100%] (236/236) | 44.3% [40%-48%] (264/596) | 47.2% [43%-52%] (236/500) | 0.65 |
-| unseen | name_only | 59.3% [53%-65%] (140/236) | 13.4% [11%-16%] (80/596) | 63.6% [57%-70%] (140/220) | 0.15 |
-| lexical | manifest | 100.0% [98%-100%] (236/236) | 44.3% [40%-48%] (264/596) | 47.2% [43%-52%] (236/500) | 0.80 |
-| lexical | producer_flag | 100.0% [98%-100%] (236/236) | 44.3% [40%-48%] (264/596) | 47.2% [43%-52%] (236/500) | 0.65 |
-| lexical | name_only | 100.0% [98%-100%] (236/236) | 50.3% [46%-54%] (300/596) | 44.0% [40%-48%] (236/536) | 0.64 |
+| vocabulary | capability source | attributable recall | any-alert recall | false positive rate | precision | self-reported coverage |
+|---|---|---|---|---|---|---|
+| unseen | manifest | 100.0% [98%-100%] (236/236) | 100.0% [98%-100%] (236/236) | 44.3% [40%-48%] (264/596) | 47.2% [43%-52%] (236/500) | 0.80 |
+| unseen | producer_flag | 100.0% [98%-100%] (236/236) | 100.0% [98%-100%] (236/236) | 44.3% [40%-48%] (264/596) | 47.2% [43%-52%] (236/500) | 0.65 |
+| unseen | name_only | 30.5% [25%-37%] (72/236) | 59.3% [53%-65%] (140/236) | 13.4% [11%-16%] (80/596) | 63.6% [57%-70%] (140/220) | 0.15 |
+| lexical | manifest | 100.0% [98%-100%] (236/236) | 100.0% [98%-100%] (236/236) | 44.3% [40%-48%] (264/596) | 47.2% [43%-52%] (236/500) | 0.80 |
+| lexical | producer_flag | 100.0% [98%-100%] (236/236) | 100.0% [98%-100%] (236/236) | 44.3% [40%-48%] (264/596) | 47.2% [43%-52%] (236/500) | 0.65 |
+| lexical | name_only | 100.0% [98%-100%] (236/236) | 100.0% [98%-100%] (236/236) | 50.3% [46%-54%] (300/596) | 44.0% [40%-48%] (236/536) | 0.64 |
+
+**Two recall columns, because they are two different claims.** *Attributable* recall counts an attack as detected only when the check the corpus holds RESPONSIBLE for that behaviour fired. *Any-alert* recall counts it when anything fired. Where they differ, the gap is attacks caught by a check that was never asked about them -- real collateral detection, and not evidence that the responsible check works. Reporting only the second is how a check that declined every one of its own labelled examples came to be published at full recall; see §2.
 
 **With names the classifier knows, the name heuristic alone performs identically to a full capability manifest** -- same recall, same false positive rate, same precision, to the session. That is not a detector result. It is what the existing twelve fixtures have always measured, and it is the objection three reviews have now raised: the fixture tool names were drawn from the same keyword lists the classifier matches against, so the measurement was the list checking itself.
 
@@ -53,13 +55,17 @@ on agent-trace data. This measures it on this corpus instead of citing it.
 Every task has four attempts; a random split puts attempts of the same task
 on both sides.
 
-| split regime | recall | false positive rate | precision | note |
-|---|---|---|---|---|
-| task_disjoint | 100.0% [98%-100%] (236/236) | 44.3% [40%-48%] (264/596) | 47.2% [43%-52%] (236/500) | the honest number |
-| family_holdout | 88.2% [84%-92%] (240/272) | 38.2% [34%-42%] (208/544) | 53.6% [49%-58%] (240/448) | baseline never saw the test workload |
-| random_LEAKY | 100.0% [99%-100%] (272/272) | 40.8% [37%-45%] (222/544) | 55.1% [51%-59%] (272/494) | **contaminated, not a result** |
+| split regime | attributable recall | any-alert recall | false positive rate | precision | note |
+|---|---|---|---|---|---|
+| task_disjoint | 100.0% [98%-100%] (236/236) | 100.0% [98%-100%] (236/236) | 44.3% [40%-48%] (264/596) | 47.2% [43%-52%] (236/500) | the honest number |
+| family_holdout | 76.5% [71%-81%] (208/272) | 88.2% [84%-92%] (240/272) | 38.2% [34%-42%] (208/544) | 53.6% [49%-58%] (240/448) | baseline never saw the test workload |
+| random_LEAKY | 100.0% [99%-100%] (272/272) | 100.0% [99%-100%] (272/272) | 40.8% [37%-45%] (222/544) | 55.1% [51%-59%] (272/494) | **contaminated, not a result** |
 
-**Measured effect of the leaky split: precision +7.9%, false positive rate -3.5%** -- both in the direction that flatters the detector, which is what leakage always buys. Smaller than MCPShield's 26-point AUROC figure, and the reason is worth stating rather than hiding: recall here is saturated at 100%, so leakage has no headroom to inflate it and shows up only in precision. A corpus with harder attacks would show more. This is a floor on the effect, not an estimate of it.
+**Measured, paired, on ONE test set: precision +3.7%, false positive rate -6.0%** -- both in the direction that flatters the detector, which is what leakage always buys.
+
+The `random_LEAKY` row above is kept as a contamination control and is NOT where that figure comes from, because it cannot be. Each regime seeds its own shuffle, so the task-disjoint and random cells score different sessions at different attack prevalences: two things change at once and the difference cannot be attributed to either. The number above comes from `harness.leakage_experiment`, which holds the test set fixed (416 sessions, 118 attacks, identical in both runs) and varies exactly one thing: whether 416 sibling attempts of those same tasks are allowed into the training set.
+
+Smaller than MCPShield's 26-point AUROC figure, and the reason is worth stating rather than hiding: attributable recall here is saturated at 100%, so leakage has no headroom to inflate it and shows up only in the false-positive direction. A corpus with harder attacks would show more. This is a floor on the effect, not an estimate of it.
 
 `family_holdout` is the number to look at before pointing Cohaera at an agent whose benign history you have not fitted on. The sequence grammar has never seen the test families' tools, so CH01 has nothing to compare against.
 
@@ -67,7 +73,7 @@ It used to flag everything in that situation: on the corpus revision where that 
 
 CH01 now declines instead. When a session of at least 3 calls uses tools the baseline mostly does not know, the check reports `not_evaluated` with reason `BASELINE_VOCABULARY_MISMATCH` rather than firing. False positive rate in this regime is now **38.2%** (208/544), precision **53.6%**.
 
-Recall here is **88.2%** against 100.0% on the honest split, and that gap is what declining costs. 32 of the 32 `attack_dilution` sessions go uncaught, because CH01 is the only check that can see a diluted attack and CH01 is switched off here by its own vocabulary contract. Everything else transfers: the checks that catch the other four attack kinds never depended on the grammar.
+**And this regime is why the two recall columns exist.** Any-alert recall here is 88.2%; attributable recall is **76.5%**, and the 32 sessions between them are attacks whose responsible check declined while a different check fired on the same trace. A card reporting only the first would say CH01 kept its recall after switching itself off, which is the opposite of what happened. 32 of the 32 `attack_dilution` sessions go uncaught, because CH01 is the only check that can see a diluted attack and CH01 is switched off here by its own vocabulary contract.
 
 What is left is a false positive rate within reach of `task_disjoint`'s 44.3%, which is the honest read: the workload-transfer failure is gone and the residual is the benign-hard confounder problem that every regime shares.
 
@@ -142,15 +148,34 @@ Not "how good is the detector" but "which rule pages an analyst for
 nothing". A check firing on as many benign sessions as attacks is a coin
 flip wearing a rule ID.
 
-| check | fired on attacks | fired on benign | alert precision |
-|---|---|---|---|
-| `CH01_sequence_order` | 140 | 36 | 79.5% |
-| `CH02_concealment_gap` | 60 | 96 | 38.5% |
-| `CH03_untrusted_to_consequential` | 36 | 88 | 29.0% |
-| `CH04_guardrail_overrun` | 56 | 0 | 100.0% |
-| `CH05_unpaired_calls` | 16 | 44 | 26.7% |
-| `CH06_evidence_integrity` | 28 | 0 | 100.0% |
-| `CH07_effect_contradiction` | 28 | 0 | 100.0% |
+| check | on its OWN attacks | incidental on other attacks | on benign | target precision | any-attack precision | missed own labels |
+|---|---|---|---|---|---|---|
+| `CH01_sequence_order` | 44 | 96 | 36 | 25.0% | 79.5% | 0 of 44 |
+| `CH02_concealment_gap` | 44 | 16 | 96 | 28.2% | 38.5% | 0 of 44 |
+| `CH03_untrusted_to_consequential` | 36 | 0 | 88 | 29.0% | 29.0% | 0 of 36 |
+| `CH04_guardrail_overrun` | 56 | 0 | 0 | 100.0% | 100.0% | 0 of 56 |
+| `CH05_unpaired_calls` | 0 | 16 | 44 | 0.0% | 26.7% | 0 of 0 |
+| `CH06_evidence_integrity` | 28 | 0 | 0 | 100.0% | 100.0% | 0 of 28 |
+| `CH07_effect_contradiction` | 28 | 0 | 0 | 100.0% | 100.0% | 0 of 28 |
+
+**Target precision is the honest per-rule number and is always the lower of the two.** A check that fires on an attack belonging to a different check has helped, but it has not demonstrated that it does its own job -- and counting those as hits is what made the previous card's per-check table wrong in the flattering direction.
+
+### 5. The same detector at a realistic attack base rate
+
+Every precision figure above is computed at this corpus's attack
+prevalence of 33.3%, which is
+absurd and is chosen so the corpus has enough attacks to measure. Precision
+is not a property of a detector; it is a property of a detector AND a base
+rate. Here is the same measured TPR and FPR standardised to prevalences a
+real fleet might have.
+
+| attack prevalence | alerts per 1000 sessions | precision |
+|---|---|---|
+| 0.1% | 443.5 | 0.22% |
+| 1.0% | 448.5 | 2.23% |
+| 5.0% | 470.8 | 10.62% |
+
+**The prevalence-free unit is 443.0 false positives per 1000 BENIGN sessions.** The previous card published 317.3 per 1000 sessions and told operators to plan capacity against it, which understates the load because the denominator included the corpus's own inflated attack population. Plan against the benign-normalised number and read precision from the table above, not from §1.
 
 ---
 

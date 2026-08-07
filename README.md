@@ -291,9 +291,9 @@ Two results worth pulling out:
   heuristic alone scores identically to a full capability manifest.** That is
   what the twelve fixtures below always measured — the keyword list checking
   itself. Swap in a realistic vocabulary the heuristic has never seen and its
-  classification accuracy is **0% of 34 tools**, and recall falls to 59.3%.
+  classification accuracy is **0% of 34 tools**, and recall falls to 30.5%.
 - **Under `family_holdout`, where the baseline never saw the test workload, the
-  false positive rate is 38.2%** and recall drops to 88.2%, because CH01 declines
+  false positive rate is 38.2%** and recall drops to 76.5%, because CH01 declines
   to judge a workload it was not fitted on and CH01 is the only check that
   catches a diluted attack. CH01 does not transfer across task families. Fitting
   one baseline across a fleet of differently-tasked agents buys silence where it
@@ -892,7 +892,7 @@ prevention claim collapses.
 - [x] Sigma content pack, 13 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 410 passing across unit, hostile-input and content conformance
+- [x] Tests, 415 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 22 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger

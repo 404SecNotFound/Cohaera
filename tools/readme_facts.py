@@ -152,7 +152,14 @@ def card_tasks() -> int:
 
 
 def card_headline_recall_pct() -> str:
-    return f"{_metrics()['recall']['value']:.0%}".rstrip("%")
+    """The ATTRIBUTABLE figure, after C5-01.
+
+    ``recall`` counts an attack as caught when anything fired; this counts it
+    only when the check the corpus holds responsible for that behaviour fired.
+    On the headline cell the two agree, and on family_holdout they do not,
+    which is exactly why the README has to quote the stricter one.
+    """
+    return f"{_metrics()['target_attributable_recall']['value']:.0%}".rstrip("%")
 
 
 def card_headline_fpr_pct() -> str:
@@ -164,7 +171,8 @@ def card_headline_fp_per_1000() -> str:
 
 
 def card_name_only_recall_pct() -> str:
-    return f"{_metrics('unseen|task_disjoint|name_only')['recall']['value'] * 100:.1f}"
+    m = _metrics("unseen|task_disjoint|name_only")
+    return f"{m['target_attributable_recall']['value'] * 100:.1f}"
 
 
 def card_family_holdout_fpr_pct() -> str:
@@ -173,8 +181,14 @@ def card_family_holdout_fpr_pct() -> str:
 
 
 def card_family_holdout_recall_pct() -> str:
+    """Attributable, and this is the claim the fifth review corrected.
+
+    Any-alert recall in this regime reads 88.2% because CH02 and CH05 fire on
+    attacks CH01 declined. Quoting that would say CH01 kept its recall after
+    switching itself off.
+    """
     m = _metrics("unseen|family_holdout|manifest")
-    return f"{m['recall']['value'] * 100:.1f}"
+    return f"{m['target_attributable_recall']['value'] * 100:.1f}"
 
 
 def card_e02_confounder_cost() -> int:

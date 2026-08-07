@@ -38,6 +38,7 @@ from eval.harness import (
     REGIME_RANDOM,
     REGIME_TASK_DISJOINT,
     REGIMES,
+    leakage_experiment,
     load_corpus,
     load_manifest,
     run_condition,
@@ -98,7 +99,8 @@ def _pct(rate: dict) -> str:
             f"({rate['numerator']}/{rate['denominator']})")
 
 
-def render_card(results: dict[str, Any], seed: int, summary: dict) -> str:
+def render_card(results: dict[str, Any], seed: int, summary: dict,
+                leakage: dict[str, Any]) -> str:
     audits = {c: audit(c) for c in CONDITIONS}
     unseen_name_only = _cell(results, "unseen", REGIME_TASK_DISJOINT, CAP_NAME_ONLY)
     lexical_name_only = _cell(results, "lexical", REGIME_TASK_DISJOINT, CAP_NAME_ONLY)
@@ -147,17 +149,29 @@ def render_card(results: dict[str, Any], seed: int, summary: dict) -> str:
     add("Same behaviours, same sessions, same labels. The only difference is what the")
     add("tools are called, and whether any out-of-band capability declaration exists.")
     add("")
-    add("| vocabulary | capability source | recall | false positive rate | precision "
-        "| self-reported coverage |")
-    add("|---|---|---|---|---|---|")
+    add("| vocabulary | capability source | attributable recall | any-alert recall "
+        "| false positive rate | precision | self-reported coverage |")
+    add("|---|---|---|---|---|---|---|")
     for vocabulary in CONDITIONS:
         for capability in CAPABILITY_SOURCES:
             m = _cell(results, vocabulary, REGIME_TASK_DISJOINT, capability)
-            add(f"| {vocabulary} | {capability} | {_pct(m['recall'])} "
+            add(f"| {vocabulary} | {capability} "
+                f"| {_pct(m['target_attributable_recall'])} "
+                f"| {_pct(m['any_alert_recall'])} "
                 f"| {_pct(m['false_positive_rate'])} "
                 f"| {_pct(m['precision'])} "
                 f"| {m['mean_coverage_completeness']:.2f} |")
     add("")
+    add(
+        "**Two recall columns, because they are two different claims.** "
+        "*Attributable* recall counts an attack as detected only when the check "
+        "the corpus holds RESPONSIBLE for that behaviour fired. *Any-alert* "
+        "recall counts it when anything fired. Where they differ, the gap is "
+        "attacks caught by a check that was never asked about them -- real "
+        "collateral detection, and not evidence that the responsible check "
+        "works. Reporting only the second is how a check that declined every "
+        "one of its own labelled examples came to be published at full recall; "
+        "see §2.\n")
     add(
         "**With names the classifier knows, the name heuristic alone performs "
         "identically to a full capability manifest** -- same recall, same false "
@@ -200,8 +214,9 @@ def render_card(results: dict[str, Any], seed: int, summary: dict) -> str:
     add("Every task has four attempts; a random split puts attempts of the same task")
     add("on both sides.")
     add("")
-    add("| split regime | recall | false positive rate | precision | note |")
-    add("|---|---|---|---|---|")
+    add("| split regime | attributable recall | any-alert recall "
+        "| false positive rate | precision | note |")
+    add("|---|---|---|---|---|---|")
     notes = {
         REGIME_TASK_DISJOINT: "the honest number",
         REGIME_FAMILY_HOLDOUT: "baseline never saw the test workload",
@@ -209,29 +224,46 @@ def render_card(results: dict[str, Any], seed: int, summary: dict) -> str:
     }
     for regime in REGIMES:
         m = _cell(results, "unseen", regime, CAP_MANIFEST)
-        add(f"| {regime} | {_pct(m['recall'])} | {_pct(m['false_positive_rate'])} "
+        add(f"| {regime} | {_pct(m['target_attributable_recall'])} "
+            f"| {_pct(m['any_alert_recall'])} "
+            f"| {_pct(m['false_positive_rate'])} "
             f"| {_pct(m['precision'])} | {notes[regime]} |")
     add("")
     honest = _cell(results, "unseen", REGIME_TASK_DISJOINT, CAP_MANIFEST)
-    leaky = _cell(results, "unseen", REGIME_RANDOM, CAP_MANIFEST)
-    d_prec = leaky["precision"]["value"] - honest["precision"]["value"]
-    d_fpr = (leaky["false_positive_rate"]["value"]
-             - honest["false_positive_rate"]["value"])
     fam = _cell(results, "unseen", REGIME_FAMILY_HOLDOUT, CAP_MANIFEST)
+    leak_clean = leakage["clean"]
+    leak_leaky = leakage["leaky"]
+    d_prec = (leak_leaky["precision"]["value"] - leak_clean["precision"]["value"])
+    d_fpr = (leak_leaky["false_positive_rate"]["value"]
+             - leak_clean["false_positive_rate"]["value"])
     fam_by_kind = results[
         f"unseen|{REGIME_FAMILY_HOLDOUT}|{CAP_MANIFEST}"]["by_kind"]
     fam_dilution = fam_by_kind.get(gen.ATTACK_DILUTION, {"flagged": 0, "sessions": 0})
     fam_dilution_total = fam_dilution["sessions"]
     fam_missed_dilution = fam_dilution_total - fam_dilution["flagged"]
     add(
-        f"**Measured effect of the leaky split: precision {d_prec:+.1%}, false "
+        f"**Measured, paired, on ONE test set: precision {d_prec:+.1%}, false "
         f"positive rate {d_fpr:+.1%}** -- both in the direction that flatters the "
-        f"detector, which is what leakage always buys. "
-        f"Smaller than MCPShield's 26-point AUROC figure, and "
-        f"the reason is worth stating rather than hiding: recall here is saturated at "
-        f"100%, so leakage has no headroom to inflate it and shows up only in "
-        f"precision. A corpus with harder attacks would show more. This is a floor on "
-        f"the effect, not an estimate of it.\n")
+        f"detector, which is what leakage always buys.\n")
+    add(
+        f"The `random_LEAKY` row above is kept as a contamination control and is "
+        f"NOT where that figure comes from, because it cannot be. Each regime seeds "
+        f"its own shuffle, so the task-disjoint and random cells score different "
+        f"sessions at different attack prevalences: two things change at once and "
+        f"the difference cannot be attributed to either. The number above comes "
+        f"from `harness.leakage_experiment`, which holds the test set fixed "
+        f"({leakage['provenance']['test_sessions']} sessions, "
+        f"{leakage['provenance']['test_attacks']} attacks, identical in both runs) "
+        f"and varies exactly one thing: whether "
+        f"{leakage['provenance']['sibling_sessions_leaked']} sibling attempts of "
+        f"those same tasks are allowed into the training set.\n")
+    add(
+        f"Smaller than MCPShield's 26-point AUROC figure, and the reason is worth "
+        f"stating rather than hiding: attributable recall here is saturated at "
+        f"{leak_clean['target_attributable_recall']['value']:.0%}, so leakage has no "
+        f"headroom to inflate it and shows up only in the false-positive direction. "
+        f"A corpus with harder attacks would show more. This is a floor on the "
+        f"effect, not an estimate of it.\n")
     add(
         "`family_holdout` is the number to look at before pointing Cohaera at an "
         "agent whose benign history you have not fitted on. The sequence grammar has "
@@ -255,13 +287,17 @@ def render_card(results: dict[str, Any], seed: int, summary: dict) -> str:
         f"{fam['false_positive_rate']['denominator']}), precision "
         f"**{fam['precision']['value']:.1%}**.\n")
     add(
-        f"Recall here is **{fam['recall']['value']:.1%}** against "
-        f"{honest['recall']['value']:.1%} on the honest split, and that gap is what "
-        f"declining costs. {fam_missed_dilution} of the "
-        f"{fam_dilution_total} `attack_dilution` sessions go uncaught, because CH01 "
-        f"is the only check that can see a diluted attack and CH01 is switched off "
-        f"here by its own vocabulary contract. Everything else transfers: the checks "
-        f"that catch the other four attack kinds never depended on the grammar.\n")
+        f"**And this regime is why the two recall columns exist.** Any-alert recall "
+        f"here is {fam['any_alert_recall']['value']:.1%}; attributable recall is "
+        f"**{fam['target_attributable_recall']['value']:.1%}**, and the "
+        f"{fam['incidental_detections']} sessions between them are attacks whose "
+        f"responsible check declined while a different check fired on the same "
+        f"trace. A card reporting only the first would say CH01 kept its recall "
+        f"after switching itself off, which is the opposite of what happened. "
+        f"{fam_missed_dilution} of the {fam_dilution_total} `attack_dilution` "
+        f"sessions go uncaught, because CH01 is the only check that can see a "
+        f"diluted attack and CH01 is switched off here by its own vocabulary "
+        f"contract.\n")
     add(
         f"What is left is a false positive rate within reach of `task_disjoint`'s "
         f"{honest['false_positive_rate']['value']:.1%}, which is the honest read: "
@@ -426,14 +462,50 @@ def render_card(results: dict[str, Any], seed: int, summary: dict) -> str:
     add("nothing\". A check firing on as many benign sessions as attacks is a coin")
     add("flip wearing a rule ID.")
     add("")
-    add("| check | fired on attacks | fired on benign | alert precision |")
-    add("|---|---|---|---|")
+    add("| check | on its OWN attacks | incidental on other attacks "
+        "| on benign | target precision | any-attack precision | missed own labels |")
+    add("|---|---|---|---|---|---|---|")
     attribution = results[
         f"unseen|{REGIME_TASK_DISJOINT}|{CAP_MANIFEST}"]["check_attribution"]
     for check, row in attribution.items():
-        add(f"| `{check}` | {row['on_attacks']} | {row['on_benign']} "
-            f"| {row['precision_pct']}% |")
+        add(f"| `{check}` | {row['on_target_attacks']} "
+            f"| {row['incidental_on_attacks']} | {row['on_benign']} "
+            f"| {row['target_precision_pct']}% | {row['precision_pct']}% "
+            f"| {row['missed_own_labels']} of {row['labelled']} |")
     add("")
+    add(
+        "**Target precision is the honest per-rule number and is always the lower "
+        "of the two.** A check that fires on an attack belonging to a different "
+        "check has helped, but it has not demonstrated that it does its own job -- "
+        "and counting those as hits is what made the previous card's per-check "
+        "table wrong in the flattering direction.\n")
+
+    # ---- base rates -----------------------------------------------------
+    add("### 5. The same detector at a realistic attack base rate")
+    add("")
+    add("Every precision figure above is computed at this corpus's attack")
+    add("prevalence of "
+        f"{summary['conditions']['unseen']['attack_prevalence']:.1%}, which is")
+    add("absurd and is chosen so the corpus has enough attacks to measure. Precision")
+    add("is not a property of a detector; it is a property of a detector AND a base")
+    add("rate. Here is the same measured TPR and FPR standardised to prevalences a")
+    add("real fleet might have.")
+    add("")
+    add("| attack prevalence | alerts per 1000 sessions | precision |")
+    add("|---|---|---|")
+    for row in unseen_manifest["base_rate_projection"]:
+        add(f"| {row['attack_prevalence']:.1%} "
+            f"| {row['alerts_per_1000_sessions']} | {row['precision']:.2%} |")
+    add("")
+    add(
+        f"**The prevalence-free unit is "
+        f"{unseen_manifest['false_positives_per_1000_benign_sessions']} false "
+        f"positives per 1000 BENIGN sessions.** The previous card published "
+        f"{unseen_manifest['false_positives_per_1000_sessions']} per 1000 sessions "
+        f"and told operators to plan capacity against it, which understates the "
+        f"load because the denominator included the corpus's own inflated attack "
+        f"population. Plan against the benign-normalised number and read precision "
+        f"from the table above, not from \u00a71.\n")
 
     # ---- honesty --------------------------------------------------------
     add("---")
@@ -509,6 +581,11 @@ def main(argv: list[str] | None = None) -> int:
                        "families": len(gen.FAMILIES)} for c in CONDITIONS}})
 
     results = run_grid(args.seed)
+    corpus = load_corpus(DATA, "unseen")
+    clean, leaky, leak_prov = leakage_experiment(
+        corpus, args.seed, load_manifest(DATA, "unseen"))
+    leakage = {"provenance": leak_prov, "clean": summarise(clean),
+               "leaky": summarise(leaky)}
     payload = {
         "detector_version": __version__,
         "config_hash": DEFAULT_LIMITS.digest(),
@@ -517,10 +594,12 @@ def main(argv: list[str] | None = None) -> int:
         "corpus": summary,
         "vocabulary_audit": {c: audit(c).as_dict() for c in CONDITIONS},
         "cells": results,
+        "leakage_experiment": leakage,
     }
     CARD_JSON.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n",
                          encoding="utf-8")
-    CARD_MD.write_text(render_card(results, args.seed, summary), encoding="utf-8")
+    CARD_MD.write_text(render_card(results, args.seed, summary, leakage),
+                   encoding="utf-8")
 
     headline = _cell(results, "unseen", REGIME_TASK_DISJOINT, CAP_MANIFEST)
     blind = _cell(results, "unseen", REGIME_TASK_DISJOINT, CAP_NAME_ONLY)

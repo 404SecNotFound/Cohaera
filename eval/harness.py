@@ -99,6 +99,9 @@ class Labelled:
     is_attack: bool
     target_check: str
     events: tuple[dict, ...]
+    # Which attempt of its task this is. Needed by the leakage experiment, which
+    # has to split a task's attempts across train and test on purpose.
+    attempt: int = 0
 
 
 def load_corpus(data_dir: Path, condition: str) -> list[Labelled]:
@@ -123,7 +126,8 @@ def load_corpus(data_dir: Path, condition: str) -> list[Labelled]:
         out.append(Labelled(
             session_id=sid, family=row["family"], task_id=row["task_id"],
             kind=row["kind"], is_attack=row["is_attack"],
-            target_check=row["target_check"], events=tuple(events)))
+            target_check=row["target_check"], events=tuple(events),
+            attempt=int(row.get("attempt", 0))))
     out.sort(key=lambda s: s.session_id)
     return out
 
@@ -423,6 +427,60 @@ def run_condition(corpus: list[Labelled], regime: str, seed: int,
         "manifest_file_digest": manifest.file_digest,
         "manifest_semantic_digest": manifest.semantic_digest,
         "manifest_tools": len(manifest.tools),
+    }
+
+
+def leakage_experiment(corpus: list[Labelled], seed: int,
+                       manifest: CapabilityManifest,
+                       limits: Limits = DEFAULT_LIMITS,
+                       ) -> tuple[list[Outcome], list[Outcome], dict]:
+    """Measure leakage with ONE test set, varying only the contamination.
+
+    C5-04. The card used to compare the ``task_disjoint`` cell against the
+    ``random_LEAKY`` cell and call the difference the measured cost of leakage.
+    It is not. Each regime seeds its own shuffle, so the two cells score
+    DIFFERENT test sessions at different attack prevalences, and the random
+    cell's precision is helped by having more attacks in it. Two things changed
+    at once and the difference was attributed to one of them.
+
+    The controlled version holds the test set fixed and changes exactly one
+    thing -- whether sibling attempts of the test tasks are allowed into the
+    training set:
+
+        test set     attempts 0 and 1 of every held-out task, both runs
+        clean train  the training tasks only
+        leaky train  the training tasks PLUS attempts 2 and 3 of the test tasks
+
+    Attempts of one task are near-duplicates by construction, so the leaky run
+    fits its "normal" on near-copies of the very sessions it is about to score.
+    That is the mistake MCPShield measured at up to 26 AUROC points on
+    agent-trace data, and this is what it is worth on this corpus, paired.
+    """
+    train, test = split(corpus, REGIME_TASK_DISJOINT, seed)
+    held_out_tasks = {row.task_id for row in test}
+    fixed_test = [r for r in test if r.attempt in (0, 1)]
+    siblings = [r for r in test if r.attempt not in (0, 1)]
+    if not fixed_test or not siblings:
+        raise AssertionError(
+            "the leakage experiment needs at least two attempts per task on "
+            "each side; the corpus no longer supplies them")
+
+    clean_grammar = fit_grammar(train, manifest, limits)
+    leaky_grammar = fit_grammar([*train, *siblings], manifest, limits)
+    clean = score(fixed_test, clean_grammar, manifest, limits)
+    leaky = score(fixed_test, leaky_grammar, manifest, limits)
+    return clean, leaky, {
+        "test_sessions": len(fixed_test),
+        "test_attacks": sum(1 for r in fixed_test if r.is_attack),
+        "test_tasks": len(held_out_tasks),
+        "clean_train_sessions": len(train),
+        "leaky_train_sessions": len(train) + len(siblings),
+        "sibling_sessions_leaked": len(siblings),
+        "clean_baseline_hash": clean_grammar.fingerprint(),
+        "leaky_baseline_hash": leaky_grammar.fingerprint(),
+        # The two runs score the SAME sessions. If this ever stops being true
+        # the experiment has silently gone back to comparing two populations.
+        "test_set_identical": True,
     }
 
 
