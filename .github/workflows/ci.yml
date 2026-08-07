@@ -124,6 +124,15 @@ jobs:
       - name: Content conformance
         run: python -m pytest tests/test_content.py -q
 
+      - name: README claims match the repository
+        # C4-11. The README said "188 passing" against a tree with 197 and
+        # listed one roadmap item twice. A number nothing keeps true is the one
+        # kind of defect this project cannot ship, so the counts are derived
+        # from the tree and checked here. Named as its own step, inside an
+        # existing job, so the ruleset's nine required checks stay nine --
+        # see tests/test_ci_config.py.
+        run: python tools/readme_facts.py --check
+
   perf:
     name: amplification regression
     runs-on: ubuntu-latest

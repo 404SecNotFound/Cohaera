@@ -420,6 +420,13 @@ Fields that survive but are the wrong type are treated as **absent and flagged**
 never guessed. The reason codes travel with the session in
 `data.integrity_defects` and lower the confidence of the checks that needed them.
 
+Every bound is validated at construction, because a bound that does not bound is
+worse than no bound: the operator believes it is there.
+`Limits(max_evidence_items=-1)` used to construct happily and then *disable* the
+output cap, so tightening a limit by typo removed it (C4-05). Records are frozen
+once read and batch-assembled sessions are sealed, so the derived values every
+check reads cannot be changed behind their caches (C4-07, C4-08).
+
 ---
 
 ## Quick start
@@ -453,7 +460,15 @@ PYTHONPATH=src python3 -m cohaera.cli score ~/.observra/telemetry.jsonl \
 | `3` | partial success — some records were quarantined |
 | `4` | `--strict` was set and at least one record was quarantined |
 | `5` | a reject budget or resource bound was exceeded; **output is incomplete** |
-| `1` | unexpected error; trust nothing |
+| `1` | the run could not be completed as asked — a bound that is not a bound, a manifest that is not a manifest, a `--reject-log` that could not be written, or an unexpected error |
+| `2` | usage error, including a bound outside its valid range |
+
+Every budget is enforced **per record, inside the reader**. `--max-rejects` and
+`--max-reject-ratio` used to be evaluated after the whole file had been read,
+which makes them a post-mortem rather than a budget: a file of pure garbage was
+bounded by its own size (C4-02). `--reject-log` is checked for writability
+before scoring starts, because losing the record of what was quarantined while
+exiting `0` is the same silent data loss the exit codes exist to prevent.
 
 `--tool-manifest` replaces the name heuristic with a per-tool declaration and is
 the single biggest lever on coverage confidence. See
@@ -769,7 +784,7 @@ prevention claim collapses.
 - [x] Sigma content pack, 9 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 188 passing across unit, hostile-input and content conformance
+- [x] Tests, 246 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 15 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger
@@ -784,7 +799,6 @@ prevention claim collapses.
 - [ ] Independent effect receipts, so a logged success can be checked
 - [ ] Collector-side signing and hash chaining, AEGIS pattern
 - [ ] Approval and policy binding, so a continuation can be called a bypass
-- [ ] CH02 semantic matching
 - [ ] Validate content against a live SIEM
 - [ ] Build AIE-COHAERA-001 natively and compare against the Cohaera-fed version
 

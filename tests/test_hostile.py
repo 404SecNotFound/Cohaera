@@ -25,6 +25,7 @@ import json
 import subprocess
 import sys
 import time
+from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
 
 import pytest
@@ -40,8 +41,20 @@ from cohaera.checks import (
     coverage,
     run_all,
 )
-from cohaera.cli import EXIT_BUDGET, EXIT_OK, EXIT_PARTIAL, EXIT_STRICT_REJECT
-from cohaera.identity import Correlator, run_id
+from cohaera.cli import (
+    EXIT_BUDGET,
+    EXIT_ERROR,
+    EXIT_OK,
+    EXIT_PARTIAL,
+    EXIT_STRICT_REJECT,
+    main,
+)
+from cohaera.identity import (
+    KIND_ISOLATED_ANON,
+    KIND_SCOPED_ANON,
+    Correlator,
+    run_id,
+)
 from cohaera.ingest import assemble, load, read_events
 from cohaera.limits import (
     DEFAULT_LIMITS,
@@ -49,10 +62,22 @@ from cohaera.limits import (
     REJECT_MALFORMED_JSON,
     REJECT_NESTING_TOO_DEEP,
     REJECT_NOT_AN_OBJECT,
+    REJECT_RATIO_EXCEEDED,
+    REJECT_TOO_MANY_BYTES,
+    REJECT_TOO_MANY_RECORDS,
+    REJECT_TOO_MANY_REJECTS,
     REJECT_UNDECODABLE,
     Limits,
+    LimitsError,
 )
-from cohaera.model import Event, Session, to_cim_event
+from cohaera.model import (
+    Event,
+    SealedSessionError,
+    Session,
+    cap_list,
+    json_safe,
+    to_cim_event,
+)
 from cohaera.validate import IngestReport, sanitise_display
 
 BASE = 1_785_700_000.0
@@ -997,3 +1022,424 @@ def test_c401_verdict_id_commits_to_events_and_coverage():
     assert verdict_for("fetch_alpha") != verdict_for("fetch_beta"), \
         "different evidence must produce a different verdict identity"
     assert verdict_for("fetch_alpha") == verdict_for("fetch_alpha")
+
+
+# =====================================================================
+# C4-02  reject floods bypassed every live budget
+# =====================================================================
+
+
+def test_c402_reject_flood_stops_the_read(tmp_path):
+    """max_events_total counted ACCEPTED records, so garbage was unbounded.
+
+    A file of nothing but malformed lines never incremented ``report.accepted``,
+    so the only budget checked inside the reader never moved. ``--max-rejects``
+    and ``--max-reject-ratio`` were checked by the CLI AFTER ``load()`` returned,
+    which makes them a post-mortem rather than a budget: every byte of the
+    attacker's file was already read, decoded, depth-scanned and hashed.
+    """
+    p = write_jsonl(tmp_path, ["{not json"] * 500)
+    rep = IngestReport()
+    list(read_events(p, limits=Limits(max_events_total=1, max_rejects=1),
+                     report=rep, quiet=True))
+    assert rep.aborted, "a reject budget must stop the read, not describe it"
+    assert rep.abort_reason == REJECT_TOO_MANY_REJECTS
+    assert rep.rejected < 10, (
+        f"read {rep.rejected} of 500 records after the budget of 1 was exceeded")
+
+
+def test_c402_record_and_byte_budgets_bound_the_work(tmp_path):
+    """Two bounds on WORK, not on yield. Neither existed before."""
+    p = write_jsonl(tmp_path, ["{not json"] * 500)
+
+    rep = IngestReport()
+    list(read_events(p, limits=Limits(max_records_total=5), report=rep, quiet=True))
+    assert rep.aborted and rep.abort_reason == REJECT_TOO_MANY_RECORDS
+    assert rep.rejected == 6, "5 records read, plus the abort marker"
+
+    rep = IngestReport()
+    list(read_events(p, limits=Limits(max_input_bytes=32), report=rep, quiet=True))
+    assert rep.aborted and rep.abort_reason == REJECT_TOO_MANY_BYTES
+
+
+def test_c402_reject_ratio_ignores_a_tiny_sample(tmp_path):
+    """One bad line out of one is a ratio of 1.0 and must not abort a healthy file."""
+    good = json.dumps({"event_type": "tool_start", "timestamp": BASE,
+                       "session_id": "s", "tool_name": "fetch_x"})
+    p = write_jsonl(tmp_path, ["{not json"] + [good] * 50)
+    rep = IngestReport()
+    events = list(read_events(p, limits=Limits(max_reject_ratio=0.1),
+                              report=rep, quiet=True))
+    assert not rep.aborted, "the live ratio check fired below its sample floor"
+    assert len(events) == 50
+
+
+def test_c402_reject_ratio_stops_a_sustained_flood(tmp_path):
+    """Past the floor, the ratio is believed and the read stops."""
+    p = write_jsonl(tmp_path, ["{not json"] * 500)
+    rep = IngestReport()
+    list(read_events(p, limits=Limits(max_reject_ratio=0.5,
+                                      max_reject_ratio_floor=10),
+                     report=rep, quiet=True))
+    assert rep.aborted and rep.abort_reason == REJECT_RATIO_EXCEEDED
+    assert rep.rejected < 100, f"read {rep.rejected} of 500 past a 0.5 ratio budget"
+
+
+# =====================================================================
+# C4-05  a bound that does not bound
+# =====================================================================
+
+
+@pytest.mark.parametrize("kw", [
+    {"max_evidence_items": -1},      # silently DISABLED the output cap
+    {"max_reject_ratio": 2.0},       # a reject budget that can never trip
+    {"max_reject_ratio": -0.5},
+    {"max_line_bytes": 0},
+    {"max_sessions": -1},
+    {"max_rejects": -3},
+    {"max_events_total": True},      # bool is not a count
+    {"max_nesting_depth": "64"},
+    {"max_reject_ratio": float("nan")},
+])
+def test_c405_limits_refuses_a_bound_that_cannot_bound(kw):
+    with pytest.raises(LimitsError):
+        Limits(**kw)
+
+
+def test_c405_negative_evidence_cap_used_to_disable_the_cap():
+    """The concrete consequence: cap_list reads a negative limit as unlimited.
+
+    So ``Limits(max_evidence_items=-1)`` did not tighten the output bound, it
+    removed it -- reinstating the 61x amplification that bound exists to stop.
+    """
+    assert cap_list(list(range(1000)), -1) == (list(range(1000)), 0), \
+        "cap_list's negative-means-unlimited behaviour is the reason -1 is refused"
+    with pytest.raises(LimitsError):
+        Limits(max_evidence_items=-1)
+
+
+def test_c405_every_limits_field_is_validated():
+    """A bound added later must not quietly escape validation.
+
+    This is the honesty check on ``__post_init__``: it asserts that for every
+    field, SOME value is refused. A field the validator forgot accepts anything,
+    and the test says which one.
+    """
+    for f in fields(Limits):
+        probes = ([None, -1, "x"] if f.name in ("max_rejects", "max_reject_ratio")
+                  else [-1, "x", None])
+        refused = False
+        for probe in probes:
+            try:
+                Limits(**{f.name: probe})
+            except LimitsError:
+                refused = True
+                break
+        assert refused, f"Limits.{f.name} accepts every probe; it is unvalidated"
+
+
+def test_c405_cli_rejects_a_negative_bound_as_a_usage_error(tmp_path):
+    p = write_jsonl(tmp_path, ["{}"])
+    out = subprocess.run(
+        [sys.executable, "-m", "cohaera.cli", "score", str(p),
+         "--max-evidence-items", "-1"],
+        capture_output=True, text=True, check=False,
+        env={"PYTHONPATH": str(Path(__file__).resolve().parent.parent / "src"),
+             "PATH": "/usr/bin:/bin"})
+    assert out.returncode == 2, "argparse should reject it as a usage error"
+    assert "must be >= 1" in out.stderr
+
+
+# =====================================================================
+# C4-04  an audit artifact that could not be written, reported as success
+# =====================================================================
+
+
+def test_c404_unwritable_reject_log_fails_the_run(tmp_path, capsys):
+    """The quarantine ledger is the record of what Cohaera REFUSED to score.
+
+    Losing it while exiting 0 means an operator asking "what did we drop" gets
+    no answer and no indication that there was one.
+    """
+    good = json.dumps({"event_type": "tool_start", "timestamp": BASE,
+                       "session_id": "s", "tool_name": "fetch_x"})
+    p = write_jsonl(tmp_path, [good])
+    rc = main(["score", str(p), "--reject-log",
+               str(tmp_path / "no-such-dir" / "rejects.jsonl")])
+    assert rc == EXIT_ERROR, f"an unwritable audit path exited {rc}"
+    assert "not writable" in capsys.readouterr().err
+
+
+def test_c404_writable_reject_log_still_succeeds(tmp_path):
+    good = json.dumps({"event_type": "tool_start", "timestamp": BASE,
+                       "session_id": "s", "tool_name": "fetch_x"})
+    p = write_jsonl(tmp_path, [good])
+    log = tmp_path / "rejects.jsonl"
+    assert main(["score", str(p), "--reject-log", str(log)]) == EXIT_OK
+    assert json.loads(log.read_text().splitlines()[-1])["_summary"]
+
+
+# =====================================================================
+# C4-03  partial identity plus a broken clock merged unrelated records
+# =====================================================================
+
+
+def test_c403_no_clock_records_do_not_merge(tmp_path):
+    """``anon-<scope>-noclock`` was one bucket for a whole run.
+
+    A scoped anonymous key is identity PLUS a time window, and the window is
+    what stops everything a host ever emitted collapsing into one session. An
+    invalid timestamp removed the window and kept the bucket, so two unrelated
+    records an hour apart correlated -- and the timestamp is producer-controlled,
+    so this was reachable on purpose.
+    """
+    rows = [json.dumps({"event_type": "tool_start", "host": "h1",
+                        "timestamp": junk, "tool_name": tool})
+            for junk, tool in (("not-a-clock", "fetch_alpha"),
+                               ("also-broken", "send_payment"))]
+    sessions = load(write_jsonl(tmp_path, rows),
+                    correlator=Correlator(b"k"), quiet=True)
+    assert len(sessions) == 2, (
+        "two unrelated clockless records merged into one session: "
+        f"{[s.session_id for s in sessions]}")
+    assert all(s.correlation.kind == KIND_ISOLATED_ANON for s in sessions)
+    assert all(s.correlation.confidence == 0.0 for s in sessions), \
+        "a session the data cannot support must not carry confidence"
+
+
+def test_c403_a_valid_clock_still_scopes_and_merges(tmp_path):
+    """The fix must not isolate records that DO have a usable window."""
+    rows = [json.dumps({"event_type": "tool_start", "host": "h1",
+                        "timestamp": BASE + n, "tool_name": "fetch_x"})
+            for n in (0, 10)]
+    sessions = load(write_jsonl(tmp_path, rows),
+                    correlator=Correlator(b"k"), quiet=True)
+    assert len(sessions) == 1
+    assert sessions[0].correlation.kind == KIND_SCOPED_ANON
+
+
+# =====================================================================
+# C4-06  truthiness is not a schema
+# =====================================================================
+
+
+@pytest.mark.parametrize("value", ["false", "true", 0, 1, [], {}, None, "no"])
+def test_c406_requires_approval_must_be_a_boolean(value):
+    """``bool("false")`` is True, and this field changes what a check concludes.
+
+    Every other field on the record is type-checked. This one guessed, and it
+    guessed in the direction that suppresses a finding.
+    """
+    with pytest.raises(ManifestError):
+        CapabilityManifest.from_obj(
+            {"tools": {"t": {"effects": ["write"], "requires_approval": value}}})
+
+
+def test_c406_real_booleans_are_preserved():
+    for declared in (True, False):
+        m = CapabilityManifest.from_obj(
+            {"tools": {"t": {"effects": ["write"], "requires_approval": declared}}})
+        assert m.tools["t"].requires_approval is declared
+
+
+def test_c406_manifest_size_is_bounded(tmp_path):
+    """The manifest is usually generated by the producer being assessed."""
+    p = tmp_path / "m.json"
+    p.write_text(json.dumps({"tools": {f"tool_{n}": {"effects": ["read"]}
+                                       for n in range(200)}}))
+    with pytest.raises(ManifestError, match="max_manifest_bytes"):
+        CapabilityManifest.from_file(p, limits=Limits(max_manifest_bytes=256))
+    with pytest.raises(ManifestError, match="max_manifest_tools"):
+        CapabilityManifest.from_file(p, limits=Limits(max_manifest_tools=10))
+
+
+@pytest.mark.parametrize("spec", [
+    {"effects": ["egress"], "destination": "d" * 500},
+    {"effects": ["read"], "sensitive_args": ["a" * 500]},
+])
+def test_c406_manifest_field_lengths_are_bounded(spec):
+    with pytest.raises(ManifestError, match="max_manifest_field_chars"):
+        CapabilityManifest.from_obj({"tools": {"t": spec}})
+
+
+def test_c406_manifest_sensitive_arg_count_is_bounded():
+    with pytest.raises(ManifestError, match="max_manifest_sensitive_args"):
+        CapabilityManifest.from_obj(
+            {"tools": {"t": {"effects": ["read"],
+                             "sensitive_args": [f"a{n}" for n in range(100)]}}},
+            limits=Limits(max_manifest_sensitive_args=10))
+
+
+def test_c406_producer_metadata_is_not_coerced_with_str():
+    """``str(obj.get("producer"))`` sent a dict's repr to the SIEM as a producer."""
+    with pytest.raises(ManifestError):
+        CapabilityManifest.from_obj({"producer": {"nested": "object"},
+                                     "tools": {"t": {"effects": ["read"]}}})
+
+
+# =====================================================================
+# C4-07 / C4-08  the API permitted mutation behind a cache
+# =====================================================================
+
+
+def test_c407_event_raw_cannot_be_mutated_behind_the_view_cache():
+    """``Event.view`` is cached; ``Event.raw`` was not protected.
+
+    So the record and the engine's belief about the record could disagree
+    indefinitely, and nothing raised. A read-only tool stood in for whatever the
+    record actually said.
+    """
+    e = ev("tool_start", 0, tool_name="fetch_report",
+           data={"response_text": "nothing to report"})
+    assert e.tool_name == "fetch_report"        # populate the cache
+
+    with pytest.raises(TypeError):
+        e.raw["tool_name"] = "send_payment"
+    with pytest.raises(TypeError):
+        e.raw["data"]["response_text"] = "forged"
+    with pytest.raises(TypeError):
+        e.raw.update({"tool_name": "send_payment"})
+    with pytest.raises(TypeError):
+        e.raw.pop("tool_name")
+    with pytest.raises(FrozenInstanceError):     # the dataclass refuses rebinding
+        e.raw = {"tool_name": "send_payment"}
+
+    assert e.tool_name == "fetch_report"
+
+
+def test_c407_nested_sequences_are_frozen_but_still_read_normally():
+    e = ev("tool_end", 0, tool_name="fetch_x",
+           data={"injection_patterns": ["ignore previous", "exfiltrate"]})
+    # A frozen record's sequences are tuples, so there is no append to call.
+    with pytest.raises(AttributeError):
+        e.raw["data"]["injection_patterns"].append("forged")
+    with pytest.raises(TypeError):
+        e.raw["data"]["injection_patterns"][0] = "forged"
+    assert sess(e).injection_markers == ["ignore previous", "exfiltrate"], \
+        "freezing must not change what the checks read"
+
+
+def test_c407_freezing_does_not_change_record_identity():
+    """Digests must be stable across the change, or every stored verdict moves."""
+    raw = {"event_type": "tool_start", "timestamp": BASE, "session_id": "s",
+           "tool_name": "fetch_x", "data": {"tags": ["a", "b"], "n": 1}}
+    assert Event(raw=dict(raw)).digest() == Event(raw=dict(raw)).digest()
+    assert json.loads(json.dumps(json_safe(Event(raw=raw).raw))) == raw, \
+        "a frozen record must serialise back to the record that was read"
+
+
+def test_c408_sealed_session_cache_cannot_serve_a_replaced_event():
+    """The cache keyed on len(events), and length is not content.
+
+    ``s.events[0] = other`` left the length unchanged, so every cached feature --
+    tool classes, egress counts, the digest the verdict ID commits to -- was
+    served from the old set.
+    """
+    benign = ev("tool_start", 0, tool_name="fetch_report", span_id="A")
+    hostile = ev("tool_start", 0, tool_name="send_payment", span_id="A")
+    s = assemble([benign])[0]
+    assert s.sealed
+    assert s.features()["egress_count"] == 0
+
+    with pytest.raises(TypeError):
+        s.events[0] = hostile
+    with pytest.raises(AttributeError):
+        s.events.append(hostile)
+    with pytest.raises(SealedSessionError):
+        s.add_event(hostile)
+
+    assert s.features()["egress_count"] == 0
+
+
+def test_c408_streaming_assembly_still_invalidates():
+    """Sealing must not break the streaming path BUG-05 exists to protect."""
+    s = Session(session_id="live")
+    s.add_event(ev("tool_start", 0, tool_name="fetch_report", span_id="A"))
+    assert s.features()["egress_count"] == 0
+    s.add_event(ev("tool_start", 1, tool_name="send_payment", span_id="B"))
+    assert s.features()["egress_count"] == 1, "a cached feature outlived add_event"
+    s.seal()
+    s.seal()                                     # idempotent
+    assert s.sealed
+
+
+def test_c408_seal_preserves_derived_values():
+    events = [ev("tool_start", 0, tool_name="send_payment", span_id="A"),
+              ev("tool_end", 1, tool_name="send_payment", span_id="A")]
+    live = Session(session_id="s", events=list(events))
+    before = live.features()
+    live.seal()
+    assert live.features() == before, "sealing must not change what was derived"
+
+
+# =====================================================================
+# C4-09  the one reject where size IS the finding, logged as zero bytes
+# =====================================================================
+
+
+def test_c409_oversize_reject_carries_its_byte_count_and_digest(tmp_path):
+    """bytes_seen=0 and an empty digest, for a record rejected FOR ITS SIZE.
+
+    The byte count was already being computed to enforce the bound and was
+    thrown away, so an analyst asking "how big was it, and was it the same line
+    each time" got zeros and blanks.
+    """
+    p = tmp_path / "big.jsonl"
+    body = b'{"a":"' + b"x" * 5000 + b'"}'
+    p.write_bytes(body + b"\n")
+    rep = IngestReport()
+    list(read_events(p, limits=Limits(max_line_bytes=100), report=rep, quiet=True))
+
+    r = rep.rejects[0]
+    assert r.code == REJECT_LINE_TOO_LONG
+    assert r.bytes_seen == len(body), f"bytes_seen={r.bytes_seen}, real={len(body)}"
+    assert len(r.digest) == 16, "an oversize record must still be identifiable"
+    assert str(len(body)) in r.detail
+
+
+def test_c409_oversize_digest_is_stable_and_content_specific(tmp_path):
+    """Streamed over the whole line without ever retaining it."""
+    def digest_for(filler: bytes) -> str:
+        p = tmp_path / "big.jsonl"
+        p.write_bytes(b'{"a":"' + filler + b'"}\n')
+        rep = IngestReport()
+        list(read_events(p, limits=Limits(max_line_bytes=100), report=rep,
+                         quiet=True))
+        return rep.rejects[0].digest
+
+    assert digest_for(b"x" * 5000) == digest_for(b"x" * 5000)
+    assert digest_for(b"x" * 5000) != digest_for(b"y" * 5000)
+
+
+def test_c409_oversize_content_reaches_the_run_identity(tmp_path):
+    """C4-01's guarantee must hold for records too large to retain."""
+    def run_for(filler: bytes) -> str:
+        p = tmp_path / "big.jsonl"
+        p.write_bytes(b'{"a":"' + filler + b'"}\n')
+        rep = IngestReport(source=str(p))
+        load(p, limits=Limits(max_line_bytes=100), report=rep, quiet=True)
+        return rep.content_digest
+
+    assert run_for(b"x" * 5000) != run_for(b"y" * 5000), \
+        "two different oversize records produced the same input identity"
+
+
+def test_c409_oversize_line_without_trailing_newline(tmp_path):
+    """The resynchronisation path, at EOF rather than at a newline."""
+    p = tmp_path / "big.jsonl"
+    p.write_bytes(b"x" * 5000)
+    rep = IngestReport()
+    list(read_events(p, limits=Limits(max_line_bytes=100), report=rep, quiet=True))
+    assert rep.rejected == 1
+    assert rep.rejects[0].bytes_seen == 5000
+
+
+def test_c409_peak_memory_is_bounded_by_the_line_limit(tmp_path):
+    """A 4 MB line under a 1 KB bound must not be materialised to be counted."""
+    p = tmp_path / "big.jsonl"
+    p.write_bytes(b"z" * 4_000_000 + b"\n" + b'{"event_type":"turn"}\n')
+    rep = IngestReport()
+    events = list(read_events(p, limits=Limits(max_line_bytes=1024), report=rep,
+                              quiet=True))
+    assert rep.rejects[0].bytes_seen == 4_000_000
+    assert len(events) == 1, "the reader must resynchronise after an oversize line"

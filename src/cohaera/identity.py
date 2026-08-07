@@ -139,6 +139,19 @@ class Correlator:
             return hmac.new(self._secret, blob, hashlib.sha256).hexdigest()[:32]
         return hashlib.sha256(blob).hexdigest()[:32]
 
+    def _isolate(self, raw_digest: Callable[[], str] | str) -> CorrelationKey:
+        """A key that cannot collide with any other record's, by construction.
+
+        Used wherever the data does not support a merge. The ordinal makes it
+        unique even for two byte-identical records, because two identical
+        records with nothing to correlate on are still two records.
+        """
+        self._ordinal += 1
+        content = raw_digest() if callable(raw_digest) else raw_digest
+        token = self._mac("isolated", content, str(self._ordinal))
+        return CorrelationKey(f"anon-iso-{token}", KIND_ISOLATED_ANON,
+                              self.key_version, self.keyed)
+
     def key_for(self, rv: RecordView,
                 raw_digest: Callable[[], str] | str = "") -> CorrelationKey:
         """Return the session key for one validated record.
@@ -167,19 +180,27 @@ class Correlator:
             # except arrival time. Isolate the record instead. A single-event
             # session produces no cross-event finding, which is the correct
             # outcome: the data does not support one.
-            self._ordinal += 1
-            content = raw_digest() if callable(raw_digest) else raw_digest
-            token = self._mac("isolated", content, str(self._ordinal))
-            return CorrelationKey(f"anon-iso-{token}", KIND_ISOLATED_ANON,
-                                  self.key_version, self.keyed)
+            return self._isolate(raw_digest)
+
+        if rv.ts != rv.ts:                       # NaN: no usable clock
+            # C4-03, and the same fault as BUG-06 seen from the other side. A
+            # scoped anonymous key is identity PLUS a time window; the window is
+            # what stops every record a host ever emitted from collapsing into
+            # one session. With an unparseable clock there is no window, and the
+            # old key ``anon-<scope>-noclock`` was a single bucket that every
+            # clockless record for that scope fell into, for the whole run. Two
+            # unrelated events an hour apart merged, and the merged session then
+            # supported cross-event findings that the data never justified.
+            #
+            # An invalid timestamp is producer-controlled, so this was reachable
+            # on purpose: send two records with the same host and a junk clock
+            # and they correlate. Isolation is the honest key -- identity alone
+            # is not a session.
+            return self._isolate(raw_digest)
 
         scope = self._mac(*(f"{k}={v or ''}" for k, v in
                             zip(("host", "user", "agent", "fw"), ident,
                                 strict=True)))
-        if rv.ts != rv.ts:                       # NaN: no usable clock
-            return CorrelationKey(f"anon-{scope}-noclock", KIND_SCOPED_ANON,
-                                  self.key_version, self.keyed)
-
         start = self._window_start.get(scope)
         if start is None or rv.ts - start > self._window:
             self._window_start[scope] = rv.ts

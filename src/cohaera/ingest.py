@@ -22,10 +22,13 @@ built to break it rather than input that was merely malformed by accident:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest
 from .identity import ANON_WINDOW_S, Correlator
@@ -35,8 +38,12 @@ from .limits import (
     REJECT_MALFORMED_JSON,
     REJECT_NESTING_TOO_DEEP,
     REJECT_NOT_AN_OBJECT,
+    REJECT_RATIO_EXCEEDED,
+    REJECT_TOO_MANY_BYTES,
     REJECT_TOO_MANY_EVENTS,
     REJECT_TOO_MANY_KEYS,
+    REJECT_TOO_MANY_RECORDS,
+    REJECT_TOO_MANY_REJECTS,
     REJECT_TOO_MANY_SESSIONS,
     REJECT_UNDECODABLE,
     Limits,
@@ -45,25 +52,81 @@ from .limits import (
 from .model import Event, Session
 from .validate import IngestReport, Reject, digest_bytes, sanitise_display
 
-__all__ = ["ANON_WINDOW_S", "assemble", "load", "read_events"]
+__all__ = ["ANON_WINDOW_S", "RawLine", "assemble", "load", "read_events"]
 
 _CHUNK = 65536
 
 
-def _bounded_lines(path: Path, max_bytes: int) -> Iterator[tuple[int, bytes, bool]]:
-    """Yield ``(lineno, payload, oversize)`` without ever buffering an unbounded line.
+@dataclass(frozen=True)
+class RawLine:
+    """One physical record as it came off the disk, bounded but accounted for.
+
+    C4-09. The previous reader reported an oversize line as ``(lineno, b"",
+    True)`` and nothing else, so the quarantine ledger recorded the one class of
+    record where size IS the finding with ``bytes_seen=0`` and an empty digest.
+    An analyst asking "how big was the line that broke the budget, and was it
+    the same line each time" got zeros and blanks. The byte count was already
+    being computed to enforce the bound; it was simply thrown away.
+
+    ``payload`` is empty for an oversize line -- the content is still never
+    retained -- but ``nbytes`` and ``digest`` are real. The digest is streamed
+    over the whole line as it passes through, so two runs seeing the same
+    oversize record produce the same digest without either ever holding it.
+
+    ``digest`` is populated ONLY for an oversize line, which is the only case
+    where the caller cannot compute it from ``payload`` itself. Hashing every
+    line here would be a second SHA-256 pass over the whole file to produce a
+    value nothing reads on the healthy path.
+    """
+
+    lineno: int
+    payload: bytes          # b"" when oversize; the content is never retained
+    oversize: bool
+    nbytes: int             # bytes in the record, excluding the line terminator
+    digest: str             # sha256 of an oversize record; "" otherwise
+
+
+def _bounded_lines(path: Path, max_bytes: int) -> Iterator[RawLine]:
+    """Yield :class:`RawLine` without ever buffering an unbounded line.
 
     ``file.readline()`` reads until a newline arrives, so a producer that never
     emits one can force the reader to allocate the whole file. This reads fixed
-    chunks and abandons a line the moment it exceeds the bound, then resynchronises
-    on the next newline. An oversize line is reported once, with the byte count,
-    and its content is never retained.
+    chunks and abandons a line's CONTENT the moment it exceeds the bound, while
+    continuing to count and hash what streams past, then resynchronises on the
+    next newline. Peak memory is ``max_bytes + _CHUNK`` regardless of input.
     """
     with path.open("rb") as fh:
         buf = bytearray()
+        hasher: Any = None
+        nbytes = 0
         lineno = 1
-        skipping = False
-        skipped_bytes = 0
+        oversize = False
+
+        def feed(seg: bytes) -> None:
+            # Hashing starts only when a line goes oversize, and covers the
+            # prefix already buffered plus everything after it. Hashing every
+            # line here instead would cost a second SHA-256 pass over the whole
+            # file on the path where it is never read: a healthy record's digest
+            # is taken by the caller, from the bytes it already holds.
+            nonlocal nbytes, oversize, hasher
+            nbytes += len(seg)
+            if oversize:
+                hasher.update(seg)           # counted and hashed, not retained
+                return
+            # extend(), not ``+=``: an augmented assignment would rebind ``buf``
+            # as a local of this closure and raise UnboundLocalError.
+            buf.extend(seg)
+            if len(buf) > max_bytes:
+                oversize = True
+                hasher = hashlib.sha256()
+                hasher.update(buf)
+                buf.clear()
+
+        def finish() -> RawLine:
+            return RawLine(lineno=lineno, payload=b"" if oversize else bytes(buf),
+                           oversize=oversize, nbytes=nbytes,
+                           digest=hasher.hexdigest()[:16] if oversize else "")
+
         while True:
             chunk = fh.read(_CHUNK)
             if not chunk:
@@ -72,34 +135,18 @@ def _bounded_lines(path: Path, max_bytes: int) -> Iterator[tuple[int, bytes, boo
             while True:
                 nl = chunk.find(b"\n", start)
                 if nl < 0:
-                    tail = chunk[start:]
-                    if skipping:
-                        skipped_bytes += len(tail)
-                    else:
-                        buf += tail
-                        if len(buf) > max_bytes:
-                            skipping = True
-                            skipped_bytes = len(buf)
-                            buf.clear()
+                    feed(chunk[start:])
                     break
-                if skipping:
-                    skipped_bytes += nl - start
-                    yield lineno, b"", True
-                    skipping = False
-                    skipped_bytes = 0
-                else:
-                    buf += chunk[start:nl]
-                    if len(buf) > max_bytes:
-                        yield lineno, b"", True
-                    else:
-                        yield lineno, bytes(buf), False
-                    buf.clear()
+                feed(chunk[start:nl])
+                yield finish()
+                buf.clear()
+                hasher = None
+                nbytes = 0
+                oversize = False
                 lineno += 1
                 start = nl + 1
-        if skipping:
-            yield lineno, b"", True
-        elif buf:
-            yield lineno, bytes(buf), len(buf) > max_bytes
+        if nbytes:
+            yield finish()                   # last line, no trailing newline
 
 
 def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
@@ -119,32 +166,80 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
     rep.source = rep.source or p.name
 
     def _reject(lineno: int, code: str, detail: str = "",
-                blob: bytes = b"", nbytes: int = 0) -> None:
-        rep.note_bytes(blob, b"R" + code.encode("ascii"))
+                blob: bytes = b"", nbytes: int = 0, digest: str = "") -> None:
+        # The content digest must commit to everything READ. An oversize record
+        # is never retained, so its streamed digest stands in for its bytes.
+        rep.note_bytes(blob if blob else digest.encode("ascii"),
+                       b"R" + code.encode("ascii"))
         rep.add_reject(Reject(source=p.name, line=lineno, code=code,
                               detail=sanitise_display(detail, 200),
-                              digest=digest_bytes(blob) if blob else "",
+                              digest=digest or (digest_bytes(blob) if blob else ""),
                               bytes_seen=nbytes or len(blob)))
         if not quiet:
             print(f"[cohaera] {sanitise_display(p.name, 120)}:{lineno} "
                   f"{code}: {sanitise_display(detail, 160)}", file=sys.stderr)
 
-    for lineno, payload, oversize in _bounded_lines(p, limits.max_line_bytes):
-        if oversize:
+    records_read = 0
+    bytes_read = 0
+
+    def _budget_hit() -> tuple[str, str]:
+        """The first live budget this run has exhausted, as (code, detail).
+
+        C4-02. All of these used to be checked somewhere that a hostile file
+        could walk straight past. ``max_events_total`` counted only ACCEPTED
+        records, so a file of pure garbage was bounded by nothing; ``max_rejects``
+        and ``max_reject_ratio`` were checked by the CLI AFTER ``load`` had
+        already read every byte, which makes them a report rather than a budget.
+        Checked here, per record, they stop the work instead of describing it.
+        """
+        if records_read >= limits.max_records_total:
+            return REJECT_TOO_MANY_RECORDS, (
+                f"max_records_total={limits.max_records_total} reached")
+        if bytes_read >= limits.max_input_bytes:
+            return REJECT_TOO_MANY_BYTES, (
+                f"max_input_bytes={limits.max_input_bytes} reached "
+                f"after {bytes_read} byte(s)")
+        if rep.accepted >= limits.max_events_total:
+            return REJECT_TOO_MANY_EVENTS, (
+                f"max_events_total={limits.max_events_total} reached")
+        if limits.max_rejects is not None and rep.rejected > limits.max_rejects:
+            return REJECT_TOO_MANY_REJECTS, (
+                f"{rep.rejected} rejected record(s) exceeds "
+                f"max_rejects={limits.max_rejects}")
+        if (limits.max_reject_ratio is not None
+                and records_read >= limits.max_reject_ratio_floor
+                and rep.total
+                and rep.reject_ratio > limits.max_reject_ratio):
+            return REJECT_RATIO_EXCEEDED, (
+                f"reject ratio {rep.reject_ratio:.4f} exceeds "
+                f"max_reject_ratio={limits.max_reject_ratio}")
+        return "", ""
+
+    for raw in _bounded_lines(p, limits.max_line_bytes):
+        lineno = raw.lineno
+
+        code, detail = _budget_hit()
+        if code:
+            rep.aborted = True
+            rep.abort_reason = code
+            _reject(lineno, code, f"{detail}; remaining records not read")
+            return
+
+        records_read += 1
+        bytes_read += raw.nbytes
+
+        if raw.oversize:
+            # C4-09: the byte count and digest are real even though the content
+            # was never retained. Size is the whole of this finding.
             _reject(lineno, REJECT_LINE_TOO_LONG,
-                    f"line exceeds max_line_bytes={limits.max_line_bytes}")
+                    f"line exceeds max_line_bytes={limits.max_line_bytes} "
+                    f"({raw.nbytes} bytes)",
+                    nbytes=raw.nbytes, digest=raw.digest)
             continue
+        payload = raw.payload
         record = payload.strip()
         if not record:
             continue
-
-        if rep.accepted >= limits.max_events_total:
-            rep.aborted = True
-            rep.abort_reason = REJECT_TOO_MANY_EVENTS
-            _reject(lineno, REJECT_TOO_MANY_EVENTS,
-                    f"max_events_total={limits.max_events_total} reached; "
-                    "remaining records not read")
-            return
 
         try:
             line = record.decode("utf-8")
@@ -255,7 +350,11 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
     sessions = list(buckets.values())
     for s in sessions:
         s.events.sort(key=lambda x: x.sort_key)
-        s.invalidate()
+        # C4-08. Sealed, not merely invalidated. Batch assembly is finished with
+        # these sessions, and everything downstream caches derived values off
+        # them, so the event list is made immutable rather than left mutable
+        # behind a cache that only notices a change of LENGTH.
+        s.seal()
     sessions.sort(key=lambda s: (s.started_at, s.session_id))
     return sessions
 
