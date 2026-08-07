@@ -52,6 +52,7 @@ from cohaera.identity import Correlator
 from cohaera.ingest import assemble
 from cohaera.limits import DEFAULT_LIMITS, Limits
 from cohaera.model import Event, Session
+from eval.corpus import generate as gen
 from eval.metrics import Outcome
 
 # Where a tool's capability comes from. This is the axis the fourth review asked
@@ -150,8 +151,91 @@ def split(corpus: list[Labelled], regime: str, seed: int,
         return shuffled[:cut], shuffled[cut:]
 
     if regime == REGIME_TASK_DISJOINT:
-        units = sorted({s.task_id for s in corpus})
-    elif regime == REGIME_FAMILY_HOLDOUT:
+        # STRATIFIED by (family, kind), not a free shuffle over all tasks.
+        #
+        # Tasks stay disjoint -- that is the guarantee, and it is still asserted
+        # below -- but WHICH tasks land in train is no longer a coin flip per
+        # kind. A free shuffle gave each family a ~25% chance of putting both of
+        # its looping benign tasks in test, and with eight families the odds of
+        # that happening somewhere were about 90%. A baseline fitted on the
+        # remainder has then never seen an agent repeat its own spine, so every
+        # loop boundary in a long session scores as a novel transition and the
+        # dilution sessions stop measuring dilution.
+        #
+        # That is not a hypothetical: it is what this corpus revision hit, and
+        # `test_the_long_kinds_stay_below_ch01s_rate_threshold` is what caught
+        # it. The old numbers were not wrong so much as lucky, and a measurement
+        # that depends on the seed landing well is not a measurement.
+        #
+        # Stratifying does not weaken the split. Leakage is attempts of ONE task
+        # appearing on both sides; that is untouched. What it fixes is the train
+        # side being unrepresentative of the benign behaviour it is supposed to
+        # be a baseline OF -- which is what "fit on this agent's own history"
+        # means in a deployment, where the history contains the loops because
+        # the agent loops.
+        #
+        # Three groups, because two different things have to be true of train
+        # and a single rule cannot make both true.
+        #
+        # 1. PLAIN BENIGN is stratified per (family, kind), so every family
+        #    contributes ordinary work -- including a looping session -- to the
+        #    baseline. This is the fix for the failure above.
+        #
+        # 2. benign_hard_long_rare_action is assigned per FAMILY, and half the
+        #    families deliberately contribute NONE of it to train. This one is
+        #    not a shuffle at all, and the reason is that it was one and should
+        #    never have been. The card's "CH01 fires on 16 of 32" was a fact
+        #    about where the seed happened to land: stratifying this kind sent
+        #    the figure to 0 of 32, a free shuffle had previously sent it to
+        #    16, and a later draw could send it anywhere. A confounder whose
+        #    strength is a property of the seed cannot grade a detector, and
+        #    reporting the flattering draw of it is how a corpus starts lying.
+        #    Fixing the assignment makes the split of families -- some whose
+        #    fitted window contains the rare action, some whose does not -- a
+        #    stated property of the corpus, which is what it was always
+        #    claiming to be.
+        #
+        # 3. EVERYTHING ELSE stays on the free shuffle. Those confounders do not
+        #    depend on what the baseline learned, so nothing needs pinning.
+        plain = set(gen.PLAIN_BENIGN_KINDS)
+        kinds = {s.task_id: (s.family, s.kind) for s in corpus}
+        families = sorted({f for f, _ in kinds.values()})
+        # Families whose rare secondary action must stay OUT of the baseline.
+        confounding = {f for i, f in enumerate(families) if i % 2 == 0}
+
+        by_stratum: dict[tuple[str, str], list[str]] = defaultdict(list)
+        long_rare: dict[str, list[str]] = defaultdict(list)
+        loose: list[str] = []
+        train_units = set()
+        for task_id, (family, kind) in sorted(kinds.items()):
+            if kind in plain:
+                by_stratum[(family, kind)].append(task_id)
+            elif kind == gen.BENIGN_HARD_LONG_RARE:
+                long_rare[family].append(task_id)
+            else:
+                loose.append(task_id)
+        # A confounding family sends all of its long-rare tasks to test, so the
+        # baseline never learns its secondary action. A non-confounding family
+        # keeps ONE back for test as well -- it must, or the test split would
+        # contain nothing but sessions built to trip CH01 and the kind's row in
+        # the card would read 32 of 32 by construction. The control case, where
+        # the baseline HAS seen the rare action and the check correctly stays
+        # quiet, is half of what this kind is for.
+        for family, tasks in sorted(long_rare.items()):
+            if family not in confounding:
+                train_units.update(tasks[:-1])
+        for stratum in sorted(by_stratum):
+            group = by_stratum[stratum]
+            rng.shuffle(group)
+            train_units.update(group[:max(1, int(len(group) * (1 - test_fraction)))])
+        rng.shuffle(loose)
+        train_units.update(loose[:max(1, int(len(loose) * (1 - test_fraction)))])
+        train = [s for s in corpus if s.task_id in train_units]
+        test = [s for s in corpus if s.task_id not in train_units]
+        assert_disjoint(train, test, regime)
+        return train, test
+
+    if regime == REGIME_FAMILY_HOLDOUT:
         units = sorted({s.family for s in corpus})
     else:
         raise ValueError(f"unknown split regime {regime!r}")
@@ -159,8 +243,8 @@ def split(corpus: list[Labelled], regime: str, seed: int,
     rng.shuffle(units)
     cut = max(1, int(len(units) * (1 - test_fraction)))
     train_units = set(units[:cut])
-    key = ((lambda s: s.task_id) if regime == REGIME_TASK_DISJOINT
-           else (lambda s: s.family))
+    def key(s):
+        return s.family
     train = [s for s in corpus if key(s) in train_units]
     test = [s for s in corpus if key(s) not in train_units]
     assert_disjoint(train, test, regime)

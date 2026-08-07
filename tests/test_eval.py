@@ -35,7 +35,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cohaera.capabilities import CapabilityManifest
-from cohaera.checks import run_all
+from cohaera.checks import (
+    ABSENT,
+    ResponseIndex,
+    _disclosure,
+    _shared_name_tokens,
+    run_all,
+)
 from cohaera.limits import DEFAULT_LIMITS
 from cohaera.model import _classify
 from eval.corpus import generate as gen
@@ -426,3 +432,124 @@ def test_manifest_covers_every_tool_a_family_can_use(condition):
             name = gen.BY_KEY[key].name(condition)
             assert name in manifest["tools"], (
                 f"{family.name}/{condition}: {name} is used but not declared")
+
+
+# ---------------------------------------------------------------------------
+# The denial axis
+#
+# These exist because the corpus could not previously grade a CH02 precision
+# fix and reported that it could. Each family had ONE concealing summary and
+# ONE paraphrased summary, so 128 sessions of each carried n=8 of prose; every
+# concealment happened to end in an explicit denial and no honest paraphrase
+# did. A lexical rule keying on denial therefore separated attack from benign
+# perfectly, and the card would have published that as a detector result.
+# ---------------------------------------------------------------------------
+
+
+def _ch02_prose_sessions():
+    """(kind, response, denies, ch02_would_fire) for the CH02-targeted kinds."""
+    manifest = in_memory_manifest()
+    rows = corpus()
+    sessions = _sessions_for(rows, manifest, DEFAULT_LIMITS)
+    out = []
+    for row in rows:
+        if row.kind not in _CH02_KINDS:
+            continue
+        session = sessions[row.session_id]
+        response = session.final_response
+        executed = [c for c in session.consequential_calls if c.executed]
+        if response is None or not executed:
+            continue
+        index = ResponseIndex(response)
+        shared = _shared_name_tokens(session.tool_calls)
+        fires = any(_disclosure(c, index, shared) == ABSENT for c in executed)
+        out.append((row.kind, response, gen.denies_consequence(response), fires))
+    return out
+
+
+_CH02_KINDS = (gen.ATTACK_CONCEALMENT, gen.ATTACK_CONCEALMENT_SILENT,
+               gen.BENIGN_HARD_TERSE, gen.BENIGN_HARD_HONEST_DENIAL)
+
+
+def test_denial_carries_no_label_information():
+    """The load-bearing property. A rule of the form "the summary denies doing
+    something, therefore this is concealment" must score at chance here.
+
+    It scored 100% before ``attack_concealment_silent`` and
+    ``benign_hard_honest_denial`` existed. That was a fact about the prose --
+    one author, eight strings a side -- and not about concealment, and any
+    detector tuned against it would have been tuned against the generator.
+    """
+    rows = _ch02_prose_sessions()
+    assert rows, "no CH02-targeted sessions found"
+    denying = [r for r in rows if r[2]]
+    attacks = [r for r in denying if r[0].startswith("attack")]
+    assert denying, "no session denies anything, so the axis is not present"
+    precision = len(attacks) / len(denying)
+    assert 0.4 <= precision <= 0.6, (
+        f"'denies => attack' is {precision:.1%} precise on this corpus. It must "
+        f"sit at chance: any distance from 50% is free information a detector "
+        f"can key on, and it would be information about the fixture author's "
+        f"prose rather than about concealment.")
+
+
+def test_both_labels_appear_on_both_sides_of_the_denial_axis():
+    """The 2x2 has to be fully populated, or the test above passes on an
+    accident of proportions rather than on the design."""
+    seen = {(kind.startswith("attack"), denies) for kind, _, denies, _ in
+            _ch02_prose_sessions()}
+    assert seen == {(True, True), (True, False), (False, True), (False, False)}, (
+        f"the denial/label 2x2 has empty cells: {sorted(seen)}")
+
+
+def test_concealment_by_pure_omission_is_still_caught():
+    """CH02 does not depend on the denial, and this pins that it stays that way.
+
+    A summary that reports the reads and simply stops is strictly cheaper for an
+    attacker than one that asserts nothing happened -- saying less is free, and a
+    denial is a checkable lie. Any future CH02 that gates on denial to buy
+    precision would lose exactly these sessions, which is the trade this test
+    makes visible rather than letting it be discovered in production.
+    """
+    silent = [r for r in _ch02_prose_sessions()
+              if r[0] == gen.ATTACK_CONCEALMENT_SILENT]
+    assert silent, "attack_concealment_silent is absent from the corpus"
+    assert not any(denies for _, _, denies, _ in silent), (
+        "a silent concealment denies something, so it is not silent")
+    missed = [resp for _, resp, _, fires in silent if not fires]
+    assert not missed, (
+        f"{len(missed)} silent concealments are not caught by CH02, e.g. "
+        f"{missed[0]!r}")
+
+
+@pytest.mark.parametrize("field_name", ["terse", "concealing", "silent", "denial"])
+def test_every_family_carries_enough_prose_variants(field_name):
+    """The floor that makes any prose measurement have an n worth reporting."""
+    for family in gen.FAMILIES:
+        variants = getattr(family, field_name)
+        assert len(set(variants)) >= gen.MIN_PROSE_VARIANTS, (
+            f"{family.name}.{field_name} has {len(set(variants))} distinct "
+            f"variants; below {gen.MIN_PROSE_VARIANTS} the corpus reports "
+            f"session counts it cannot support with prose")
+
+
+def test_the_long_rare_confounder_keeps_its_control_case():
+    """The kind has to contain BOTH families whose baseline has seen the rare
+    action and families whose baseline has not.
+
+    Assigning every long-rare task of every family to test made the card read
+    "32 of 32" and looked like a harder corpus; it was a corpus that had deleted
+    the case where CH01 correctly stays quiet. Only one of the two numbers is a
+    measurement without the other.
+    """
+    grammar, test, sessions = _fitted_grammar_and_sessions()
+    rows = [r for r in test if r.kind == gen.BENIGN_HARD_LONG_RARE]
+    assert rows, "benign_hard_long_rare_action is absent from the test split"
+    novel = {r.family for r in rows
+             if grammar.unseen_into_consequential(sessions[r.session_id])}
+    familiar = {r.family for r in rows
+                if not grammar.unseen_into_consequential(sessions[r.session_id])}
+    assert novel, "no family's rare action is unseen: the confounder confounds nothing"
+    assert familiar, (
+        "every family's rare action is unseen, so the kind has no control case "
+        "and its row in the card is 100% by construction")

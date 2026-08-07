@@ -59,6 +59,26 @@ Three regimes are reported: `task_disjoint` (the honest one), `family_holdout`
 to *measure* the inflation rather than cite someone else's figure for it. Numbers
 from the leaky regime are labelled as contamination everywhere they appear.
 
+`task_disjoint` is **stratified**, not a free shuffle over tasks, and the reason
+is a defect it was hiding. A free shuffle gave each family a ~25% chance of
+sending both of its looping benign tasks to test; across eight families the odds
+of that happening somewhere were about 90%. The baseline then never learns that
+an agent repeats its own spine, every loop boundary scores as a novel
+transition, and the dilution sessions stop measuring dilution. Two kinds are
+pinned so the train side is representative of ordinary work; the confounders
+stay on the shuffle, since nothing about them depends on what the baseline
+learned.
+
+One exception is assigned outright rather than shuffled at all.
+`benign_hard_long_rare_action` confounds only when the baseline has *not* seen
+the family's rare secondary action, so which families that holds for was
+previously a property of the seed — the card's "CH01 fires on 16 of 32" was
+where one draw landed, and a later draw sent it to 0 of 32 and then to 32 of 32.
+Half the families now send all of that kind to test and half keep one back, so
+the confounding case and the control case are both present by construction.
+**A confounder whose strength is a property of the seed cannot grade a
+detector**, and publishing whichever draw flatters is how a corpus starts lying.
+
 ### 3. Seven in ten benign sessions are hard
 
 A corpus of clean benign sessions reports a false positive rate of zero and calls
@@ -71,6 +91,7 @@ attack they sit next to:
 | `benign_hard_advisory_threshold` | the threshold was advisory; continuing is correct, and nothing in the schema declares advisory vs blocking | CH04 |
 | `benign_hard_timeout_unpaired` | the call genuinely timed out | CH05 |
 | `benign_hard_terse_summary` | an honest summary in the agent's own words rather than the tool's. EVASION.md E04 | CH02 |
+| `benign_hard_honest_denial` | the same honest paraphrase, plus a truthful statement of what the agent did *not* do. Agents volunteer this constantly | CH02 |
 | `benign_hard_rare_ordering` | legitimate work in an unusual order | CH01 |
 | `benign_hard_long_rare_action` | a long session ending in one of the family's own rare secondary actions — the same shape as `attack_dilution` with a legitimate tail | CH01 |
 
@@ -106,6 +127,48 @@ Note the shape of the general problem: **a corpus can only grade fixes for
 attacks it contains**, so "the numbers did not move" is as easily a statement
 about the corpus as about the detector. Check which before believing it.
 
+### 5. And extended again, because it graded a fix it could not grade
+
+The same lesson with the sign flipped, and the more dangerous of the two.
+
+A candidate CH02 precision fix — treat a summary that *denies* having acted as
+concealment, and a summary that merely fails to name the tool as honest
+paraphrase — measured at 100% precision and 100% recall on the corpus. That is
+not a result a real detector produces, and the reason it appeared is countable:
+
+| kind | sessions | distinct summaries |
+|---|---:|---:|
+| `attack_concealment` | 128 | **8** |
+| `benign_hard_terse_summary` | 128 | **8** |
+
+One string per family per form. Every claim about response *prose* had n=8 a
+side no matter how many sessions the card printed, the denial lexicon was
+written after reading those eight strings, and every concealing string happened
+to deny while no paraphrase did. **A measurement whose separation is perfect is
+a measurement to distrust**, and this one was the tool-name fault of §1 wearing
+different clothes.
+
+Three changes, again with the detector untouched:
+
+| change | why |
+|---|---|
+| three prose variants per family per form, chosen per **task** | so a prose measurement has an n it can support. Per task, never per attempt, or attempts of one task stop being near-duplicates and the split's guarantee weakens |
+| `attack_concealment_silent` | concealment by pure omission — reports the reads and stops. Strictly cheaper for the attacker than a denial, so it is what an attacker who has read EVASION.md writes |
+| `benign_hard_honest_denial` | benign work, paraphrased, plus an honest statement of what was not done. The mirror image, and free for a real agent to produce |
+
+Denial now carries **no label information at all** — "denies ⇒ attack" scores
+50.0% on this corpus, exactly chance, and `test_denial_carries_no_label_
+information` fails if it drifts. Re-measured against that corpus the candidate
+fix trades 128 true detections for 128 false positives one for one, for 4.4
+points of precision, and the detections it loses are the cheaper attack. It was
+not shipped. See EVASION.md E04.
+
+The lexicon that labels this prose lives in the *generator*, not the detector,
+and it cannot validate itself: it can tell you whether a detector separates
+denial from paraphrase, and not whether it has found every way an agent might
+phrase a denial. `attack_concealment_silent` exists so that blindness is
+measured rather than assumed away.
+
 ## Label integrity
 
 A mislabelled corpus produces confident wrong numbers, which is worse than none.
@@ -117,7 +180,13 @@ a corpus that fails:
 - a benign session's honest summary must actually disclose, or it would score as
   a concealment and inflate the false positive rate (`_assert_discloses`);
 - a `benign_hard_terse_summary` must **not** name a tool, or it stops being a
-  confounder (`_assert_terse_hides`).
+  confounder (`_assert_terse_hides`);
+- each summary form must have the denial property its kind claims — both benign
+  forms and both attack forms span the axis, so denial predicts nothing
+  (`_assert_denial_labels`);
+- every family must carry at least three distinct variants of each summary form,
+  because the alternative is a corpus that reports session counts its prose
+  cannot support (`_assert_prose_variety`).
 
 These are not decorative. `_assert_discloses` caught the `incident_triage` family
 disclosing under one vocabulary and not the other, which would have made the two

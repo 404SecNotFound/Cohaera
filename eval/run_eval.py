@@ -285,6 +285,9 @@ def render_card(results: dict[str, Any], seed: int, summary: dict) -> str:
         gen.BENIGN_HARD_TIMEOUT: "a call timed out and emitted no terminal "
                                  "event (CH05)",
         gen.BENIGN_HARD_TERSE: "honest summary, paraphrased. EVASION.md E04 (CH02)",
+        gen.BENIGN_HARD_HONEST_DENIAL: "honest summary that also says what the agent "
+                                       "did NOT do. Denial carries no label "
+                                       "information here, by construction (CH02)",
         gen.BENIGN_HARD_RARE: "legitimate but rare ordering (CH01)",
         gen.BENIGN_LONG: "the same ordinary work, repeated. Second clean control, "
                          "and what teaches the baseline that agents loop",

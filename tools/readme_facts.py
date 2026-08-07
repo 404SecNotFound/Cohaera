@@ -172,6 +172,37 @@ def card_family_holdout_fpr_pct() -> str:
     return f"{m['false_positive_rate']['value'] * 100:.1f}"
 
 
+def card_family_holdout_recall_pct() -> str:
+    m = _metrics("unseen|family_holdout|manifest")
+    return f"{m['recall']['value'] * 100:.1f}"
+
+
+def card_e02_confounder_cost() -> int:
+    """False positives the closed E02 fix costs, on the kind it costs them on.
+
+    The README summarises the one closed evasion as costing N new false
+    positives. That N is a measured figure that moves with the corpus -- it has
+    already gone 16 -> 32 -- and prose is where measured figures go to rot.
+    """
+    return int(_card()["cells"][HEADLINE]["by_kind"]
+               ["benign_hard_long_rare_action"]["flagged"])
+
+
+def corpus_attack_shapes() -> int:
+    """How many distinct attack kinds the corpus actually generates.
+
+    Hand-written as "all five attack shapes caught" and left at five when a
+    sixth was added. It is the same fault as the "15 of 15" over a 19-row table:
+    a count in prose that nothing recomputes is a count that will be wrong the
+    first time the thing it counts changes.
+
+    Read off the card rather than imported from the generator, so this module
+    keeps needing nothing but the JSON on disk.
+    """
+    by_kind = _card()["cells"][HEADLINE]["by_kind"]
+    return sum(1 for kind in by_kind if kind.startswith("attack"))
+
+
 def _plain_benign() -> tuple[int, int]:
     """(flagged, total) over the benign kinds that are NOT confounders.
 
@@ -276,6 +307,13 @@ CLAIMS = (
     Claim("README family_holdout false positive rate", README,
           re.compile(r"the\s+false positive rate is ([\d.]+)%"),
           card_family_holdout_fpr_pct),
+    Claim("README E02 confounder cost", README,
+          re.compile(r"which cost (\d+) new false positives"),
+          card_e02_confounder_cost),
+    Claim("README family_holdout recall", README,
+          re.compile(r"recall drops to ([\d.]+)%"), card_family_holdout_recall_pct),
+    Claim("README attack shapes", README,
+          re.compile(r"all (\d+) attack shapes caught"), corpus_attack_shapes),
     Claim("README plain-benign false positives", README,
           re.compile(r"\*plain\* benign sessions \| \*\*(\d+) / \d+\*\*"),
           card_plain_benign_flagged),
