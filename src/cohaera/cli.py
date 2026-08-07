@@ -36,7 +36,7 @@ import sys
 from . import __version__
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest, ManifestError
 from .checks import SequenceGrammar, run_all
-from .identity import Correlator, digest, run_id
+from .identity import Correlator, run_id
 from .ingest import load
 from .limits import DEFAULT_LIMITS, Limits
 from .model import json_safe, to_cim_event
@@ -141,7 +141,8 @@ def cmd_score(args: argparse.Namespace) -> int:
         detector_version=__version__,
         config_hash=limits.digest(),
         source=str(args.telemetry),
-        input_digest=digest(report.summary(), 16),
+        # C4-01: the CONTENT of what was read, not the summary counts.
+        input_digest=report.content_digest,
         baseline_hash=baseline_hash,
         manifest_hash=manifest.digest,
     )

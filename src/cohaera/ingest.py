@@ -120,6 +120,7 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
 
     def _reject(lineno: int, code: str, detail: str = "",
                 blob: bytes = b"", nbytes: int = 0) -> None:
+        rep.note_bytes(blob, b"R" + code.encode("ascii"))
         rep.add_reject(Reject(source=p.name, line=lineno, code=code,
                               detail=sanitise_display(detail, 200),
                               digest=digest_bytes(blob) if blob else "",
@@ -185,6 +186,7 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
             continue
 
         e = Event(raw=obj, limits=limits)
+        rep.note_bytes(record, b"A")
         rep.note_defects(e.defects)
         rep.accepted += 1
         yield e

@@ -41,7 +41,7 @@ from cohaera.checks import (
     run_all,
 )
 from cohaera.cli import EXIT_BUDGET, EXIT_OK, EXIT_PARTIAL, EXIT_STRICT_REJECT
-from cohaera.identity import Correlator
+from cohaera.identity import Correlator, run_id
 from cohaera.ingest import assemble, load, read_events
 from cohaera.limits import (
     DEFAULT_LIMITS,
@@ -930,3 +930,70 @@ def test_load_reports_what_it_refused(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# =====================================================================
+# C4-01  identity must commit to content
+# =====================================================================
+
+def test_c401_different_input_at_the_same_path_gets_a_different_run_id(tmp_path):
+    """Run identity hashed the ingest SUMMARY -- source path plus counts.
+
+    Two entirely different files written to the same path with the same accepted
+    and rejected counts therefore produced the SAME analysis_run_id, and a SIEM
+    deduplicating on it would discard the second as a retry. Rewriting a log in
+    place is exactly what a rotating collector does.
+    """
+    p = tmp_path / "t.jsonl"
+
+    def run_for(response: str) -> str:
+        p.write_text(json.dumps({
+            "event_type": "model_response", "timestamp": BASE,
+            "session_id": "s", "data": {"response_text": response}}) + "\n")
+        rep = IngestReport(source=str(p))
+        load(p, report=rep, quiet=True)
+        return run_id(detector_version="test", config_hash=DEFAULT_LIMITS.digest(),
+                      source=str(p), input_digest=rep.content_digest)
+
+    benign = run_for("I sent nothing at all.")
+    hostile = run_for("I wired $40,000 to an external account.")
+    replay = run_for("I sent nothing at all.")
+
+    assert benign != hostile, "different telemetry must not share a run identity"
+    assert benign == replay, "identical telemetry must still be recognisable as a retry"
+
+
+def test_c401_content_digest_covers_rejected_records_and_order(tmp_path):
+    """Quarantined records are part of what was read, and order is identity."""
+    def digest_of(lines: list[str]) -> str:
+        p = tmp_path / "t.jsonl"
+        p.write_text("".join(x + "\n" for x in lines))
+        rep = IngestReport(source=str(p))
+        load(p, report=rep, quiet=True)
+        return rep.content_digest
+
+    good = json.dumps({"event_type": "tool_start", "timestamp": BASE,
+                       "session_id": "s", "tool_name": "x"})
+    other = json.dumps({"event_type": "tool_start", "timestamp": BASE,
+                        "session_id": "s", "tool_name": "y"})
+    assert digest_of([good]) != digest_of([good, "{not json"]), \
+        "a quarantined record changes what was read"
+    assert digest_of([good, other]) != digest_of([other, good]), \
+        "the same records in a different order are a different input"
+
+
+def test_c401_verdict_id_commits_to_events_and_coverage():
+    """verdict_id hashed only (run, session, findings), so two sessions with
+    different events but matching findings collided."""
+    def verdict_for(tool: str) -> str:
+        s = sess(ev("tool_start", 0, tool_name=tool, span_id="A"),
+                 ev("tool_end", 1, tool_name=tool, span_id="A"))
+        findings, cov = run_all(s)
+        return to_cim_event(s, findings, coverage=cov,
+                            provenance={"analysis_run_id": "run-1"})["verdict_id"]
+
+    # Both are clean read-only sessions producing an identical (empty) findings
+    # list. Only the evidence differs.
+    assert verdict_for("fetch_alpha") != verdict_for("fetch_beta"), \
+        "different evidence must produce a different verdict identity"
+    assert verdict_for("fetch_alpha") == verdict_for("fetch_alpha")

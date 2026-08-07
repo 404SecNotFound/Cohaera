@@ -295,10 +295,32 @@ class IngestReport:
     rejected: int = 0
     defective: int = 0
     rejects: list[Reject] = field(default_factory=list)
+    # C4-01. Run identity used to hash this report's SUMMARY -- source path plus
+    # counts -- so two entirely different files written to the same path with the
+    # same accepted and rejected counts produced the SAME analysis_run_id. A SIEM
+    # deduplicating on it would discard the second as a retry.
+    #
+    # This is a streaming hash over the exact bytes of every record read, in
+    # order, accepted and rejected alike. One hashlib update per line, no JSON
+    # round trip, so it costs nothing measurable. Order is deliberately part of
+    # the identity: the same records in a different order are a different input.
+    _content: Any = field(default_factory=hashlib.sha256, repr=False,
+                          compare=False)
     reject_codes: dict[str, int] = field(default_factory=dict)
     defect_codes: dict[str, int] = field(default_factory=dict)
     aborted: bool = False
     abort_reason: str = ""
+
+    def note_bytes(self, blob: bytes, tag: bytes = b"") -> None:
+        """Fold one raw record into the content digest, accepted or rejected."""
+        self._content.update(tag)
+        self._content.update(len(blob).to_bytes(8, "big"))
+        self._content.update(blob)
+
+    @property
+    def content_digest(self) -> str:
+        """Identity of what was actually READ, not of the summary counts."""
+        return self._content.hexdigest()[:32]
 
     def add_reject(self, r: Reject, keep: int = 1000) -> None:
         self.rejected += 1
@@ -331,6 +353,7 @@ class IngestReport:
             "defect_codes": dict(sorted(self.defect_codes.items())),
             "aborted": self.aborted,
             "abort_reason": self.abort_reason,
+            "content_digest": self.content_digest,
         }
 
     def merge(self, other: IngestReport) -> IngestReport:
@@ -342,6 +365,7 @@ class IngestReport:
             self.reject_codes[k] = self.reject_codes.get(k, 0) + v
         for k, v in other.defect_codes.items():
             self.defect_codes[k] = self.defect_codes.get(k, 0) + v
+        self.note_bytes(other.content_digest.encode("ascii"), b"MERGE")
         self.aborted = self.aborted or other.aborted
         self.abort_reason = self.abort_reason or other.abort_reason
         return self

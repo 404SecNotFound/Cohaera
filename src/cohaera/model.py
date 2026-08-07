@@ -17,6 +17,7 @@ type was never checked.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from collections import deque
@@ -25,7 +26,7 @@ from typing import Any, ClassVar
 
 from . import validate
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest
-from .identity import CorrelationKey, digest
+from .identity import CorrelationKey, canonical, digest
 from .identity import verdict_id as _verdict_id
 from .limits import DEFAULT_LIMITS, DEFECT_RESPONSE_TEXT_TYPE, Limits
 from .validate import json_safe  # re-exported: part of the public API
@@ -438,6 +439,24 @@ class Session:
         return self.correlation.confidence if self.correlation else 1.0
 
     @property
+    def content_digest(self) -> str:
+        """Identity of the events this session was actually built from.
+
+        C4-01: verdict_id committed only to (run, session_id, findings). Two
+        sessions with different events but the same findings therefore produced
+        the same verdict_id, so a SIEM deduplicating on it would drop the second
+        as a retry. Computed once per session, lazily, at emit time.
+        """
+        def build() -> str:
+            h = hashlib.sha256()
+            for e in self.ordered_events:
+                blob = canonical(e.raw).encode("utf-8")
+                h.update(len(blob).to_bytes(8, "big"))
+                h.update(blob)
+            return h.hexdigest()[:32]
+        return self._cached("content_digest", build)
+
+    @property
     def integrity_defects(self) -> dict[str, int]:
         """Field-level defect codes seen in this session, with counts."""
         def build() -> dict[str, int]:
@@ -831,8 +850,17 @@ def to_cim_event(session: Session, findings: list[Finding],
 
     finding_dicts = [f.as_dict() for f in findings]
     fdigest = digest(finding_dicts, 32)
-    vid = _verdict_id(run=str(prov.get("analysis_run_id", "")),
-                      session_id=session.session_id, findings_digest=fdigest)
+    vid = _verdict_id(
+        run=str(prov.get("analysis_run_id", "")),
+        session_id=session.session_id,
+        findings_digest=fdigest,
+        # C4-01: commit to the evidence and the confidence, not just the verdict.
+        # A session whose events or coverage changed is a different verdict even
+        # when the findings list happens to match.
+        session_digest=session.content_digest,
+        coverage_digest=digest(coverage or {}, 32),
+        schema=schema,
+    )
 
     record = {
         "type": "cohaera_session_verdict",
