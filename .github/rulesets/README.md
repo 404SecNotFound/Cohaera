@@ -36,8 +36,33 @@ Equivalent UI path: **Settings → Rules → Rulesets → New branch ruleset**.
 |---|---|
 | `deletion` | `main` cannot be deleted |
 | `non_fast_forward` | no force pushes |
-| `pull_request` | changes arrive through a PR; stale reviews dismissed on push; review threads must be resolved |
+| `pull_request` | changes arrive through a PR; **squash is the only merge method**; stale reviews dismissed on push; review threads must be resolved |
 | `required_status_checks` | all nine CI checks must pass, and the branch must be up to date with `main` first |
+
+## Why squash is the only merge method
+
+`allowed_merge_methods` is `["squash"]`, and that is a signing control rather than
+a style preference.
+
+GitHub signs commits it creates server-side with its own key. A squash merge is
+one such commit, so it lands **Verified** whether or not the contributor could
+sign anything locally. A merge commit is also GitHub-signed — but it *preserves
+the branch commits underneath it*, exactly as they were.
+
+This repository learned the difference the hard way. PR #3 was merged with a
+merge commit, and four locally-created unsigned commits survived beneath a
+Verified merge commit. `main` went from one unverified commit to five, and
+clearing them cost a history rewrite, a force push, and taking this ruleset down
+and putting it back up.
+
+With squash the branch commits are discarded at merge and only the GitHub-signed
+commit reaches `main`. Contributors who cannot sign locally can still land work
+that verifies.
+
+It also keeps `main` linear, which matters here for a second reason: the
+evaluation card in `eval/` is byte-reproducible per revision, and a linear
+history means `git log -p eval/EVALUATION-CARD.md` reads as a straight record of
+how the detector's measured behaviour changed.
 
 ## Two judgement calls, stated so they can be overridden
 
