@@ -33,7 +33,8 @@ import json
 import os
 import sys
 
-from .capabilities import CapabilityManifest, EMPTY_MANIFEST, ManifestError
+from . import __version__
+from .capabilities import EMPTY_MANIFEST, CapabilityManifest, ManifestError
 from .checks import SequenceGrammar, run_all
 from .identity import Correlator, digest, run_id
 from .ingest import load
@@ -137,7 +138,7 @@ def cmd_score(args: argparse.Namespace) -> int:
          f"{report.rejected} record(s) quarantined\n")
 
     run = run_id(
-        detector_version=_version(),
+        detector_version=__version__,
         config_hash=limits.digest(),
         source=str(args.telemetry),
         input_digest=digest(report.summary(), 16),
@@ -146,7 +147,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     )
     provenance = {
         "analysis_run_id": run,
-        "detector_version": _version(),
+        "detector_version": __version__,
         "config_hash": limits.digest(),
         "baseline_hash": baseline_hash,
         "capability_manifest": manifest.as_dict(),
@@ -211,11 +212,6 @@ def _write_reject_log(path: str, report: IngestReport) -> None:
             fh.write(json.dumps({"_summary": report.summary()}, sort_keys=True) + "\n")
     except OSError as exc:
         _err(f"[cohaera] could not write reject log: {sanitise_display(str(exc), 200)}")
-
-
-def _version() -> str:
-    from . import __version__
-    return __version__
 
 
 def _add_common(p: argparse._ActionsContainer) -> None:

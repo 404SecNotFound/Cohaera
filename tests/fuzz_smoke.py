@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import random
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 
@@ -39,10 +40,16 @@ SEED = 20260807
 
 # Every one of these is a value a producer can put in any JSON field, and every
 # one of them reached a type-specific operation somewhere in the pre-0.2 code.
+# NOTE ON ESCAPES. The hostile strings below are written as \u/\x escapes rather
+# than as literal characters. U+202E in particular is the Trojan Source bidi
+# override (CVE-2021-42574): pasted raw, it changes how the surrounding line
+# RENDERS to a human reviewer without changing what Python executes. A file that
+# fuzzes a security tool is the last place that should ship an unreadable line.
 SCALARS = [
     None, True, False, 0, 1, -1, 2 ** 63, -(2 ** 63), 0.0, 1.5, -1.5,
     float("inf"), float("-inf"), float("nan"),
-    "", " ", "\x00", "\n", "\x1b[2J", "‮", "🙂", "\\", '"',
+    "", " ", "\x00", "\n", "\x1b[2J", "\u202e",       # bidi override, escaped: see the note below
+    "\U0001f642", "\\", '"',
     "a" * 5000, "0", "1e400", "nan", "inf", "NaN", "Infinity",
     "<unnamed>", "send_email", "tool_start",
 ]
@@ -135,7 +142,7 @@ def score_in_memory(rng: random.Random, failures: dict) -> int:
                 # BUG-05: derived state must refresh when the session grows.
                 s.add_event(Event(raw=rand_record(rng)))
                 run_all(s, grammar)
-    except Exception as exc:                                    # noqa: BLE001
+    except Exception as exc:
         failures.setdefault(f"{type(exc).__name__}: {str(exc)[:90]}",
                             (records, traceback.format_exc()))
     return len(records)
@@ -158,7 +165,7 @@ def score_from_file(rng: random.Random, path: Path, failures: dict) -> int:
             blob = json.dumps(to_cim_event(s, findings, coverage=cov),
                               allow_nan=False)
             json.loads(blob, parse_constant=_no_bare_constants)
-    except Exception as exc:                                    # noqa: BLE001
+    except Exception as exc:
         failures.setdefault(f"INGEST {type(exc).__name__}: {str(exc)[:90]}",
                             (lines[:3], traceback.format_exc()))
     return len(lines)
@@ -173,15 +180,13 @@ def score_raw_bytes(rng: random.Random, path: Path, failures: dict) -> int:
         for s in assemble(events, report=rep):
             findings, cov = run_all(s)
             json.dumps(to_cim_event(s, findings, coverage=cov), allow_nan=False)
-    except Exception as exc:                                    # noqa: BLE001
+    except Exception as exc:
         failures.setdefault(f"BYTES {type(exc).__name__}: {str(exc)[:90]}",
                             (blob[:60], traceback.format_exc()))
     return 1
 
 
 def main(trials: int = 2000, seed: int = SEED) -> int:
-    import tempfile
-
     rng = random.Random(seed)
     failures: dict = {}
     records = 0

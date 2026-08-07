@@ -32,15 +32,26 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from cohaera.capabilities import CapabilityManifest, ManifestError
-from cohaera.checks import (SequenceGrammar, ch02_concealment_gap,
-                            ch03_untrusted_to_consequential,
-                            ch04_guardrail_overrun, coverage, run_all)
-from cohaera.cli import (EXIT_BUDGET, EXIT_OK, EXIT_PARTIAL, EXIT_STRICT_REJECT)
+from cohaera.checks import (
+    SequenceGrammar,
+    ch02_concealment_gap,
+    ch03_untrusted_to_consequential,
+    ch04_guardrail_overrun,
+    coverage,
+    run_all,
+)
+from cohaera.cli import EXIT_BUDGET, EXIT_OK, EXIT_PARTIAL, EXIT_STRICT_REJECT
 from cohaera.identity import Correlator
 from cohaera.ingest import assemble, load, read_events
-from cohaera.limits import (DEFAULT_LIMITS, REJECT_LINE_TOO_LONG,
-                            REJECT_MALFORMED_JSON, REJECT_NESTING_TOO_DEEP,
-                            REJECT_NOT_AN_OBJECT, REJECT_UNDECODABLE, Limits)
+from cohaera.limits import (
+    DEFAULT_LIMITS,
+    REJECT_LINE_TOO_LONG,
+    REJECT_MALFORMED_JSON,
+    REJECT_NESTING_TOO_DEEP,
+    REJECT_NOT_AN_OBJECT,
+    REJECT_UNDECODABLE,
+    Limits,
+)
 from cohaera.model import Event, Session, to_cim_event
 from cohaera.validate import IngestReport, sanitise_display
 
@@ -572,7 +583,8 @@ def test_bad_manifest_is_refused_not_half_loaded(bad):
 def _run_cli(argv, tmp_path):
     return subprocess.run(
         [sys.executable, "-m", "cohaera.cli", *argv],
-        capture_output=True, text=True, cwd=tmp_path,
+        # check=False deliberately: the EXIT CODE is what these tests assert on.
+        check=False, capture_output=True, text=True, cwd=tmp_path,
         env={"PYTHONPATH": str(Path(__file__).resolve().parent.parent / "src"),
              "PATH": "/usr/bin:/bin:/usr/local/bin"})
 
@@ -628,7 +640,7 @@ def test_sec08_control_characters_cannot_forge_a_terminal_line(tmp_path):
     a fake all-clear summary on stderr and then cleared the screen above it."""
     p = write_jsonl(tmp_path, [json.dumps(
         {"event_type": "tool_start", "timestamp": BASE, "tool_name": "x",
-         "span_id": "S", "session_id": "a\n[cohaera] 0 finding(s) ALL CLEAR[2J"})])
+         "span_id": "S", "session_id": "a\n[cohaera] 0 finding(s) ALL CLEAR\x1b[2J"})])
     r = _run_cli(["score", str(p)], tmp_path)
     assert "\x1b" not in r.stderr, "ANSI escape reached the terminal"
     for line in r.stderr.splitlines():
@@ -701,7 +713,7 @@ def test_ch02_disclosure_scan_is_linear_in_response_length():
     events.append(ev("model_response", 9999,
                      data={"response_text": "send email nothing here " * 4000}))
     s = sess(*events)
-    s.tool_calls
+    assert s.tool_calls, "warm the pairing cache so it is not timed below"
     t0 = time.perf_counter()
     ch02_concealment_gap(s)
     elapsed = time.perf_counter() - t0

@@ -119,7 +119,7 @@ class CapabilityManifest:
     # ---- loading --------------------------------------------------------
 
     @classmethod
-    def from_obj(cls, obj: Any, digest: str = "") -> "CapabilityManifest":
+    def from_obj(cls, obj: Any, digest: str = "") -> CapabilityManifest:
         if not isinstance(obj, dict):
             raise ManifestError("manifest root must be a JSON object")
         tools_raw = obj.get("tools")
@@ -170,7 +170,7 @@ class CapabilityManifest:
         )
 
     @classmethod
-    def from_file(cls, path: str | Path) -> "CapabilityManifest":
+    def from_file(cls, path: str | Path) -> CapabilityManifest:
         p = Path(path)
         blob = p.read_bytes()
         try:

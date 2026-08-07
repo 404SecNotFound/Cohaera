@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, asdict, replace
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -129,7 +129,7 @@ class Limits:
         blob = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
-    def with_overrides(self, **kw: Any) -> "Limits":
+    def with_overrides(self, **kw: Any) -> Limits:
         """Return a copy with the non-None overrides applied."""
         return replace(self, **{k: v for k, v in kw.items() if v is not None})
 

@@ -27,10 +27,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from cohaera.checks import (SequenceGrammar, ch01_sequence_order,
-                            ch02_concealment_gap, ch03_untrusted_to_consequential,
-                            ch04_guardrail_overrun, ch05_unpaired_calls,
-                            coverage, run_all)
+from cohaera.checks import (
+    SequenceGrammar,
+    ch01_sequence_order,
+    ch02_concealment_gap,
+    ch03_untrusted_to_consequential,
+    ch04_guardrail_overrun,
+    ch05_unpaired_calls,
+    coverage,
+    run_all,
+)
 from cohaera.ingest import assemble
 from cohaera.model import Event, Session
 
@@ -495,7 +501,7 @@ if __name__ == "__main__":
         except AssertionError as exc:
             print(f"  BLOCKED   {name}\n            -> {exc}")
             failed.append(name)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"  ERROR     {name}: {type(exc).__name__}: {exc}")
             failed.append(name)
     print(f"\n{len(fns) - len(failed)}/{len(fns)} evasions still work.")

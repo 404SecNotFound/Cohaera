@@ -33,8 +33,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from .limits import DEFAULT_LIMITS, Limits
 from .validate import RecordView, json_safe
@@ -139,7 +140,7 @@ class Correlator:
         return hashlib.sha256(blob).hexdigest()[:32]
 
     def key_for(self, rv: RecordView,
-                raw_digest: "Callable[[], str] | str" = "") -> CorrelationKey:
+                raw_digest: Callable[[], str] | str = "") -> CorrelationKey:
         """Return the session key for one validated record.
 
         Precedence: a producer-supplied session_id, then trace_id, then a
@@ -173,7 +174,8 @@ class Correlator:
                                   self.key_version, self.keyed)
 
         scope = self._mac(*(f"{k}={v or ''}" for k, v in
-                            zip(("host", "user", "agent", "fw"), ident)))
+                            zip(("host", "user", "agent", "fw"), ident,
+                                strict=True)))
         if rv.ts != rv.ts:                       # NaN: no usable clock
             return CorrelationKey(f"anon-{scope}-noclock", KIND_SCOPED_ANON,
                                   self.key_version, self.keyed)

@@ -33,12 +33,14 @@ from __future__ import annotations
 import re
 from bisect import bisect_right
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from itertools import pairwise
+from typing import Any
 
+from .identity import digest
 from .limits import DEFAULT_LIMITS, Limits
-from .model import (POLICY_EVENTS, SOURCE_MANIFEST, Finding, Session, ToolCall,
-                    cap_list)
+from .model import POLICY_EVENTS, SOURCE_MANIFEST, Finding, Session, ToolCall, cap_list
 from .validate import sanitise_display
 
 # ---------------------------------------------------------------------------
@@ -69,10 +71,10 @@ class SequenceGrammar:
         self.unigrams: Counter[str] = Counter()
         self.sessions_fitted = 0
 
-    def fit(self, sessions: Iterable[Session]) -> "SequenceGrammar":
+    def fit(self, sessions: Iterable[Session]) -> SequenceGrammar:
         for s in sessions:
             seq = [self.START, *s.tool_sequence, self.END]
-            for a, b in zip(seq, seq[1:]):
+            for a, b in pairwise(seq):
                 self.bigrams[(a, b)] += 1
             for t in seq:
                 self.unigrams[t] += 1
@@ -82,7 +84,7 @@ class SequenceGrammar:
     def score(self, session: Session) -> tuple[float, list[tuple[str, str]]]:
         """Return (violation_rate, unseen_transitions)."""
         seq = [self.START, *session.tool_sequence, self.END]
-        transitions = list(zip(seq, seq[1:]))
+        transitions = list(pairwise(seq))
         if not transitions:
             return 0.0, []
         unseen = [t for t in transitions if self.bigrams[t] == 0]
@@ -94,7 +96,6 @@ class SequenceGrammar:
 
     def fingerprint(self) -> str:
         """Content hash of what this grammar learned."""
-        from .identity import digest
         if not self.fitted:
             return ""
         return digest({
@@ -240,20 +241,18 @@ def _referenced(call: ToolCall, index: ResponseIndex) -> bool:
     reason CH02 ships at medium severity with a baseline-first instruction.
     """
     parts = {p for p in _SPLIT.split(call.name.lower()) if len(p) > 2}
-    matched = False
     for part in parts:
         occurrences = index.positions.get(part)
         if not occurrences:
             continue
-        matched = True
         if not index.has_negation:
             return True
         for pos in occurrences:
             if not index.negated(pos):
                 return True
-    # Every mention sat inside a negation span, so the summary denies the
-    # action rather than disclosing it. Not referenced.
-    return False if matched else False
+    # Either the name never appeared, or every mention of it sat inside a
+    # negation span and the summary denies the action rather than disclosing it.
+    return False
 
 
 def ch02_concealment_gap(session: Session,
@@ -862,7 +861,7 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
     # ---- CH04 -----------------------------------------------------------
     required = [SURFACE_TOOL_CLASS, SURFACE_EVENT_CLOCK, SURFACE_CORRELATION_KEY]
     if has_policy:
-        required = required + [SURFACE_POLICY_SEMANTICS]
+        required = [*required, SURFACE_POLICY_SEMANTICS]
     conf = corr_conf * class_conf * clock_conf
     reasons = common_reasons + class_reasons()
     missing = []

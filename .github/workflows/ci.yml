@@ -60,7 +60,14 @@ jobs:
           print("runtime dependencies: 0")
           PY
       - name: Lint
-        run: ruff check src tests
+        run: |
+          # Print the version. The rule set is pinned in pyproject's
+          # [tool.ruff.lint] select, so a version bump can no longer silently
+          # change what this gate means -- but when something does drift, the
+          # first question is always "which ruff", and it should not take a
+          # re-run to answer it.
+          ruff --version
+          ruff check src tests
       - name: Unit and hostile tests
         run: python -m pytest tests/ -q
       - name: Adversarial self-test

@@ -19,19 +19,34 @@ __version__ = "0.2.0"
 
 from .capabilities import Capability, CapabilityManifest, ManifestError
 from .checks import SequenceGrammar, coverage, run_all
-from .identity import Correlator, CorrelationKey
+from .identity import CorrelationKey, Correlator
 from .ingest import assemble, load, read_events
 from .limits import DEFAULT_LIMITS, Limits
 from .model import Event, Finding, Session, ToolCall, to_cim_event
-from .validate import IngestReport, Reject, RecordView, sanitise_display
+from .validate import IngestReport, RecordView, Reject, sanitise_display
 
 __all__ = [
+    "DEFAULT_LIMITS",
+    "Capability",
+    "CapabilityManifest",
+    "CorrelationKey",
+    "Correlator",
+    "Event",
+    "Finding",
+    "IngestReport",
+    "Limits",
+    "ManifestError",
+    "RecordView",
+    "Reject",
+    "SequenceGrammar",
+    "Session",
+    "ToolCall",
     "__version__",
-    "Event", "Session", "ToolCall", "Finding",
-    "read_events", "assemble", "load",
-    "SequenceGrammar", "run_all", "coverage", "to_cim_event",
-    "Limits", "DEFAULT_LIMITS",
-    "Capability", "CapabilityManifest", "ManifestError",
-    "Correlator", "CorrelationKey",
-    "IngestReport", "Reject", "RecordView", "sanitise_display",
+    "assemble",
+    "coverage",
+    "load",
+    "read_events",
+    "run_all",
+    "sanitise_display",
+    "to_cim_event",
 ]

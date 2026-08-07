@@ -39,11 +39,21 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .limits import (
-    DEFECT_DATA_TYPE, DEFECT_EVENT_TYPE_TYPE, DEFECT_IDENTITY_TYPE,
-    DEFECT_NUMERIC_NONFINITE, DEFECT_RESPONSE_TEXT_LENGTH,
-    DEFECT_RESPONSE_TEXT_TYPE, DEFECT_REVERSIBLE_TYPE, DEFECT_SESSION_KEY_TYPE,
-    DEFECT_SPAN_LENGTH, DEFECT_SPAN_TYPE, DEFECT_TIMESTAMP,
-    DEFECT_TOOL_NAME_LENGTH, DEFECT_TOOL_NAME_TYPE, DEFAULT_LIMITS, Limits,
+    DEFAULT_LIMITS,
+    DEFECT_DATA_TYPE,
+    DEFECT_EVENT_TYPE_TYPE,
+    DEFECT_IDENTITY_TYPE,
+    DEFECT_NUMERIC_NONFINITE,
+    DEFECT_RESPONSE_TEXT_LENGTH,
+    DEFECT_RESPONSE_TEXT_TYPE,
+    DEFECT_REVERSIBLE_TYPE,
+    DEFECT_SESSION_KEY_TYPE,
+    DEFECT_SPAN_LENGTH,
+    DEFECT_SPAN_TYPE,
+    DEFECT_TIMESTAMP,
+    DEFECT_TOOL_NAME_LENGTH,
+    DEFECT_TOOL_NAME_TYPE,
+    Limits,
 )
 
 _NAN = float("nan")
@@ -323,7 +333,7 @@ class IngestReport:
             "abort_reason": self.abort_reason,
         }
 
-    def merge(self, other: "IngestReport") -> "IngestReport":
+    def merge(self, other: IngestReport) -> IngestReport:
         self.accepted += other.accepted
         self.rejected += other.rejected
         self.defective += other.defective

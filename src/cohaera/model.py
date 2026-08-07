@@ -20,14 +20,15 @@ from __future__ import annotations
 import math
 import re
 from collections import deque
-from dataclasses import dataclass, field, asdict
-from typing import Any
+from dataclasses import asdict, dataclass, field
+from typing import Any, ClassVar
 
 from . import validate
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest
 from .identity import CorrelationKey, digest
-from .limits import DEFAULT_LIMITS, Limits
-from .validate import json_safe          # re-exported: part of the public API
+from .identity import verdict_id as _verdict_id
+from .limits import DEFAULT_LIMITS, DEFECT_RESPONSE_TEXT_TYPE, Limits
+from .validate import json_safe  # re-exported: part of the public API
 
 # ---------------------------------------------------------------------------
 # Vocabulary lifted from observra's schema/cim_schema.toml so Cohaera stays
@@ -644,7 +645,6 @@ class Session:
     @property
     def response_text_rejected(self) -> bool:
         """True if a model_response carried a response_text of the wrong type."""
-        from .limits import DEFECT_RESPONSE_TEXT_TYPE
         return DEFECT_RESPONSE_TEXT_TYPE in self.integrity_defects
 
     # ---- security-relevant counters -------------------------------------
@@ -792,7 +792,8 @@ class Finding:
     family: str = ""
     confidence: float = 1.0
 
-    _ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+    _ORDER: ClassVar[dict[str, int]] = {
+        "info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
     @property
     def rank(self) -> int:
@@ -822,8 +823,6 @@ def to_cim_event(session: Session, findings: list[Finding],
     bounds, the baseline or the detector version changes it, so a genuine
     re-analysis is visibly new.
     """
-    from .identity import verdict_id as _verdict_id
-
     fired = sorted({f.check for f in findings})
     families = sorted({f.family for f in findings if f.family})
     max_sev = max(findings, key=lambda f: f.rank).severity if findings else "info"

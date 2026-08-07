@@ -24,21 +24,28 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Iterable, Iterator
 
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest
 from .identity import ANON_WINDOW_S, Correlator
 from .limits import (
-    DEFAULT_LIMITS, Limits, REJECT_LINE_TOO_LONG, REJECT_MALFORMED_JSON,
-    REJECT_NESTING_TOO_DEEP, REJECT_NOT_AN_OBJECT, REJECT_TOO_MANY_EVENTS,
-    REJECT_TOO_MANY_KEYS, REJECT_TOO_MANY_SESSIONS, REJECT_UNDECODABLE,
+    DEFAULT_LIMITS,
+    REJECT_LINE_TOO_LONG,
+    REJECT_MALFORMED_JSON,
+    REJECT_NESTING_TOO_DEEP,
+    REJECT_NOT_AN_OBJECT,
+    REJECT_TOO_MANY_EVENTS,
+    REJECT_TOO_MANY_KEYS,
+    REJECT_TOO_MANY_SESSIONS,
+    REJECT_UNDECODABLE,
+    Limits,
     json_depth_exceeds,
 )
 from .model import Event, Session
 from .validate import IngestReport, Reject, digest_bytes, sanitise_display
 
-__all__ = ["read_events", "assemble", "load", "ANON_WINDOW_S"]
+__all__ = ["ANON_WINDOW_S", "assemble", "load", "read_events"]
 
 _CHUNK = 65536
 
@@ -126,8 +133,8 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
             _reject(lineno, REJECT_LINE_TOO_LONG,
                     f"line exceeds max_line_bytes={limits.max_line_bytes}")
             continue
-        payload = payload.strip()
-        if not payload:
+        record = payload.strip()
+        if not record:
             continue
 
         if rep.accepted >= limits.max_events_total:
@@ -139,9 +146,9 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
             return
 
         try:
-            line = payload.decode("utf-8")
+            line = record.decode("utf-8")
         except UnicodeDecodeError as exc:
-            _reject(lineno, REJECT_UNDECODABLE, str(exc), payload)
+            _reject(lineno, REJECT_UNDECODABLE, str(exc), record)
             continue
 
         # Depth first, before the recursive decoder ever sees the string.
@@ -164,7 +171,7 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
             continue
         except (ValueError, MemoryError) as exc:      # pragma: no cover - defensive
             _reject(lineno, REJECT_MALFORMED_JSON, f"{type(exc).__name__}: {exc}",
-                    payload)
+                    record)
             continue
 
         if not isinstance(obj, dict):
