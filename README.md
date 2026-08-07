@@ -21,8 +21,63 @@
 
 ---
 
+## The night watchman
+
+Imagine a night watchman. Very diligent. Every time something happens in the
+building he writes a note and drops it in a box. "Door opened." "Alarm sounded."
+"Van left the loading bay." He never misses anything.
+
+But he has one problem. He has no memory. Each note is written by a man who has
+just woken up: he looks at the one thing in front of him, decides whether it is
+alarming *by itself*, writes it down, and forgets.
+
+So he catches "the alarm sounded," because that is alarming on its own. He can
+never catch "the alarm sounded, **and then** the van left," because noticing that
+means holding two notes at the same time, and nobody in the building is doing
+that.
+
+That is agent telemetry today. The rule function is literally
+`evaluate_rules(event_type, data)`. One event, one dictionary, then gone. Nine
+rules ship upstream and every one of them asks a question about one note.
+
+Here is the part that makes this a finding rather than a complaint. **On the side
+of the box, somebody wrote instructions.** The upstream parser file declares
+correlation keys, with this description: *"Use session_id to group all events in
+a conversation."* Somebody knew the story lives across the notes. They wrote it
+down. Nothing in the system ever picks up the box and sorts it.
+
+**Cohaera is the person who reads the box.**
+
+That is the whole idea. It is not clever. It is the sort of thing that looks
+obvious once someone says it out loud, which is usually a good sign rather than
+a bad one.
+
+When we picked up the upstream project's own demo box and sorted it, we found:
+the cost guardrail went off at `t=915.750`, and eight seconds later the agent
+sent an email it could not take back. Both notes were in the box the whole time.
+Nobody had put them next to each other.
+
+**Now the part that matters more than the finding.** This shows the detector
+*fires*. It does not show the detector is *good*. Those are completely different
+claims and it is very easy to confuse them, especially when the thing you built
+has just done something impressive. Twelve clean sessions producing zero alerts
+sounds like a false positive rate of zero; it is not, because the baseline was
+fitted on those same twelve near-identical sessions. That is a smoke test wearing
+a lab coat.
+
+So there is a file in this repository called [EVASION.md](EVASION.md) whose
+entire job is to break this one. Fifteen constructed evasions, all currently
+working, each backed by a test that passes when the evasion succeeds. Read it
+before you trust anything else here.
+
+> The first principle is that you must not fool yourself, and you are the
+> easiest person to fool.
+
+---
+
 ## Contents
 
+- [The night watchman](#the-night-watchman)
 - [The problem in one page](#the-problem-in-one-page)
 - [Solution architecture](#solution-architecture)
 - [It fires on observra's own demo data](#it-fires-on-observras-own-demo-data)
@@ -36,6 +91,7 @@
 - [Prior work](#prior-work)
 - [Roadmap](#roadmap)
 - [Known limitations](#known-limitations)
+- [Known evasions](EVASION.md)
 - [Relationship to the upstream projects](#relationship-to-the-upstream-projects)
 
 ---
@@ -597,6 +653,12 @@ prevention claim collapses.
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
 - [x] Unit tests, 32 passing ([tests/test_cohaera.py](tests/test_cohaera.py))
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
+- [x] Adversarial self-test, 15 evasions ([EVASION.md](EVASION.md))
+- [x] Six correctness defects from external review, fixed with regression tests
+- [ ] Typed capability manifests per producer, replacing name heuristics
+- [ ] Cohaera schema 1.0 plus a tested Exabeam exporter and parser package
+- [ ] Streaming state with watermarks, replacing batch load
+- [ ] CH02 semantic matching
 - [ ] Validate content against a live SIEM
 - [ ] Build AIE-COHAERA-001 natively and compare against the Cohaera-fed version
 - [ ] Hash-chained verdict log, AEGIS pattern
@@ -641,6 +703,7 @@ docs/
 
 tests/
   test_cohaera.py     32 unit tests, no pytest required to run
+  test_evasion.py     15 adversarial tests that PASS when an evasion works
   make_fixtures.py    labelled benign and suspect telemetry
 
 FINDINGS.md           three source-verified observations against observra v1.1.0

@@ -54,10 +54,28 @@ def test_assemble_sorts_by_timestamp():
     assert [e.timestamp for e in s.events] == sorted(e.timestamp for e in s.events)
 
 
-def test_assemble_handles_missing_session_id():
-    e = Event(raw={"event_type": "x", "timestamp": BASE})
-    out = assemble([e])
-    assert len(out) == 1 and out[0].session_id == "<no-session-id>"
+def test_assemble_scopes_anonymous_events_and_never_merges_them_globally():
+    """C-04 regression. Anonymous events must not be joined across producers.
+
+    The old behaviour dropped every event with no session_id or trace_id into a
+    single '<no-session-id>' bucket, which let an injection marker on one host
+    correlate with an egress action on another host under a different user.
+    That is a finding the data does not support.
+    """
+    a = Event(raw={"event_type": "tool_end", "timestamp": BASE,
+                   "host": "host-A", "user": "alice", "tool_name": "fetch"})
+    b = Event(raw={"event_type": "tool_start", "timestamp": BASE + 5,
+                   "host": "host-B", "user": "bob", "tool_name": "send_email"})
+    out = assemble([a, b])
+    assert len(out) == 2, "unrelated producers must not share a session"
+    assert all(s.session_id.startswith("anon|") for s in out)
+
+    # Same producer inside the window still groups, which is the useful half.
+    c = Event(raw={"event_type": "tool_start", "timestamp": BASE,
+                   "host": "host-A", "user": "alice", "tool_name": "fetch"})
+    d = Event(raw={"event_type": "tool_end", "timestamp": BASE + 1,
+                   "host": "host-A", "user": "alice", "tool_name": "fetch"})
+    assert len(assemble([c, d])) == 1
 
 
 # ---------------------------------------------------------------- pairing

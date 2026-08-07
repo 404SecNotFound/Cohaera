@@ -76,7 +76,23 @@ class Event:
 
     @property
     def timestamp(self) -> float:
-        return float(self.raw.get("timestamp") or 0.0)
+        """Never raises. C-08: an unvalidated float() here was a trivial DoS.
+
+        A malformed timestamp returns NaN rather than killing the run. NaN sorts
+        last and is detectable downstream via ``timestamp_valid``.
+        """
+        raw = self.raw.get("timestamp")
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            return float(raw)
+        try:
+            return float(raw)  # numeric strings are tolerated
+        except (TypeError, ValueError):
+            return float("nan")
+
+    @property
+    def timestamp_valid(self) -> bool:
+        t = self.timestamp
+        return t == t and t > 0        # NaN != NaN
 
     @property
     def data(self) -> dict[str, Any]:
@@ -112,23 +128,52 @@ class ToolCall:
     had_args: bool = False             # was tool_args captured at all
     had_result: bool = False           # was tool_result captured at all
     error_class: str | None = None
+    # C-02 / C-05: an explicit pairing state beats inferring one from `result`.
+    #   open           tool_start with no terminal event yet
+    #   complete       start and terminal seen exactly once
+    #   orphan_end     terminal event with no matching start
+    #   duplicate_end  a second terminal event arrived for a completed call
+    state: str = "open"
 
     @property
     def klass(self) -> str:
         """read_only | state_change | egress | unknown.
 
-        Prefer observra's own ``reversible`` flag when present; fall back to
-        name matching. Upstream truth beats our heuristic.
+        C-03 fix. The producer's ``reversible`` flag is now authoritative in
+        BOTH directions, and it no longer only rescues names already classified
+        as read_only.
+
+        Precedence:
+          1. egress by name always wins. Data leaving the boundary is the
+             property that matters most and reversibility says nothing about it.
+          2. reversible is False  -> state_change
+          3. reversible is True   -> read_only
+          4. fall back to the name heuristic
+
+        Still a heuristic. The real fix is typed capability manifests per
+        producer, which is Phase 1 work, not this.
         """
         by_name = _classify(self.name)
-        if self.reversible is False and by_name == "read_only":
-            # observra says irreversible, our keyword said read. Trust observra.
+        if by_name == "egress":
+            return "egress"
+        if self.reversible is False:
             return "state_change"
+        if self.reversible is True:
+            return "read_only"
         return by_name
 
     @property
     def consequential(self) -> bool:
         return self.klass in {"state_change", "egress"}
+
+    @property
+    def executed(self) -> bool:
+        """Did this call actually complete successfully?
+
+        C-04 on the review's CH04 note: a started-but-failed call is not an
+        executed action, and treating it as one overstates impact.
+        """
+        return self.state == "complete" and self.result == "success"
 
 
 @dataclass
@@ -163,12 +208,16 @@ class Session:
 
     # ---- time -----------------------------------------------------------
     @property
+    def _valid_ts(self) -> list[float]:
+        return [e.timestamp for e in self.events if e.timestamp == e.timestamp]
+
+    @property
     def started_at(self) -> float:
-        return min((e.timestamp for e in self.events), default=0.0)
+        return min(self._valid_ts, default=0.0)
 
     @property
     def ended_at(self) -> float:
-        return max((e.timestamp for e in self.events), default=0.0)
+        return max(self._valid_ts, default=0.0)
 
     @property
     def duration_s(self) -> float:
@@ -183,8 +232,23 @@ class Session:
         because not every adapter propagates span_id consistently.
         """
         calls: list[ToolCall] = []
-        open_by_span: dict[str, ToolCall] = {}
-        open_by_name: dict[str, list[ToolCall]] = {}
+        # C-02 fix. Previously a span match popped the call out of open_by_span
+        # but left it in open_by_name, so a later name-only terminal event could
+        # find the SAME call again and overwrite a recorded success with a
+        # failure. One identity, removed from every index atomically.
+        open_by_span: dict[str, int] = {}          # span_id -> index into calls
+        open_by_name: dict[str, list[int]] = {}    # name    -> indices, FIFO
+        closed: set[int] = set()
+
+        def _release(idx: int) -> None:
+            """Remove this call from BOTH indices. The whole point of the fix."""
+            tc = calls[idx]
+            if tc.span_id and open_by_span.get(tc.span_id) == idx:
+                open_by_span.pop(tc.span_id, None)
+            bucket = open_by_name.get(tc.name)
+            if bucket and idx in bucket:
+                bucket.remove(idx)
+            closed.add(idx)
 
         for e in sorted(self.events, key=lambda x: x.timestamp):
             if e.event_type == "tool_start":
@@ -194,36 +258,59 @@ class Session:
                     span_id=e.raw.get("span_id"),
                     reversible=e.data.get("reversible"),
                     had_args=e.data.get("tool_args") is not None,
+                    state="open",
                 )
+                idx = len(calls)
                 calls.append(tc)
                 if tc.span_id:
-                    open_by_span[tc.span_id] = tc
-                open_by_name.setdefault(tc.name, []).append(tc)
+                    if tc.span_id in open_by_span:
+                        # Span collision: two open calls claim the same span.
+                        # Do not silently overwrite; leave the first indexed and
+                        # let this one fall back to name matching.
+                        pass
+                    else:
+                        open_by_span[tc.span_id] = idx
+                open_by_name.setdefault(tc.name, []).append(idx)
 
             elif e.event_type in {"tool_end", "tool_error"}:
-                tc = None
                 sid = e.raw.get("span_id")
+                name = e.tool_name or "<unnamed>"
+                idx: int | None = None
+
                 if sid and sid in open_by_span:
-                    tc = open_by_span.pop(sid)
+                    idx = open_by_span[sid]
                 else:
-                    pending = open_by_name.get(e.tool_name or "<unnamed>", [])
-                    tc = pending.pop(0) if pending else None
+                    bucket = open_by_name.get(name) or []
+                    idx = bucket[0] if bucket else None
 
-                if tc is None:
-                    # tool_end with no matching start. Record it anyway; an
-                    # unpaired terminal event is itself worth surfacing.
-                    tc = ToolCall(name=e.tool_name or "<unnamed>",
-                                  started_at=e.timestamp,
-                                  span_id=sid)
-                    calls.append(tc)
+                if idx is None or idx in closed:
+                    # No open start to match. Record it as an orphan terminal
+                    # rather than inventing a successful call out of nothing.
+                    orphan = ToolCall(
+                        name=name, started_at=e.timestamp, span_id=sid,
+                        ended_at=e.timestamp,
+                        result="failure" if e.event_type == "tool_error" else "success",
+                        duration_ms=e.data.get("duration_ms"),
+                        reversible=e.data.get("reversible"),
+                        had_result=e.data.get("tool_result") is not None,
+                        error_class=(e.data.get("error_class")
+                                     or e.data.get("error_type_name")),
+                        state="orphan_end",
+                    )
+                    calls.append(orphan)
+                    continue
 
+                tc = calls[idx]
+                _release(idx)
                 tc.ended_at = e.timestamp
                 tc.result = "failure" if e.event_type == "tool_error" else "success"
                 tc.duration_ms = e.data.get("duration_ms")
-                tc.error_class = e.data.get("error_class") or e.data.get("error_type_name")
+                tc.error_class = (e.data.get("error_class")
+                                  or e.data.get("error_type_name"))
                 if e.data.get("reversible") is not None:
                     tc.reversible = e.data.get("reversible")
                 tc.had_result = e.data.get("tool_result") is not None
+                tc.state = "complete"
 
         return calls
 
@@ -316,7 +403,10 @@ class Session:
             "state_change_count": sum(1 for c in calls if c.klass == "state_change"),
             "egress_count": sum(1 for c in calls if c.klass == "egress"),
             "unknown_class_count": sum(1 for c in calls if c.klass == "unknown"),
-            "unpaired_calls": sum(1 for c in calls if c.result is None),
+            "unpaired_calls": sum(1 for c in calls
+                                  if c.state in {"open", "orphan_end"}),
+            "open_starts": sum(1 for c in calls if c.state == "open"),
+            "orphan_terminals": sum(1 for c in calls if c.state == "orphan_end"),
             "error_count": self.error_count,
             "injection_markers": self.injection_markers,
             "max_delegation_depth": self.max_delegation_depth,
