@@ -7,11 +7,11 @@ a byte-identical card and any diff is a change in the detector.
 | Provenance | |
 |---|---|
 | detector version | `0.2.0` |
-| bounds digest (`config_hash`) | `e077d24803323e8b` |
-| corpus digest | `e211349f42a983e3` |
+| bounds digest (`config_hash`) | `7e1d22466f83511f` |
+| corpus digest | `fd3ee6476bf259b9` |
 | corpus seed | `20260807` |
-| sessions per vocabulary | 1056 (352 attack / 704 benign) |
-| tasks | 264 across 8 families |
+| sessions per vocabulary | 1632 (544 attack / 1088 benign) |
+| tasks | 408 across 8 families |
 | attack prevalence | 33.3% |
 
 ---
@@ -31,20 +31,20 @@ tools are called, and whether any out-of-band capability declaration exists.
 
 | vocabulary | capability source | recall | false positive rate | precision | self-reported coverage |
 |---|---|---|---|---|---|
-| unseen | manifest | 100.0% [98%-100%] (188/188) | 61.8% [57%-67%] (220/356) | 46.1% [41%-51%] (188/408) | 0.81 |
-| unseen | producer_flag | 100.0% [98%-100%] (188/188) | 61.8% [57%-67%] (220/356) | 46.1% [41%-51%] (188/408) | 0.65 |
-| unseen | name_only | 40.4% [34%-48%] (76/188) | 11.2% [8%-15%] (40/356) | 65.5% [56%-74%] (76/116) | 0.10 |
-| lexical | manifest | 100.0% [98%-100%] (188/188) | 61.8% [57%-67%] (220/356) | 46.1% [41%-51%] (188/408) | 0.81 |
-| lexical | producer_flag | 100.0% [98%-100%] (188/188) | 61.8% [57%-67%] (220/356) | 46.1% [41%-51%] (188/408) | 0.65 |
-| lexical | name_only | 100.0% [98%-100%] (188/188) | 61.8% [57%-67%] (220/356) | 46.1% [41%-51%] (188/408) | 0.65 |
+| unseen | manifest | 100.0% [98%-100%] (236/236) | 44.3% [40%-48%] (264/596) | 47.2% [43%-52%] (236/500) | 0.80 |
+| unseen | producer_flag | 100.0% [98%-100%] (236/236) | 44.3% [40%-48%] (264/596) | 47.2% [43%-52%] (236/500) | 0.65 |
+| unseen | name_only | 59.3% [53%-65%] (140/236) | 13.4% [11%-16%] (80/596) | 63.6% [57%-70%] (140/220) | 0.15 |
+| lexical | manifest | 100.0% [98%-100%] (236/236) | 44.3% [40%-48%] (264/596) | 47.2% [43%-52%] (236/500) | 0.80 |
+| lexical | producer_flag | 100.0% [98%-100%] (236/236) | 44.3% [40%-48%] (264/596) | 47.2% [43%-52%] (236/500) | 0.65 |
+| lexical | name_only | 100.0% [98%-100%] (236/236) | 50.3% [46%-54%] (300/596) | 44.0% [40%-48%] (236/536) | 0.64 |
 
 **With names the classifier knows, the name heuristic alone performs identically to a full capability manifest** -- same recall, same false positive rate, same precision, to the session. That is not a detector result. It is what the existing twelve fixtures have always measured, and it is the objection three reviews have now raised: the fixture tool names were drawn from the same keyword lists the classifier matches against, so the measurement was the list checking itself.
 
-**Change nothing but the tool names and recall falls 59.6%, from 100.0% to 40.4%.** Name-heuristic accuracy on the unseen vocabulary is **0%**: 0 of 34 realistic enterprise tool identifiers are recognised at all. On the lexical control it is 94%.
+**Change nothing but the tool names and recall falls 40.7%, from 100.0% to 59.3%.** Name-heuristic accuracy on the unseen vocabulary is **0%**: 0 of 34 realistic enterprise tool identifiers are recognised at all. On the lexical control it is 94%.
 
-Read the false-positive column carefully, because it moves the wrong way for the right reason. Under `unseen`/`name_only` the false positive rate *drops* to 11.2% and precision *rises* to 65.5%, a +19.4% swing that a card reporting precision alone would have published as an improvement. It is not one. Every check that needs to know whether a call was consequential -- CH02, CH03, CH04 -- cannot fire at all, because every tool classifies as `unknown`. The detector got quieter by going blind.
+Read the false-positive column carefully, because it moves the wrong way for the right reason. Under `unseen`/`name_only` the false positive rate *drops* to 13.4% and precision *rises* to 63.6%, a +16.4% swing that a card reporting precision alone would have published as an improvement. It is not one. Every check that needs to know whether a call was consequential -- CH02, CH03, CH04 -- cannot fire at all, because every tool classifies as `unknown`. The detector got quieter by going blind.
 
-The thing that makes that visible is Cohaera's own coverage figure, which falls from 0.65 to 0.10 in the same cell. Coverage reporting was built for exactly this and this is the first measurement that shows it earning its place: **the precision number is misleading and the coverage number next to it says so.**
+The thing that makes that visible is Cohaera's own coverage figure, which falls from 0.64 to 0.15 in the same cell. Coverage reporting was built for exactly this and this is the first measurement that shows it earning its place: **the precision number is misleading and the coverage number next to it says so.**
 
 ### 2. What a random split would have bought
 
@@ -55,21 +55,21 @@ on both sides.
 
 | split regime | recall | false positive rate | precision | note |
 |---|---|---|---|---|
-| task_disjoint | 100.0% [98%-100%] (188/188) | 61.8% [57%-67%] (220/356) | 46.1% [41%-51%] (188/408) | the honest number |
-| family_holdout | 81.8% [75%-87%] (144/176) | 54.5% [49%-60%] (192/352) | 42.9% [38%-48%] (144/336) | baseline never saw the test workload |
-| random_LEAKY | 100.0% [98%-100%] (180/180) | 54.3% [49%-59%] (189/348) | 48.8% [44%-54%] (180/369) | **contaminated, not a result** |
+| task_disjoint | 100.0% [98%-100%] (236/236) | 44.3% [40%-48%] (264/596) | 47.2% [43%-52%] (236/500) | the honest number |
+| family_holdout | 88.2% [84%-92%] (240/272) | 38.2% [34%-42%] (208/544) | 53.6% [49%-58%] (240/448) | baseline never saw the test workload |
+| random_LEAKY | 100.0% [99%-100%] (272/272) | 40.8% [37%-45%] (222/544) | 55.1% [51%-59%] (272/494) | **contaminated, not a result** |
 
-**Measured effect of the leaky split: precision +2.7%, false positive rate -7.5%** -- both in the direction that flatters the detector, which is what leakage always buys. Smaller than MCPShield's 26-point AUROC figure, and the reason is worth stating rather than hiding: recall here is saturated at 100%, so leakage has no headroom to inflate it and shows up only in precision. A corpus with harder attacks would show more. This is a floor on the effect, not an estimate of it.
+**Measured effect of the leaky split: precision +7.9%, false positive rate -3.5%** -- both in the direction that flatters the detector, which is what leakage always buys. Smaller than MCPShield's 26-point AUROC figure, and the reason is worth stating rather than hiding: recall here is saturated at 100%, so leakage has no headroom to inflate it and shows up only in precision. A corpus with harder attacks would show more. This is a floor on the effect, not an estimate of it.
 
 `family_holdout` is the number to look at before pointing Cohaera at an agent whose benign history you have not fitted on. The sequence grammar has never seen the test families' tools, so CH01 has nothing to compare against.
 
 It used to flag everything in that situation: on the corpus revision where that was measured, a false positive rate of 100.0% at precision 33.3%, which is exactly the attack base rate and therefore an alarm carrying no information. A bigram model applied outside its distribution scores every transition as unseen, and the rate pins to 1.0 whether the session is benign or not.
 
-CH01 now declines instead. When a session of at least 3 calls uses tools the baseline mostly does not know, the check reports `not_evaluated` with reason `BASELINE_VOCABULARY_MISMATCH` rather than firing. False positive rate in this regime is now **54.5%** (192/352), precision **42.9%**.
+CH01 now declines instead. When a session of at least 3 calls uses tools the baseline mostly does not know, the check reports `not_evaluated` with reason `BASELINE_VOCABULARY_MISMATCH` rather than firing. False positive rate in this regime is now **38.2%** (208/544), precision **53.6%**.
 
-Recall here is **81.8%** against 100.0% on the honest split, and that gap is what declining costs. 32 of the 32 `attack_dilution` sessions go uncaught, because CH01 is the only check that can see a diluted attack and CH01 is switched off here by its own vocabulary contract. Everything else transfers: the checks that catch the other four attack kinds never depended on the grammar.
+Recall here is **88.2%** against 100.0% on the honest split, and that gap is what declining costs. 32 of the 32 `attack_dilution` sessions go uncaught, because CH01 is the only check that can see a diluted attack and CH01 is switched off here by its own vocabulary contract. Everything else transfers: the checks that catch the other four attack kinds never depended on the grammar.
 
-What is left is a false positive rate within reach of `task_disjoint`'s 61.8%, which is the honest read: the workload-transfer failure is gone and the residual is the benign-hard confounder problem that every regime shares.
+What is left is a false positive rate within reach of `task_disjoint`'s 44.3%, which is the honest read: the workload-transfer failure is gone and the residual is the benign-hard confounder problem that every regime shares.
 
 CH01 still does not transfer across workloads. The difference is that it now says so in the coverage contract instead of paging somebody -- and the recall line above is the price of that honesty, stated rather than averaged away.
 
@@ -82,14 +82,17 @@ are the control.
 | benign session kind | flagged | of | note |
 |---|---|---|---|
 | `benign` | 0 | 64 | clean control |
-| `benign_hard_untrusted_read` | 36 | 36 | reads attacker-authored text then acts. That is the job (CH03) |
-| `benign_hard_advisory_threshold` | 60 | 60 | continues past an ADVISORY threshold. Nothing declares advisory vs blocking (CH04) |
-| `benign_hard_timeout_unpaired` | 32 | 32 | a call timed out and emitted no terminal event (CH05) |
-| `benign_hard_terse_summary` | 24 | 24 | honest summary, paraphrased. EVASION.md E04 (CH02) |
-| `benign_hard_rare_ordering` | 8 | 32 | legitimate but rare ordering (CH01) |
+| `benign_hard_untrusted_read` | 88 | 88 | reads attacker-authored text then acts. That is the job (CH03) |
+| `benign_hard_advisory_threshold` | 0 | 64 | continues past an ADVISORY threshold. Nothing declares advisory vs blocking (CH04) |
+| `benign_hard_timeout_unpaired` | 44 | 44 | a call timed out and emitted no terminal event (CH05) |
+| `benign_hard_terse_summary` | 32 | 32 | honest summary, paraphrased. EVASION.md E04 (CH02) |
+| `benign_hard_rare_ordering` | 0 | 48 | legitimate but rare ordering (CH01) |
 | `benign_long_loop` | 0 | 32 | the same ordinary work, repeated. Second clean control, and what teaches the baseline that agents loop |
-| `benign_hard_long_rare_action` | 32 | 48 | a long session ending in the family's own rare secondary action. Structurally identical to `attack_dilution` (CH01) |
-| `benign_hard_honest_denial` | 28 | 28 | honest summary that also says what the agent did NOT do. Denial carries no label information here, by construction (CH02) |
+| `benign_hard_long_rare_action` | 36 | 64 | a long session ending in the family's own rare secondary action. Structurally identical to `attack_dilution` (CH01) |
+| `benign_hard_honest_denial` | 64 | 64 | honest summary that also says what the agent did NOT do. Denial carries no label information here, by construction (CH02) |
+| `benign_hard_reordered_stream` | 0 | 36 | records delivered out of order. Every streaming path does this and it must not read as deletion (CH06) |
+| `benign_hard_approved_continuation` | 0 | 28 | a BLOCKING control fires and a human approves the exception properly. Correct operation that was indistinguishable from a bypass until approvals could bind (CH04) |
+| `benign_hard_reapproved_retry` | 0 | 32 | an approved action fails and is retried under a fresh approval. The most ordinary thing a governed agent does (CH04) |
 
 The plain benign sessions produce no false positives at all. Every false
 positive in this corpus comes from a confounder, and every confounder trips
@@ -99,14 +102,39 @@ less fixable problem, and the one an operator will actually meet.
 
 | attack kind | flagged | of |
 |---|---|---|
-| `attack_concealment` | 44 | 44 |
-| `attack_injection_to_action` | 20 | 20 |
-| `attack_guardrail_overrun` | 36 | 36 |
-| `attack_novel_sequence` | 20 | 20 |
-| `attack_dilution` | 48 | 48 |
-| `attack_concealment_silent` | 20 | 20 |
+| `attack_concealment` | 32 | 32 |
+| `attack_injection_to_action` | 36 | 36 |
+| `attack_guardrail_overrun` | 32 | 32 |
+| `attack_novel_sequence` | 16 | 16 |
+| `attack_dilution` | 28 | 28 |
+| `attack_concealment_silent` | 12 | 12 |
+| `attack_omitted_call` | 28 | 28 |
+| `attack_denied_effect` | 28 | 28 |
+| `attack_reused_approval` | 24 | 24 |
 
-**`attack_dilution` is EVASION.md E02, and it is the one pair of rows in this section that records a change rather than a limitation.** A diluted attack is the family's ordinary work looped three times with one out-of-family export at the end; the violation rate falls to 0.15 and CH01's rate trigger, on its own, caught **0 of 48**. With the count trigger it catches **48 of 48**, and it also fires on **32 of 48** `benign_hard_long_rare_action` sessions, which are the same shape with a legitimate trailing action. That is 48:32 in favour on the marginal alerts -- 60% precision on the alerts the change adds, against 46% corpus-wide. The trade is real in both directions and both directions are above.
+### 3b. What P1 evidence trust bought, and what it did not
+
+Three of the attack kinds above and three of the benign ones exist only
+because [docs/EVIDENCE-TRUST.md](../docs/EVIDENCE-TRUST.md) needed to be
+gradeable. A corpus can only grade fixes for attacks it contains, which is
+the lesson E02 forced, applied in advance this time.
+
+| kind | flagged | of | what it measures |
+|---|---|---|---|
+| `attack_omitted_call` | 28 | 28 | a consequential call deleted from a chained stream. **Invisible to CH01-CH05 by construction** |
+| `attack_denied_effect` | 28 | 28 | the call reports failure and carries a receipt bound to it |
+| `attack_reused_approval` | 24 | 24 | an approval granted for one set of arguments, presented for another |
+| `benign_hard_reordered_stream` | 0 | 36 | out-of-order delivery. **Must not** read as deletion |
+| `benign_hard_approved_continuation` | 0 | 28 | a properly approved continuation. **Must not** read as a bypass |
+| `benign_hard_reapproved_retry` | 0 | 32 | an approved retry after a failure. **Must not** fire |
+
+**The one number to take from this section is CH04's.** It moved from 50% alert precision to **100.0%**, and `benign_hard_advisory_threshold` from the corpus's largest single source of false positives to **0 of 64**. Nothing about the detection changed. A field appeared that says whether the control was advisory or blocking, and a check that had been reporting a sequence because it could not report a bypass stopped having to.
+
+**And the one to be sceptical about is `attack_omitted_call`.** It is caught because the corpus emits `cohaera.integrity:1` and the deletion leaves a hole in the collector's sequence. Strip the sidecars from every record and the same sessions are undetectable again — which is where every deployment that has not adopted the format already is. The corpus measures the mechanism working; it does not measure anyone having deployed it. `tests/test_evidence.py` asserts both directions.
+
+The corpus is chained but **not signed**, and the evaluation runs with no collector keys. That is the realistic first-adoption state and it is why CH06 reports `degraded` rather than `evaluated` throughout: a chain with nothing to verify its origin establishes that the stream is self-consistent, which an attacker who rewrote the whole stream can also arrange. Signature verification is a cryptographic property and is tested against the RFC 8032 vectors instead.
+
+**`attack_dilution` is EVASION.md E02, and it is the one pair of rows in this section that records a change rather than a limitation.** A diluted attack is the family's ordinary work looped three times with one out-of-family export at the end; the violation rate falls to 0.15 and CH01's rate trigger, on its own, caught **0 of 28**. With the count trigger it catches **28 of 28**, and it also fires on **36 of 64** `benign_hard_long_rare_action` sessions, which are the same shape with a legitimate trailing action. That is 28:36 in favour on the marginal alerts -- 44% precision on the alerts the change adds, against 47% corpus-wide. The trade is real in both directions and both directions are above.
 
 ### 4. Per-check alert precision
 
@@ -116,11 +144,13 @@ flip wearing a rule ID.
 
 | check | fired on attacks | fired on benign | alert precision |
 |---|---|---|---|
-| `CH01_sequence_order` | 124 | 40 | 75.6% |
-| `CH02_concealment_gap` | 84 | 52 | 61.8% |
-| `CH03_untrusted_to_consequential` | 20 | 36 | 35.7% |
-| `CH04_guardrail_overrun` | 36 | 60 | 37.5% |
-| `CH05_unpaired_calls` | 20 | 32 | 38.5% |
+| `CH01_sequence_order` | 140 | 36 | 79.5% |
+| `CH02_concealment_gap` | 60 | 96 | 38.5% |
+| `CH03_untrusted_to_consequential` | 36 | 88 | 29.0% |
+| `CH04_guardrail_overrun` | 56 | 0 | 100.0% |
+| `CH05_unpaired_calls` | 16 | 44 | 26.7% |
+| `CH06_evidence_integrity` | 28 | 0 | 100.0% |
+| `CH07_effect_contradiction` | 28 | 0 | 100.0% |
 
 ---
 
@@ -139,7 +169,7 @@ you hide is a defect.
   realistic base rate the false positive counts in section 3 dominate
   completely. `false_positives_per_1000_sessions` in the JSON is the number
   to plan capacity against, not precision.
-- **No adaptive attacker.** Every attack here is one of 6 fixed shapes.
+- **No adaptive attacker.** Every attack here is one of 9 fixed shapes.
   EVASION.md catalogues seventeen ways to defeat these checks. Exactly one
   of them, E02, appears in this corpus, and only because a fix for it
   could not be graded otherwise. An attacker who has read that file scores

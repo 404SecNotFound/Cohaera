@@ -78,6 +78,39 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
+def _is_retry(calls: list[ToolCall], j: int) -> bool:
+    """Is call ``j`` a retry of the call before it, rather than a new action?
+
+    Three conditions, all required: same tool, the previous attempt did NOT
+    succeed, and the same argument digest. A retry is literally "do that again",
+    so anything that differs makes it a different action.
+
+    WHY THIS IS SAFE, which is the only interesting thing about it. CH01's
+    count trigger fires on a novel route INTO a consequential call, and this
+    suppresses one such route. An attacker could therefore try to launder a
+    novel consequential call by prefixing a deliberately-failed identical copy
+    -- except that the failed copy is itself a consequential call at the end of
+    the same novel transition, so it is counted and CH01 still fires. The
+    exclusion removes the SECOND of two, never the first, and the first is the
+    one that carries the signal.
+
+    Measured on the evaluation corpus: this is 8 of the false positives on
+    ``benign_hard_reapproved_retry`` and 0 of the detections on any attack
+    kind. Retrying a failed action is the most ordinary thing a well-governed
+    agent does, and it produced a novel ``X -> X`` transition every time.
+
+    Note the dependence on ``arg_digest``. With no declared digest there is
+    nothing to compare, the suppression does not apply, and the false positive
+    stays -- one more thing a producer buys by declaring what its calls did.
+    """
+    if j == 0:
+        return False
+    previous, current = calls[j - 1], calls[j]
+    if previous.name != current.name or previous.executed:
+        return False
+    return bool(current.arg_digest) and previous.arg_digest == current.arg_digest
+
+
 class SequenceGrammar:
     """A bigram model over tool-call order, mined from benign sessions.
 
@@ -150,7 +183,7 @@ class SequenceGrammar:
         seq = [self.START, *(c.name for c in calls), self.END]
         return [(a, b) for j, (a, b) in enumerate(pairwise(seq))
                 if j < len(calls) and self.bigrams[(a, b)] == 0
-                and calls[j].consequential]
+                and calls[j].consequential and not _is_retry(calls, j)]
 
     @property
     def fitted(self) -> bool:
@@ -887,7 +920,14 @@ def ch04_guardrail_overrun(session: Session,
                      and states[id(c)][0] in UNAPPROVED_STATES]
         approved = [c for c in cand if c.executed
                     and states[id(c)][0] == APPROVAL_COVERED]
-        attempted = [c for c in cand if not c.executed]
+        # An APPROVED attempt that failed is authorised work that did not come
+        # off, which is not a security finding in any reading. Leaving these in
+        # made the retry-under-approval case -- an agent whose approved action
+        # fails and is legitimately re-approved and retried -- fire CH04 on the
+        # failed first attempt, which is a false positive on the most ordinary
+        # thing a well-governed agent does.
+        attempted = [c for c in cand if not c.executed
+                     and states[id(c)][0] != APPROVAL_COVERED]
         if not completed and not attempted:
             continue
 
@@ -1236,7 +1276,11 @@ def ch07_effect_contradiction(session: Session,
         binding = _receipt_binding(c)
         if binding not in BINDING_TRUSTED:
             unbound.append(c)
-        elif c.result == "failure" or c.state == "open":
+        elif not c.executed:
+            # ``not executed`` rather than ``result == failure``: an orphan or
+            # duplicate terminal event carrying a bound receipt is the same
+            # contradiction wearing a different pairing state, and enumerating
+            # the states would leave the next one added silently uncovered.
             contradicted.append(c)
 
     findings: list[Finding] = []

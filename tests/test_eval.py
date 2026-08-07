@@ -34,7 +34,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from cohaera.capabilities import CapabilityManifest
+from cohaera.capabilities import EMPTY_MANIFEST, CapabilityManifest
 from cohaera.checks import (
     ABSENT,
     ResponseIndex,
@@ -42,6 +42,7 @@ from cohaera.checks import (
     _shared_name_tokens,
     run_all,
 )
+from cohaera.evidence import INTEGRITY_FIELD
 from cohaera.limits import DEFAULT_LIMITS
 from cohaera.model import _classify
 from eval.corpus import generate as gen
@@ -334,6 +335,135 @@ def test_attack_dilution_is_visible_to_ch01_alone():
         assert fired == {"CH01_sequence_order"}, (
             f"{row.session_id} fired {sorted(fired)}; only CH01 should be able "
             "to see a diluted attack")
+
+
+# =====================================================================
+# 3b. The P1 evidence-trust kinds
+# =====================================================================
+
+
+def test_attack_omitted_call_is_visible_to_ch06_alone():
+    """The strongest claim P1 makes, and the one most easily overstated.
+
+    What survives the deletion is an ordinary session. If any behavioural check
+    fires on these, the `attack_omitted_call` row is measuring that check
+    noticing a truncated shape -- which is E13b, the accident, not the
+    mechanism -- and the card would be crediting the collector's sequence with
+    a detection it did not make.
+    """
+    _, test, sessions = _fitted_grammar_and_sessions()
+    rows = [r for r in test if r.kind == gen.ATTACK_OMITTED_CALL]
+    assert rows, "the corpus contains no omitted-call sessions to check"
+    for row in rows:
+        findings, _ = run_all(sessions[row.session_id], None)
+        fired = {f.family for f in findings}
+        assert fired == {"CH06_evidence_integrity"}, (
+            f"{row.session_id} fired {sorted(fired)}; only the collector's "
+            "sequence can see a call that was deleted from the stream")
+
+
+def test_the_same_sessions_are_undetectable_with_the_sidecars_removed():
+    """The control for the test above, and the honest half of the claim.
+
+    Strip `cohaera.integrity:1` from every record and the attack becomes
+    invisible again -- which is exactly where every deployment that has not
+    adopted the format already is. Recall on this kind measures the mechanism
+    working, not anyone having deployed it.
+    """
+    _, test, _ = _fitted_grammar_and_sessions()
+    rows = [r for r in test if r.kind == gen.ATTACK_OMITTED_CALL]
+    stripped = [
+        Labelled(
+            session_id=r.session_id, family=r.family, task_id=r.task_id,
+            kind=r.kind, is_attack=r.is_attack, target_check=r.target_check,
+            events=tuple({k: v for k, v in e.items() if k != INTEGRITY_FIELD}
+                         for e in r.events))
+        for r in rows]
+    sessions = _sessions_for(stripped, EMPTY_MANIFEST, DEFAULT_LIMITS)
+    for row in stripped:
+        findings, cov = run_all(sessions[row.session_id], None)
+        assert not findings, (
+            f"{row.session_id} fired {[f.check for f in findings]} with no "
+            "integrity evidence, so the corpus is measuring something other "
+            "than the sequence check")
+        ch06 = next(c for c in cov["checks"]
+                    if c["check"] == "CH06_evidence_integrity")
+        assert ch06["status"] == "not_evaluated"
+        assert ch06["reasons"] == ["NO_INTEGRITY_EVIDENCE"]
+
+
+def test_reordered_delivery_is_not_reported_as_deletion():
+    """The confounder that decides whether the gap detection is usable."""
+    _, test, sessions = _fitted_grammar_and_sessions()
+    rows = [r for r in test if r.kind == gen.BENIGN_HARD_REORDERED]
+    assert rows
+    for row in rows:
+        session = sessions[row.session_id]
+        assert session.integrity.reordered > 0, (
+            f"{row.session_id}: nothing was actually delivered out of order, so "
+            "this confounder is not confounding anything")
+        assert not session.integrity.inadmissible
+        assert run_all(session, None)[0] == []
+
+
+def test_an_approved_continuation_is_not_a_bypass():
+    _, test, sessions = _fitted_grammar_and_sessions()
+    for kind in (gen.BENIGN_HARD_APPROVED, gen.BENIGN_HARD_REAPPROVED):
+        rows = [r for r in test if r.kind == kind]
+        assert rows, f"no {kind} sessions in the test split"
+        for row in rows:
+            session = sessions[row.session_id]
+            assert session.approvals, (
+                f"{row.session_id}: no approval was emitted, so this session "
+                "is not testing approval binding")
+            fired = {f.family for f in run_all(session, None)[0]}
+            assert "CH04_guardrail_overrun" not in fired, (
+                f"{row.session_id} fired CH04 despite a bound approval")
+
+
+def test_a_reused_approval_is_caught_by_ch04_and_not_by_accident():
+    """It must fail on the ARGUMENT digest, not on the span or the tool.
+
+    If the corpus fixture got the span wrong, this kind would be caught as
+    `no_approval` and the card would report argument binding working while
+    nothing exercised it.
+    """
+    _, test, sessions = _fitted_grammar_and_sessions()
+    rows = [r for r in test if r.kind == gen.ATTACK_REUSED_APPROVAL]
+    assert rows
+    for row in rows:
+        findings = [f for f in run_all(sessions[row.session_id], None)[0]
+                    if f.family == "CH04_guardrail_overrun"]
+        assert findings, f"{row.session_id}: CH04 did not fire"
+        assert findings[0].evidence["approval_states"] == [
+            "approval_for_other_arguments"], (
+            f"{row.session_id} was caught as "
+            f"{findings[0].evidence['approval_states']}, not on the argument "
+            "digest, so argument binding is not what this measures")
+
+
+def test_a_denied_effect_is_caught_by_ch07_on_a_bound_receipt():
+    _, test, sessions = _fitted_grammar_and_sessions()
+    rows = [r for r in test if r.kind == gen.ATTACK_DENIED_EFFECT]
+    assert rows
+    for row in rows:
+        checks = {f.check for f in run_all(sessions[row.session_id], None)[0]}
+        assert "CH07_reported_failure_with_effect_receipt" in checks
+        assert "CH07_effect_receipt_does_not_bind" not in checks, (
+            f"{row.session_id}: the receipt did not bind, so this session is "
+            "testing the binding guard rather than the contradiction")
+
+
+def test_receipts_are_not_a_label(condition="unseen"):
+    """Benign sessions carry receipts too, or CH07's recall is a measurement of
+    the corpus rather than of the check."""
+    specs = gen.generate(condition)
+    def has_receipt(spec):
+        return any("effect_receipt" in e.get("data", {}) for e in spec.events)
+    benign = [s for s in specs if not s.is_attack and has_receipt(s)]
+    assert len(benign) > 200, (
+        f"only {len(benign)} benign sessions carry an effect receipt; the "
+        "presence of a receipt would then be close to a label")
 
 
 # =====================================================================

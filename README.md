@@ -69,7 +69,7 @@ So there is a file in this repository called [EVASION.md](EVASION.md) whose
 entire job is to break this one. 19 constructed evasions, 18 of them still
 working, each backed by a test that passes when the evasion succeeds. Read it
 before you trust anything else here — including the entry for the one that has
-been closed, which cost 32 new false positives and says so.
+been closed, which cost 36 new false positives and says so.
 
 > The first principle is that you must not fool yourself, and you are the
 > easiest person to fool.
@@ -266,16 +266,16 @@ There is now a labelled corpus and an evaluation harness. **The numbers are in
 [`eval/EVALUATION-CARD.md`](eval/EVALUATION-CARD.md)**, they are generated
 deterministically by `python eval/run_eval.py`, and they are not flattering.
 
-1056 sessions per condition, 264 tasks across 8 task families, splits by task and
+1632 sessions per condition, 408 tasks across 8 task families, splits by task and
 never at random, and seven in ten benign sessions are deliberate confounders —
 sessions that are genuinely benign and genuinely look like the attack they sit
 next to. Headline, `task_disjoint` with a capability manifest:
 
 | | |
 |---|---|
-| recall | **100%** (all 6 attack shapes caught) |
-| false positive rate | **61.8%** |
-| false positives per 1000 sessions | **404** |
+| recall | **100%** (all 9 attack shapes caught) |
+| false positive rate | **44.3%** |
+| false positives per 1000 sessions | **317** |
 | false positives on *plain* benign sessions | **0 / 96** |
 
 Both halves matter. Cohaera separates clean benign traffic from everything else
@@ -290,9 +290,9 @@ Two results worth pulling out:
   heuristic alone scores identically to a full capability manifest.** That is
   what the twelve fixtures below always measured — the keyword list checking
   itself. Swap in a realistic vocabulary the heuristic has never seen and its
-  classification accuracy is **0% of 34 tools**, and recall falls to 40.4%.
+  classification accuracy is **0% of 34 tools**, and recall falls to 59.3%.
 - **Under `family_holdout`, where the baseline never saw the test workload, the
-  false positive rate is 54.5%** and recall drops to 81.8%, because CH01 declines
+  false positive rate is 38.2%** and recall drops to 88.2%, because CH01 declines
   to judge a workload it was not fitted on and CH01 is the only check that
   catches a diluted attack. CH01 does not transfer across task families. Fitting
   one baseline across a fleet of differently-tasked agents buys silence where it
@@ -844,7 +844,7 @@ prevention claim collapses.
 - [x] Sigma content pack, 13 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 401 passing across unit, hostile-input and content conformance
+- [x] Tests, 408 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 22 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger

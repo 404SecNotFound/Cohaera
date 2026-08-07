@@ -48,6 +48,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cohaera.capabilities import EMPTY_MANIFEST, CapabilityManifest
 from cohaera.checks import SequenceGrammar, run_all
+from cohaera.evidence import INTEGRITY_FIELD, body_digest, chain_step
 from cohaera.identity import Correlator
 from cohaera.ingest import assemble
 from cohaera.limits import DEFAULT_LIMITS, Limits
@@ -294,6 +295,44 @@ def _strip_reversible(event: dict) -> dict:
     return out
 
 
+def _rechain(records: list[dict]) -> list[dict]:
+    """Rebuild the integrity chain over records the harness has just edited.
+
+    NOT a convenience. Without it, ``name_only`` measured something absurd:
+    stripping ``reversible`` changes the record, the collector's hash chain
+    correctly reports that the record changed, and CH06 fired on 596 of 596
+    benign sessions -- a 100% false positive rate that was entirely the
+    harness editing evidence and then being surprised that the tamper-evidence
+    noticed.
+
+    The counterfactual this condition constructs is *an agent that never
+    emitted reversibility*. Its collector would have chained the records that
+    agent actually wrote, so the honest edit is to strip the field AND rebuild
+    the chain over the result. Stripping without rebuilding measures the
+    integrity check instead of the classifier.
+
+    Sequence numbers and stream identity are untouched, so a session whose
+    records were DELETED at generation time still shows its gap. Only the chain
+    is recomputed, and only for a condition that has already modified the
+    stream on purpose.
+    """
+    out = []
+    prev = None
+    for record in records:
+        sidecar = record.get(INTEGRITY_FIELD)
+        if not isinstance(sidecar, dict):
+            out.append(record)
+            continue
+        sidecar = dict(sidecar)
+        if prev is not None:
+            sidecar["prev"] = prev
+        body = {k: v for k, v in record.items() if k != INTEGRITY_FIELD}
+        prev = sidecar["chain"] = chain_step(sidecar.get("prev") or "",
+                                             body_digest(body))
+        out.append({**body, INTEGRITY_FIELD: sidecar})
+    return out
+
+
 def _sessions_for(rows: list[Labelled], manifest: CapabilityManifest,
                   limits: Limits, strip_reversible: bool = False
                   ) -> dict[str, Session]:
@@ -308,6 +347,8 @@ def _sessions_for(rows: list[Labelled], manifest: CapabilityManifest,
     for row in rows:
         raws = [_strip_reversible(e) if strip_reversible else dict(e)
                 for e in row.events]
+        if strip_reversible:
+            raws = _rechain(raws)
         events = [Event(raw=r, limits=limits) for r in raws]
         sessions = assemble(events, limits=limits, manifest=manifest,
                             correlator=Correlator(b"eval", limits=limits))

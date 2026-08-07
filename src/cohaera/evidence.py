@@ -655,6 +655,13 @@ class _Stream:
     expected: int = 0
     head: str = ""
     joined_midstream: bool = False
+    # The session that owned the last record consumed from this stream. A gap
+    # is attributed to the sessions on BOTH sides of it, and this is the one
+    # before. Without it, deleting a record from session A on a stream that
+    # multiplexes many sessions would charge the gap to whichever session
+    # happened to write next -- a false positive on B and a false negative on A,
+    # which is precisely backwards.
+    last_session: str = ""
     # seq -> (body_digest, Integrity, session_key). Bounded; see the verifier.
     pending: dict[int, tuple[str, Integrity, str]] = field(default_factory=dict)
 
@@ -819,6 +826,7 @@ class StreamVerifier:
         # one edit into a stream-wide alarm and hiding where the edit was.
         stream.head = integrity.chain or expected_chain or stream.head
         stream.expected = seq + 1
+        stream.last_session = session_key
 
         if integrity.signed:
             self._check_signature(stream, seq, integrity, state)
@@ -882,12 +890,19 @@ class StreamVerifier:
         nxt = min(stream.pending)
         if nxt > stream.expected:
             _body, integrity, session_key = stream.pending[nxt]
-            state = self._session(session_key)
-            state.note(R_SEQUENCE_GAP)
-            if len(state.gaps) < self.limits.max_evidence_items:
-                state.gaps.append({"missing_from": stream.expected,
-                                   "missing_to": nxt - 1,
-                                   "missing_count": nxt - stream.expected})
+            gap = {"missing_from": stream.expected, "missing_to": nxt - 1,
+                   "missing_count": nxt - stream.expected}
+            # Both sides. The records that vanished sat between the last record
+            # consumed and this one, so either session could be the one they
+            # were taken from, and charging only the later one gets the common
+            # case exactly wrong -- see _Stream.last_session.
+            for key in dict.fromkeys((stream.last_session, session_key)):
+                if not key:
+                    continue
+                state = self._session(key)
+                state.note(R_SEQUENCE_GAP)
+                if len(state.gaps) < self.limits.max_evidence_items:
+                    state.gaps.append(dict(gap))
             # Resync on the surviving record's own declared predecessor. Without
             # this every record after a deletion would also fail to chain, and
             # one deletion would read as a wholly forged stream.

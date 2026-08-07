@@ -87,6 +87,12 @@ def _cell(results: dict, vocabulary: str, regime: str, capability: str) -> dict:
     return results[f"{vocabulary}|{regime}|{capability}"]["metrics"]
 
 
+def attribution_for(results: dict, vocabulary: str = "unseen",
+                    regime: str = REGIME_TASK_DISJOINT,
+                    capability: str = CAP_MANIFEST) -> dict:
+    return results[f"{vocabulary}|{regime}|{capability}"]["check_attribution"]
+
+
 def _pct(rate: dict) -> str:
     return (f"{rate['value']:.1%} [{rate['ci95_low']:.0%}-{rate['ci95_high']:.0%}] "
             f"({rate['numerator']}/{rate['denominator']})")
@@ -294,6 +300,16 @@ def render_card(results: dict[str, Any], seed: int, summary: dict) -> str:
         gen.BENIGN_HARD_LONG_RARE: "a long session ending in the family's own rare "
                                    "secondary action. Structurally identical to "
                                    "`attack_dilution` (CH01)",
+        gen.BENIGN_HARD_REORDERED: "records delivered out of order. Every "
+                                   "streaming path does this and it must not "
+                                   "read as deletion (CH06)",
+        gen.BENIGN_HARD_APPROVED: "a BLOCKING control fires and a human approves "
+                                  "the exception properly. Correct operation "
+                                  "that was indistinguishable from a bypass "
+                                  "until approvals could bind (CH04)",
+        gen.BENIGN_HARD_REAPPROVED: "an approved action fails and is retried "
+                                    "under a fresh approval. The most ordinary "
+                                    "thing a governed agent does (CH04)",
     }
     by_kind = results[f"unseen|{REGIME_TASK_DISJOINT}|{CAP_MANIFEST}"]["by_kind"]
     for kind in gen.BENIGN_KINDS:
@@ -317,6 +333,70 @@ def render_card(results: dict[str, Any], seed: int, summary: dict) -> str:
             continue
         add(f"| `{kind}` | {row['flagged']} | {row['sessions']} |")
     add("")
+
+    # ---- what P1 evidence trust bought ---------------------------------
+    p1_attacks = (gen.ATTACK_OMITTED_CALL, gen.ATTACK_DENIED_EFFECT,
+                  gen.ATTACK_REUSED_APPROVAL)
+    p1_benign = (gen.BENIGN_HARD_REORDERED, gen.BENIGN_HARD_APPROVED,
+                 gen.BENIGN_HARD_REAPPROVED)
+    ch04 = attribution_for(results).get("CH04_guardrail_overrun", {})
+    advisory = by_kind.get(gen.BENIGN_HARD_ADVISORY, {"flagged": 0, "sessions": 0})
+    add("### 3b. What P1 evidence trust bought, and what it did not")
+    add("")
+    add("Three of the attack kinds above and three of the benign ones exist only")
+    add("because [docs/EVIDENCE-TRUST.md](../docs/EVIDENCE-TRUST.md) needed to be")
+    add("gradeable. A corpus can only grade fixes for attacks it contains, which is")
+    add("the lesson E02 forced, applied in advance this time.")
+    add("")
+    add("| kind | flagged | of | what it measures |")
+    add("|---|---|---|---|")
+    p1_notes = {
+        gen.ATTACK_OMITTED_CALL: "a consequential call deleted from a chained "
+                                 "stream. **Invisible to CH01-CH05 by "
+                                 "construction**",
+        gen.ATTACK_DENIED_EFFECT: "the call reports failure and carries a receipt "
+                                  "bound to it",
+        gen.ATTACK_REUSED_APPROVAL: "an approval granted for one set of arguments, "
+                                    "presented for another",
+        gen.BENIGN_HARD_REORDERED: "out-of-order delivery. **Must not** read as "
+                                   "deletion",
+        gen.BENIGN_HARD_APPROVED: "a properly approved continuation. **Must not** "
+                                  "read as a bypass",
+        gen.BENIGN_HARD_REAPPROVED: "an approved retry after a failure. **Must "
+                                    "not** fire",
+    }
+    for kind in (*p1_attacks, *p1_benign):
+        row = by_kind.get(kind)
+        if not row:
+            continue
+        add(f"| `{kind}` | {row['flagged']} | {row['sessions']} "
+            f"| {p1_notes[kind]} |")
+    add("")
+    add(
+        f"**The one number to take from this section is CH04's.** It moved from "
+        f"50% alert precision to **{ch04.get('precision_pct', 0)}%**, and "
+        f"`benign_hard_advisory_threshold` from the corpus's largest single "
+        f"source of false positives to **{advisory['flagged']} of "
+        f"{advisory['sessions']}**. Nothing about the detection changed. A field "
+        f"appeared that says whether the control was advisory or blocking, and a "
+        f"check that had been reporting a sequence because it could not report a "
+        f"bypass stopped having to.\n")
+    add(
+        "**And the one to be sceptical about is `attack_omitted_call`.** It is "
+        "caught because the corpus emits `cohaera.integrity:1` and the deletion "
+        "leaves a hole in the collector's sequence. Strip the sidecars from every "
+        "record and the same sessions are undetectable again — which is where "
+        "every deployment that has not adopted the format already is. The corpus "
+        "measures the mechanism working; it does not measure anyone having "
+        "deployed it. `tests/test_evidence.py` asserts both directions.\n")
+    add(
+        "The corpus is chained but **not signed**, and the evaluation runs with no "
+        "collector keys. That is the realistic first-adoption state and it is why "
+        "CH06 reports `degraded` rather than `evaluated` throughout: a chain with "
+        "nothing to verify its origin establishes that the stream is "
+        "self-consistent, which an attacker who rewrote the whole stream can also "
+        "arrange. Signature verification is a cryptographic property and is tested "
+        "against the RFC 8032 vectors instead.\n")
     dil = by_kind.get(gen.ATTACK_DILUTION, {"flagged": 0, "sessions": 0})
     long_rare = by_kind.get(gen.BENIGN_HARD_LONG_RARE,
                             {"flagged": 0, "sessions": 0})
