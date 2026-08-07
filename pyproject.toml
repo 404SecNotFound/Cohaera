@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cohaera"
+version = "0.1.0"
+description = "The correlation layer for agent telemetry. Turns observra's per-event stream into correlation-grade events a SIEM can fire rules on."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Imran Hafeez" }]
+keywords = ["security", "siem", "detection-engineering", "ai-agents", "observability", "telemetry"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Information Technology",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3.10",
+  "Topic :: Security",
+]
+# Deliberately zero runtime dependencies. It must run on a locked-down
+# collector VM with no package install, and in an air-gapped lab.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[project.scripts]
+cohaera = "cohaera.cli:main"
+
+[project.urls]
+Repository = "https://github.com/404SecNotFound/Cohaera"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

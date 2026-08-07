@@ -1,0 +1,9 @@
+Cohaera
+Copyright 2026 Imran Hafeez
+
+This product includes software developed for the Cohaera project.
+
+Portions of the event vocabulary (event types, reversibility keyword sets,
+action and result enums) are derived from schema/cim_schema.toml in the
+observra project, Copyright 2026 Exabeam, Inc., licensed under the
+Apache License, Version 2.0. See https://github.com/open-agent-ai-security/observra

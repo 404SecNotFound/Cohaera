@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+tests/fixtures/*.jsonl
+*.out.jsonl
+telemetry.jsonl
+.DS_Store
