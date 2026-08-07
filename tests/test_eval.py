@@ -34,6 +34,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cohaera.capabilities import CapabilityManifest
+from cohaera.checks import run_all
+from cohaera.limits import DEFAULT_LIMITS
 from cohaera.model import _classify
 from eval.corpus import generate as gen
 from eval.harness import (
@@ -42,7 +45,9 @@ from eval.harness import (
     REGIME_TASK_DISJOINT,
     Labelled,
     LeakageError,
+    _sessions_for,
     assert_disjoint,
+    fit_grammar,
     split,
 )
 from eval.metrics import Outcome, summarise, wilson
@@ -203,9 +208,126 @@ def test_benign_hard_confounders_are_the_majority_of_benign():
     """A corpus of clean benign sessions measures a false positive rate of zero
     and calls it a result. That is the defect this corpus exists to fix."""
     benign = [r for r in corpus() if not r.is_attack]
-    hard = [r for r in benign if r.kind != gen.BENIGN]
+    hard = [r for r in benign if r.kind not in gen.PLAIN_BENIGN_KINDS]
     assert len(hard) > len(benign) / 2, (
         f"only {len(hard)}/{len(benign)} benign sessions are hard confounders")
+
+
+def test_every_hard_benign_kind_has_a_target_check_and_vice_versa():
+    """A confounder nobody assigned to a check is a false positive with no
+    explanation, and the card's section 3 exists to explain them."""
+    hard = set(gen.BENIGN_KINDS) - set(gen.PLAIN_BENIGN_KINDS)
+    assert hard == set(gen.CONFOUNDER_TARGET_CHECK)
+    assert set(gen.ATTACK_KINDS) == set(gen.ATTACK_TARGET_CHECK)
+
+
+# ---------------------------------------------------------------------------
+# The dilution kinds have to actually dilute, or the corpus stops measuring E02
+# ---------------------------------------------------------------------------
+
+
+def in_memory_manifest(condition: str = "unseen") -> CapabilityManifest:
+    """The union manifest the harness loads from disk, built without the disk.
+
+    ``eval/corpus/data/`` is deliberately not committed, so a test that read it
+    would pass locally and fail on a fresh clone.
+    """
+    tools: dict = {}
+    for family in gen.FAMILIES:
+        tools.update(gen.manifest_for(family, condition)["tools"])
+    return CapabilityManifest.from_obj(
+        {"producer": "cohaera-eval/all", "manifest_version": "1", "tools": tools})
+
+
+def _fitted_grammar_and_sessions(regime: str = REGIME_TASK_DISJOINT):
+    rows = corpus()
+    manifest = in_memory_manifest()
+    train, test = split(rows, regime, gen.SEED)
+    grammar = fit_grammar(train, manifest, DEFAULT_LIMITS)
+    return grammar, test, _sessions_for(test, manifest, DEFAULT_LIMITS)
+
+
+@pytest.mark.parametrize("kind", [gen.ATTACK_DILUTION, gen.BENIGN_HARD_LONG_RARE])
+def test_the_long_kinds_stay_below_ch01s_rate_threshold(kind):
+    """The whole point of these sessions is that the RATE trigger cannot see
+    them, which is what makes any finding on one attributable to the count
+    trigger. If a change to the spine, to LOOPS or to the baseline pushed the
+    rate back over 0.25 they would still be caught -- by the wrong trigger --
+    and the corpus would report a fix it had stopped testing.
+    """
+    grammar, test, sessions = _fitted_grammar_and_sessions()
+    rows = [r for r in test if r.kind == kind]
+    assert rows, f"{kind} is absent from the test split"
+    for row in rows:
+        rate, _ = grammar.score(sessions[row.session_id])
+        assert rate <= 0.25, (
+            f"{row.session_id}: violation rate {rate:.3f} is above CH01's "
+            f"threshold, so this session no longer measures dilution")
+
+
+def test_every_diluted_attack_still_contains_the_attack():
+    """Diluted, not absent. The novel route to the export must survive the
+    padding or the label is wrong."""
+    grammar, test, sessions = _fitted_grammar_and_sessions()
+    for row in [r for r in test if r.kind == gen.ATTACK_DILUTION]:
+        session = sessions[row.session_id]
+        assert grammar.score(session)[1], f"{row.session_id}: nothing novel left"
+        assert grammar.unseen_into_consequential(session), (
+            f"{row.session_id}: the novel transition no longer arrives at a "
+            "consequential call, so CH01's count trigger cannot see it")
+
+
+def test_the_long_confounder_confounds_at_least_some_of_the_time():
+    """Not all of the time, and the difference is the interesting part.
+
+    A `benign_hard_long_rare_action` session only produces an unseen
+    consequential transition when the baseline has not already learned that
+    family's spine -> secondary-action route from a `benign_hard_rare_ordering`
+    session on the training side. It has for about half the families, which is
+    exactly why the card reports 16 of 32 rather than 32 of 32. What the corpus
+    has to guarantee is that the confounder is REAL for some of them -- a
+    confounder that never confounds measures nothing.
+    """
+    grammar, test, sessions = _fitted_grammar_and_sessions()
+    rows = [r for r in test if r.kind == gen.BENIGN_HARD_LONG_RARE]
+    confounding = [r for r in rows
+                   if grammar.unseen_into_consequential(sessions[r.session_id])]
+    assert confounding, (
+        "no long benign session produces a novel route into a consequential "
+        "call, so the E02 fix is being measured only against sessions built to "
+        "make it look good")
+
+
+def test_benign_long_loop_teaches_the_baseline_that_agents_repeat():
+    """Without a looping benign session the baseline never learns
+    spine[-1] -> spine[0], padding creates a novel transition at every loop
+    boundary, and dilution fails by accident -- making CH01 look stronger than
+    it is. These sessions are the fix and they must stay clean themselves."""
+    grammar, test, sessions = _fitted_grammar_and_sessions()
+    rows = [r for r in test if r.kind == gen.BENIGN_LONG]
+    assert rows
+    for row in rows:
+        _, unseen = grammar.score(sessions[row.session_id])
+        assert unseen == [], (
+            f"{row.session_id}: a plain long benign session has "
+            f"{len(unseen)} unseen transition(s) {unseen[:3]}, so the baseline "
+            "has not learned that this agent loops")
+
+
+def test_attack_dilution_is_visible_to_ch01_alone():
+    """Its recall in the card is a measurement of CH01, not of the corpus.
+
+    If any other check starts firing on these sessions, the `attack_dilution`
+    row stops being attributable and the E02 result stops meaning what the card
+    says it means.
+    """
+    grammar, test, sessions = _fitted_grammar_and_sessions()
+    for row in [r for r in test if r.kind == gen.ATTACK_DILUTION]:
+        findings, _ = run_all(sessions[row.session_id], grammar)
+        fired = {f.family for f in findings}
+        assert fired == {"CH01_sequence_order"}, (
+            f"{row.session_id} fired {sorted(fired)}; only CH01 should be able "
+            "to see a diluted attack")
 
 
 # =====================================================================

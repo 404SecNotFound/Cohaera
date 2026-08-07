@@ -28,6 +28,7 @@ generated block, because a generated block is a thing people learn to skip.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -42,8 +43,9 @@ SIGMA = REPO / "content" / "sigma"
 CHECKS = REPO / "src" / "cohaera" / "checks.py"
 
 _COLLECTED = re.compile(r"(\d+) tests? collected")
-_EVASION_ROW = re.compile(r"^\|\s*(E\d+[a-z]?)\s*\|", re.MULTILINE)
+_EVASION_ID = re.compile(r"E\d+[a-z]?")
 _CHECK_ID = re.compile(r'"(CH\d+)_[a-z_]+"')
+_EVASION_TEST = re.compile(r"^def (test_evasion_\w+)\(", re.MULTILINE)
 
 
 # ---------------------------------------------------------------------------
@@ -72,9 +74,119 @@ def count_sigma_rules() -> int:
     return len([p for p in SIGMA.glob("*.yml")] + [p for p in SIGMA.glob("*.yaml")])
 
 
+def _evasion_rows() -> dict[str, str]:
+    """``{id: last cell}`` for every row of EVASION.md's summary table.
+
+    The last cell is the fixability column, and it is where a closed evasion is
+    marked. Read from the table rather than from a list kept here, so adding a
+    row is the only thing anyone has to remember to do.
+    """
+    rows: dict[str, str] = {}
+    for line in EVASION.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if cells and _EVASION_ID.fullmatch(cells[0]):
+            rows[cells[0]] = cells[-1]
+    return rows
+
+
 def count_evasions() -> int:
     """Rows in EVASION.md's summary table, including the two unplanned wins."""
-    return len(set(_EVASION_ROW.findall(EVASION.read_text(encoding="utf-8"))))
+    return len(_evasion_rows())
+
+
+def count_constructed_evasions() -> int:
+    """Rows that are an attack somebody wrote, so not the ``E12b``-style wins."""
+    return len([e for e in _evasion_rows() if not e[-1].isalpha()])
+
+
+def count_working_evasions() -> int:
+    """Constructed evasions that have not been closed.
+
+    This number is supposed to be able to go UP. An evasion catalogue whose
+    headline count only ever falls is a catalogue nobody is adding to.
+    """
+    return len([e for e, fix in _evasion_rows().items()
+                if not e[-1].isalpha() and "CLOSED" not in fix.upper()])
+
+
+def count_evasion_tests() -> int:
+    """Test functions in tests/test_evasion.py."""
+    path = REPO / "tests" / "test_evasion.py"
+    return len(_EVASION_TEST.findall(path.read_text(encoding="utf-8")))
+
+
+# ---- numbers the README quotes from the evaluation card -------------------
+#
+# The README's "Measured results" table is a hand-copy of one cell of
+# eval/evaluation-card.json, and by the time anyone checked, every figure in it
+# was from a corpus revision two changes back: 768 sessions when there were 960,
+# a 60.6% false positive rate when the card said 63.7%. The card is generated
+# and the README is not, so the card is the truth and these read it.
+
+CARD = REPO / "eval" / "evaluation-card.json"
+HEADLINE = "unseen|task_disjoint|manifest"
+
+
+def _card() -> dict:
+    return json.loads(CARD.read_text(encoding="utf-8"))
+
+
+def _metrics(cell: str = HEADLINE) -> dict:
+    return _card()["cells"][cell]["metrics"]
+
+
+def card_sessions_per_condition() -> int:
+    return int(_card()["corpus"]["conditions"]["unseen"]["sessions"])
+
+
+def card_tasks() -> int:
+    return int(_card()["corpus"]["conditions"]["unseen"]["tasks"])
+
+
+def card_headline_recall_pct() -> str:
+    return f"{_metrics()['recall']['value']:.0%}".rstrip("%")
+
+
+def card_headline_fpr_pct() -> str:
+    return f"{_metrics()['false_positive_rate']['value'] * 100:.1f}"
+
+
+def card_headline_fp_per_1000() -> str:
+    return f"{_metrics()['false_positives_per_1000_sessions']:.0f}"
+
+
+def card_name_only_recall_pct() -> str:
+    return f"{_metrics('unseen|task_disjoint|name_only')['recall']['value'] * 100:.1f}"
+
+
+def card_family_holdout_fpr_pct() -> str:
+    m = _metrics("unseen|family_holdout|manifest")
+    return f"{m['false_positive_rate']['value'] * 100:.1f}"
+
+
+def _plain_benign() -> tuple[int, int]:
+    """(flagged, total) over the benign kinds that are NOT confounders.
+
+    Keyed on the corpus's own naming convention -- ``benign_hard_*`` is a
+    confounder, anything else beginning ``benign`` is a control -- so adding a
+    control kind updates this without anyone remembering to. The claim it backs
+    is the strongest single sentence the README makes about false positives, and
+    it is the one most worth catching if it stops being true.
+    """
+    by_kind = _card()["cells"][HEADLINE]["by_kind"]
+    plain = [v for k, v in by_kind.items()
+             if k.startswith("benign") and "hard" not in k]
+    return sum(v["flagged"] for v in plain), sum(v["sessions"] for v in plain)
+
+
+def card_plain_benign_flagged() -> int:
+    return _plain_benign()[0]
+
+
+def card_plain_benign_total() -> int:
+    return _plain_benign()[1]
 
 
 def count_checks() -> int:
@@ -84,19 +196,28 @@ def count_checks() -> int:
 
 @dataclass(frozen=True)
 class Claim:
-    """One counted statement in a committed document, and where the truth is."""
+    """One counted statement in a committed document, and where the truth is.
+
+    ``truth`` returns whatever the number is; comparison and rewriting are on
+    its string form. That is what lets a claim be ``63.7`` as easily as ``294``,
+    which matters because the README's headline results are percentages copied
+    out of the evaluation card by hand, and every one of them was stale.
+    """
 
     name: str
     path: Path
     pattern: re.Pattern[str]        # exactly one group, capturing the number
-    truth: Callable[[], int]
+    truth: Callable[[], object]
 
     def text(self) -> str:
         return self.path.read_text(encoding="utf-8")
 
-    def stated(self, text: str | None = None) -> int | None:
+    def stated(self, text: str | None = None) -> str | None:
         hit = self.pattern.search(self.text() if text is None else text)
-        return int(hit.group(1)) if hit else None
+        return hit.group(1) if hit else None
+
+    def actual(self) -> str:
+        return str(self.truth())
 
 
 CLAIMS = (
@@ -111,6 +232,50 @@ CLAIMS = (
           re.compile(r"There are now (\d+) tests"), count_tests),
     Claim("EVASION.md evasion characterizations", EVASION,
           re.compile(r"(\d+) evasion characterizations"), count_evasions),
+    # The headline of the whole file, and until now nothing kept it true: it
+    # still read "15 of 15" with nineteen rows in the table under it. Two
+    # claims because the sentence carries two numbers and each has its own
+    # source.
+    Claim("EVASION.md working evasions", EVASION,
+          re.compile(r"Current state: (\d+) of \d+ constructed evasions"),
+          count_working_evasions),
+    Claim("EVASION.md constructed evasions", EVASION,
+          re.compile(r"Current state: \d+ of (\d+) constructed evasions"),
+          count_constructed_evasions),
+    Claim("README constructed evasions", README,
+          re.compile(r"(\d+) constructed evasions"), count_constructed_evasions),
+    # \s+ rather than a literal space: these sentences are hard-wrapped prose and
+    # a claim that stops matching when somebody rewraps a paragraph is a claim
+    # that silently stops being checked.
+    Claim("README working evasions", README,
+          re.compile(r"(\d+) of them still\s+working"), count_working_evasions),
+    Claim("README evasion test count", README,
+          re.compile(r"test_evasion\.py\s+(\d+) adversarial tests"),
+          count_evasion_tests),
+    # The headline results, read out of the generated card rather than retyped.
+    Claim("README corpus sessions", README,
+          re.compile(r"(\d+) sessions per condition"), card_sessions_per_condition),
+    Claim("README corpus tasks", README,
+          re.compile(r"(\d+) tasks across 8 task families"), card_tasks),
+    Claim("README headline recall", README,
+          re.compile(r"\| recall \| \*\*(\d+)%\*\*"), card_headline_recall_pct),
+    Claim("README headline false positive rate", README,
+          re.compile(r"\| false positive rate \| \*\*([\d.]+)%\*\*"),
+          card_headline_fpr_pct),
+    Claim("README headline FP per 1000", README,
+          re.compile(r"\| false positives per 1000 sessions \| \*\*(\d+)\*\*"),
+          card_headline_fp_per_1000),
+    Claim("README name-only recall", README,
+          re.compile(r"recall falls to ([\d.]+)%"), card_name_only_recall_pct),
+    Claim("README family_holdout false positive rate", README,
+          re.compile(r"the\s+false positive rate is ([\d.]+)%"),
+          card_family_holdout_fpr_pct),
+    Claim("README plain-benign false positives", README,
+          re.compile(r"\*plain\* benign sessions \| \*\*(\d+) / \d+\*\*"),
+          card_plain_benign_flagged),
+    Claim("README plain-benign session count", README,
+          re.compile(r"\*plain\* benign sessions \| \*\*\d+ / (\d+)\*\*"),
+          card_plain_benign_total),
 )
 
 
@@ -152,7 +317,7 @@ def problems() -> list[str]:
     """Every way the committed documents currently disagree with the repository."""
     out = []
     for claim in CLAIMS:
-        stated, actual = claim.stated(), claim.truth()
+        stated, actual = claim.stated(), claim.actual()
         if stated is None:
             out.append(f"{claim.name}: no sentence matching "
                        f"{claim.pattern.pattern!r} found in {claim.path.name}")
@@ -169,13 +334,13 @@ def write() -> list[str]:
     changed = []
     for claim in CLAIMS:
         text = claim.text()
-        stated, actual = claim.stated(text), claim.truth()
+        stated, actual = claim.stated(text), claim.actual()
         if stated is None or stated == actual:
             continue
         hit = claim.pattern.search(text)
         assert hit is not None
         lo, hi = hit.span(1)
-        claim.path.write_text(text[:lo] + str(actual) + text[hi:], encoding="utf-8")
+        claim.path.write_text(text[:lo] + actual + text[hi:], encoding="utf-8")
         changed.append(f"{claim.name}: {stated} -> {actual}")
     return changed
 

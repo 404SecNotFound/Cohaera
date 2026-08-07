@@ -212,9 +212,15 @@ def render_card(results: dict[str, Any], seed: int, summary: dict) -> str:
     d_fpr = (leaky["false_positive_rate"]["value"]
              - honest["false_positive_rate"]["value"])
     fam = _cell(results, "unseen", REGIME_FAMILY_HOLDOUT, CAP_MANIFEST)
+    fam_by_kind = results[
+        f"unseen|{REGIME_FAMILY_HOLDOUT}|{CAP_MANIFEST}"]["by_kind"]
+    fam_dilution = fam_by_kind.get(gen.ATTACK_DILUTION, {"flagged": 0, "sessions": 0})
+    fam_dilution_total = fam_dilution["sessions"]
+    fam_missed_dilution = fam_dilution_total - fam_dilution["flagged"]
     add(
-        f"**Measured inflation from the leaky split: {d_prec:+.1%} precision and "
-        f"{d_fpr:+.1%} false positive rate.** "
+        f"**Measured effect of the leaky split: precision {d_prec:+.1%}, false "
+        f"positive rate {d_fpr:+.1%}** -- both in the direction that flatters the "
+        f"detector, which is what leakage always buys. "
         f"Smaller than MCPShield's 26-point AUROC figure, and "
         f"the reason is worth stating rather than hiding: recall here is saturated at "
         f"100%, so leakage has no headroom to inflate it and shows up only in "
@@ -226,11 +232,12 @@ def render_card(results: dict[str, Any], seed: int, summary: dict) -> str:
         "never seen the test families' tools, so CH01 has nothing to compare "
         "against.\n")
     add(
-        "It used to flag everything in that situation: false positive rate 100.0% "
-        "(256/256), precision 33.3%, which is exactly the attack base rate and "
-        "therefore an alarm carrying no information. A bigram model applied outside "
-        "its distribution scores every transition as unseen, and the rate pins to "
-        "1.0 whether the session is benign or not.\n")
+        "It used to flag everything in that situation: on the corpus revision where "
+        "that was measured, a false positive rate of 100.0% at precision 33.3%, "
+        "which is exactly the attack base rate and therefore an alarm carrying no "
+        "information. A bigram model applied outside its distribution scores every "
+        "transition as unseen, and the rate pins to 1.0 whether the session is "
+        "benign or not.\n")
     add(
         f"CH01 now declines instead. When a session of at least "
         f"{MIN_CALLS_FOR_VOCABULARY_JUDGEMENT} calls uses tools the baseline mostly "
@@ -240,17 +247,25 @@ def render_card(results: dict[str, Any], seed: int, summary: dict) -> str:
         f"**{fam['false_positive_rate']['value']:.1%}** "
         f"({fam['false_positive_rate']['numerator']}/"
         f"{fam['false_positive_rate']['denominator']}), precision "
-        f"**{fam['precision']['value']:.1%}**, and recall is unchanged at "
-        f"**{fam['recall']['value']:.1%}** because the checks that were doing the "
-        f"real detection here never depended on the grammar.\n")
+        f"**{fam['precision']['value']:.1%}**.\n")
     add(
-        f"What is left is within noise of `task_disjoint`'s "
+        f"Recall here is **{fam['recall']['value']:.1%}** against "
+        f"{honest['recall']['value']:.1%} on the honest split, and that gap is what "
+        f"declining costs. {fam_missed_dilution} of the "
+        f"{fam_dilution_total} `attack_dilution` sessions go uncaught, because CH01 "
+        f"is the only check that can see a diluted attack and CH01 is switched off "
+        f"here by its own vocabulary contract. Everything else transfers: the checks "
+        f"that catch the other four attack kinds never depended on the grammar.\n")
+    add(
+        f"What is left is a false positive rate within reach of `task_disjoint`'s "
         f"{honest['false_positive_rate']['value']:.1%}, which is the honest read: "
         f"the workload-transfer failure is gone and the residual is the "
         f"benign-hard confounder problem that every regime shares.\n")
     add(
         "CH01 still does not transfer across workloads. The difference is that it "
-        "now says so in the coverage contract instead of paging somebody.\n")
+        "now says so in the coverage contract instead of paging somebody -- and the "
+        "recall line above is the price of that honesty, stated rather than "
+        "averaged away.\n")
 
     # ---- where the false positives come from ----------------------------
     add("### 3. Where the false positives come from")
@@ -271,6 +286,11 @@ def render_card(results: dict[str, Any], seed: int, summary: dict) -> str:
                                  "event (CH05)",
         gen.BENIGN_HARD_TERSE: "honest summary, paraphrased. EVASION.md E04 (CH02)",
         gen.BENIGN_HARD_RARE: "legitimate but rare ordering (CH01)",
+        gen.BENIGN_LONG: "the same ordinary work, repeated. Second clean control, "
+                         "and what teaches the baseline that agents loop",
+        gen.BENIGN_HARD_LONG_RARE: "a long session ending in the family's own rare "
+                                   "secondary action. Structurally identical to "
+                                   "`attack_dilution` (CH01)",
     }
     by_kind = results[f"unseen|{REGIME_TASK_DISJOINT}|{CAP_MANIFEST}"]["by_kind"]
     for kind in gen.BENIGN_KINDS:
@@ -294,6 +314,27 @@ def render_card(results: dict[str, Any], seed: int, summary: dict) -> str:
             continue
         add(f"| `{kind}` | {row['flagged']} | {row['sessions']} |")
     add("")
+    dil = by_kind.get(gen.ATTACK_DILUTION, {"flagged": 0, "sessions": 0})
+    long_rare = by_kind.get(gen.BENIGN_HARD_LONG_RARE,
+                            {"flagged": 0, "sessions": 0})
+    marginal = dil["flagged"] + long_rare["flagged"]
+    add(
+        f"**`attack_dilution` is EVASION.md E02, and it is the one pair of rows in "
+        f"this section that records a change rather than a limitation.** A diluted "
+        f"attack is the family's ordinary work looped three times with one "
+        f"out-of-family export at the end; the violation rate falls to 0.15 and "
+        f"CH01's rate trigger, on its own, caught **0 of "
+        f"{dil['sessions']}**. With the count trigger it catches "
+        f"**{dil['flagged']} of {dil['sessions']}**, and it also fires on "
+        f"**{long_rare['flagged']} of {long_rare['sessions']}** "
+        f"`benign_hard_long_rare_action` sessions, which are the same shape with a "
+        f"legitimate trailing action. "
+        + (f"That is {dil['flagged']}:{long_rare['flagged']} in favour on the "
+           f"marginal alerts -- {dil['flagged'] / marginal:.0%} precision on the "
+           f"alerts the change adds, against "
+           f"{unseen_manifest['precision']['value']:.0%} corpus-wide. "
+           if marginal else "")
+        + "The trade is real in both directions and both directions are above.\n")
 
     # ---- per check ------------------------------------------------------
     add("### 4. Per-check alert precision")
@@ -332,9 +373,11 @@ def render_card(results: dict[str, Any], seed: int, summary: dict) -> str:
     add("  realistic base rate the false positive counts in section 3 dominate")
     add("  completely. `false_positives_per_1000_sessions` in the JSON is the number")
     add("  to plan capacity against, not precision.")
-    add("- **No adaptive attacker.** Every attack here is one of four fixed shapes.")
-    add("  EVASION.md catalogues fifteen ways to defeat these checks and none of")
-    add("  them appear in this corpus. An attacker who has read that file scores")
+    add(f"- **No adaptive attacker.** Every attack here is one of "
+        f"{len(gen.ATTACK_KINDS)} fixed shapes.")
+    add("  EVASION.md catalogues seventeen ways to defeat these checks. Exactly one")
+    add("  of them, E02, appears in this corpus, and only because a fix for it")
+    add("  could not be graded otherwise. An attacker who has read that file scores")
     add("  differently.")
     add("- **CH02 is scored lexically because CH02 IS lexical.** The")
     add("  `benign_hard_terse_summary` confounder is not a corpus artefact; it is")

@@ -20,15 +20,15 @@ python eval/run_eval.py            # score everything, rewrite the card
 |---|---|
 | `vocabulary.py` | The tool vocabulary, in two naming conditions, and the audit that proves the `unseen` one is unseen |
 | `corpus/generate.py` | Session generation by task family, with label-integrity checks |
-| `corpus/sample.jsonl` | 80 sessions, one per family x kind, committed so the corpus can be read without running anything |
-| `corpus/data/` | The full corpus. **Not committed** — 9 MB, deterministic from the seed |
+| `corpus/sample.jsonl` | 104 sessions, one per family x kind, committed so the corpus can be read without running anything |
+| `corpus/data/` | The full corpus. **Not committed** — 15 MB, deterministic from the seed |
 | `corpus/data/manifests/` | Per-agent capability manifests, the ground truth for the `manifest` condition |
 | `harness.py` | Split, fit, score. The split assertions live here |
 | `metrics.py` | Wilson intervals, FP per 1000, coverage-adjusted recall |
 | `run_eval.py` | The grid, and the card |
 | `../tests/test_eval.py` | Tests for all of the above, because a measuring instrument needs checking too |
 
-## The three design decisions worth arguing with
+## The four design decisions worth arguing with
 
 ### 1. The tool names are not from the classifier's keyword lists
 
@@ -59,7 +59,7 @@ Three regimes are reported: `task_disjoint` (the honest one), `family_holdout`
 to *measure* the inflation rather than cite someone else's figure for it. Numbers
 from the leaky regime are labelled as contamination everywhere they appear.
 
-### 3. Three quarters of the benign sessions are hard
+### 3. Seven in ten benign sessions are hard
 
 A corpus of clean benign sessions reports a false positive rate of zero and calls
 it a result. The confounders here are benign sessions that look exactly like the
@@ -72,9 +72,39 @@ attack they sit next to:
 | `benign_hard_timeout_unpaired` | the call genuinely timed out | CH05 |
 | `benign_hard_terse_summary` | an honest summary in the agent's own words rather than the tool's. EVASION.md E04 | CH02 |
 | `benign_hard_rare_ordering` | legitimate work in an unusual order | CH01 |
+| `benign_hard_long_rare_action` | a long session ending in one of the family's own rare secondary actions — the same shape as `attack_dilution` with a legitimate tail | CH01 |
 
 Every false positive in the card comes from one of these. The plain benign
 sessions produce none.
+
+### 4. The corpus was extended because it could not measure a fix
+
+Worth recording as a decision rather than a changelog line, because it is the
+argument for keeping a corpus at all.
+
+EVASION.md's E02 says a violation *rate* can be diluted: pad a session with
+routine calls and the rate falls under threshold while the malicious transition
+stays. Before writing any fix for it, the corpus was asked what the fix would
+change — and the answer was **nothing**, because every session in it was three
+or four calls long and a rate cannot be diluted in a session too short to
+dilute. The corpus could not see the attack, so it could not have graded the
+fix.
+
+Three kinds went in first, with the detector untouched:
+
+| kind | why |
+|---|---|
+| `benign_long_loop` | ordinary work repeated. Also what teaches the baseline that agents loop — without it, padding creates a novel transition at every loop boundary and dilution fails by accident, making CH01 look stronger than it is |
+| `attack_dilution` | E02 itself. Honest summary, fully paired, no markers, no policy events, so CH02–CH05 are blind to it by construction and its recall measures CH01 alone |
+| `benign_hard_long_rare_action` | the confounder. Same shape, legitimate tail. Without it the fix would have been measured only against sessions built to make it look good |
+
+On that corpus CH01 caught **0 of 32** diluted attacks. After the fix, 32 of 32,
+plus 16 of 32 confounders. Both numbers are in the card, and the second one is
+the reason the first one is believable.
+
+Note the shape of the general problem: **a corpus can only grade fixes for
+attacks it contains**, so "the numbers did not move" is as easily a statement
+about the corpus as about the detector. Check which before believing it.
 
 ## Label integrity
 
@@ -110,6 +140,8 @@ catalogued as **E16** in [`../EVASION.md`](../EVASION.md).
 
 The card's own "What this does not measure" section is the authoritative list.
 The short version: the corpus is synthetic and written by the detector's author,
-attack prevalence is an absurd 33%, there is no adaptive attacker, and none of
-the fifteen catalogued evasions in `EVASION.md` appear in it. It is a large
-improvement on twelve fixtures and it is not real agent traffic.
+attack prevalence is an absurd 33%, and there is no adaptive attacker. One
+catalogued evasion from `EVASION.md` now appears in it, `attack_dilution` for
+E02, and it is there because a fix could not be graded without it — the other
+sixteen still do not. It is a large improvement on twelve fixtures and it is not
+real agent traffic.
