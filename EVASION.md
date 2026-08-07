@@ -94,6 +94,15 @@ Closing it needs evidence from outside the agent: kernel or network observation
 tracing) or a tamper-evident signed log at the point of emission (AEGIS,
 [arXiv:2603.12621](https://arxiv.org/abs/2603.12621), Ed25519 plus hash chaining).
 
+The second of those is now **designed** in
+[docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md) — sequence numbers, chain
+construction, signature verification against out-of-band keys, and the six
+coverage codes it needs, including `NO_INTEGRITY_EVIDENCE` for the state every
+deployment is in today. None of it is implemented, and read §7 before treating
+it as a closure: it would make deletion and modification *detectable* and would
+move the required attacker capability from "the agent emits what it likes" to
+"the attacker holds the collector's key". E13 stays open either way.
+
 ### E12. The correlation key is supplied by the thing being observed
 
 Give every event its own `session_id` and there are no sessions, so there is no
@@ -610,9 +619,9 @@ verdict and run identity, per-check coverage contracts, resource bounds, and CI.
 
 | Item | Why it is not closed here |
 |---|---|
-| Independent effect receipts (F4) | Needs a message ID, HTTP status, inode hash or cloud audit event from *outside* the agent. Nothing at this layer can distinguish a logged success from a real one. This is the substance of E13. |
-| Collector-side signing and hash chaining (F6) | Needs a key the agent process does not hold. A digest Cohaera computes proves Cohaera saw the input, not that the input was true. |
-| Approval and policy binding (F5) | Needs the producer to emit an approval hash. Related: CH04 reports `POLICY_SEMANTICS_UNDECLARED` on every session with a policy event, because nothing declares whether a control is advisory or blocking. |
+| Independent effect receipts (F4) | Needs a message ID, HTTP status, inode hash or cloud audit event from *outside* the agent. Nothing at this layer can distinguish a logged success from a real one. This is the substance of E13. **Now designed** — wire format, binding rules and the one new detection it buys are in [docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md) §3. Not implemented. |
+| Collector-side signing and hash chaining (F6) | Needs a key the agent process does not hold. A digest Cohaera computes proves Cohaera saw the input, not that the input was true. **Now designed** — chain construction, verification and the six coverage codes are in [docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md) §2. Key distribution is the unsolved half and the reason it is design rather than code. |
+| Approval and policy binding (F5) | Needs the producer to emit an approval hash. Related: CH04 reports `POLICY_SEMANTICS_UNDECLARED` on every session with a policy event, because nothing declares whether a control is advisory or blocking. **Now designed** — [docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md) §4, and it is the cheapest of the three with the largest measured effect on false positives, so it should be built first. |
 | Streaming correlation service (F7) | Cache invalidation (BUG-05) is fixed, which unblocks it, but watermarks, TTL and bounded active state are a service, not a flag. |
 | Typed evidence graph, argument provenance (F3) | The largest item. Not started. |
 | Deployable Exabeam parser | The field map is documentation. It is now *tested* documentation — `tests/test_content.py` asserts every field it names exists in a real record — but a parser needs a live platform to validate against. |

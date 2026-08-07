@@ -93,6 +93,9 @@ been closed, which cost 16 new false positives and says so.
 - [Roadmap](#roadmap)
 - [Known limitations](#known-limitations)
 - [Known evasions](EVASION.md)
+- [Threat model](docs/THREAT-MODEL.md) — what this trusts, and what survives an attacker who controls the telemetry
+- [Evidence trust](docs/EVIDENCE-TRUST.md) — design for the one item three reviews have put first
+- [Security policy](SECURITY.md) — reporting, scope, supply chain
 - [Relationship to the upstream projects](#relationship-to-the-upstream-projects)
 
 ---
@@ -856,6 +859,7 @@ prevention claim collapses.
 - [ ] Cohaera schema 1.0 plus a tested Exabeam exporter and parser package
 - [x] Automated VMware Workstation lab build ([lab/](lab/))
 - [ ] Streaming state with watermarks, replacing batch load
+- [x] Evidence-trust design: wire formats, verification and staging for all three P1 items ([docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md))
 - [ ] Independent effect receipts, so a logged success can be checked
 - [ ] Collector-side signing and hash chaining, AEGIS pattern
 - [ ] Approval and policy binding, so a continuation can be called a bypass
