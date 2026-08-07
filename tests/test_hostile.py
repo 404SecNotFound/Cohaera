@@ -47,6 +47,8 @@ from cohaera.cli import (
     EXIT_OK,
     EXIT_PARTIAL,
     EXIT_STRICT_REJECT,
+    _probe_writable,
+    _write_reject_log_atomic,
     main,
 )
 from cohaera.identity import (
@@ -78,7 +80,7 @@ from cohaera.model import (
     json_safe,
     to_cim_event,
 )
-from cohaera.validate import IngestReport, sanitise_display
+from cohaera.validate import IngestReport, Reject, sanitise_display
 
 BASE = 1_785_700_000.0
 
@@ -1640,3 +1642,126 @@ def test_c410_run_identity_still_moves_on_a_cosmetic_manifest_edit(tmp_path):
     assert compact.semantic_digest == pretty.semantic_digest
     assert (run_id(**common, manifest_hash=compact.file_digest)
             != run_id(**common, manifest_hash=pretty.file_digest))
+
+
+# ---------------------------------------------------------------------------
+# Fifth review: budgets that describe rather than bound, and audit evidence
+# that a failed run could destroy.
+# ---------------------------------------------------------------------------
+
+
+def _line(event_type: str, ts: float, sid: str = "s1") -> str:
+    return json.dumps({"event_type": event_type, "timestamp": BASE + ts,
+                       "session_id": sid, "span_id": "sp1",
+                       "tool_name": "alert_read", "data": {}}) + "\n"
+
+
+def test_c505_the_byte_budget_stops_a_single_oversized_line(tmp_path):
+    """C5-05, the fifth review's reproduction, verbatim.
+
+    A 28-byte one-line file under ``max_input_bytes=10`` was ACCEPTED and the
+    run reported no abort: the budget was checked after a complete record had
+    already been read, and a final line has no later iteration to trigger it.
+    """
+    src = tmp_path / "one.jsonl"
+    src.write_text('{"event_type":"tool_start"}\n', encoding="utf-8")
+    report = IngestReport()
+    events = list(read_events(
+        src, limits=DEFAULT_LIMITS.with_overrides(max_input_bytes=10),
+        report=report, quiet=True))
+    assert events == []
+    assert report.aborted
+    assert report.abort_reason == REJECT_TOO_MANY_BYTES
+
+
+def test_c505_the_byte_budget_bounds_the_work_not_just_the_yield(tmp_path):
+    """The point of a byte cap is that it stops READING, not that it stops
+    returning. A file thousands of times the cap must cost about the cap."""
+    src = tmp_path / "many.jsonl"
+    src.write_text("".join(f'{{"event_type":"tool_start","n":{i}}}\n'
+                           for i in range(5000)), encoding="utf-8")
+    report = IngestReport()
+    events = list(read_events(
+        src, limits=DEFAULT_LIMITS.with_overrides(max_input_bytes=1000),
+        report=report, quiet=True))
+    assert report.aborted
+    assert len(events) < 100, (
+        f"{len(events)} records were read under a 1000-byte cap; the cap is "
+        "bounding the output rather than the work")
+
+
+def test_c505_an_exhausted_reject_budget_stops_before_the_next_line(tmp_path):
+    """After a budget trips, the reader must not pay for one more full line."""
+    src = tmp_path / "junk.jsonl"
+    src.write_text("not json\n" * 200, encoding="utf-8")
+    report = IngestReport()
+    list(read_events(src, limits=DEFAULT_LIMITS.with_overrides(max_rejects=5),
+                     report=report, quiet=True))
+    assert report.aborted
+    assert report.rejected <= 8, (
+        f"{report.rejected} records were rejected under --max-rejects=5")
+
+
+def test_c506_probing_the_reject_log_does_not_destroy_the_previous_one(tmp_path):
+    """C5-06. The probe opened the FINAL path in write mode, so an existing
+    ledger was truncated before a single record had been read -- and a run that
+    then failed to load its input had destroyed the evidence and written no
+    replacement."""
+    ledger = tmp_path / "quarantine.jsonl"
+    ledger.write_text('{"_previous": "run"}\n', encoding="utf-8")
+    _probe_writable(str(ledger))
+    assert ledger.read_text(encoding="utf-8") == '{"_previous": "run"}\n'
+
+
+def test_c506_the_reject_log_is_replaced_atomically(tmp_path):
+    ledger = tmp_path / "quarantine.jsonl"
+    ledger.write_text("old\n", encoding="utf-8")
+    report = IngestReport(source="t")
+    report.add_reject(Reject(source="t", line=1, code="MALFORMED_JSON"))
+    _write_reject_log_atomic(str(ledger), report)
+    rows = [json.loads(x) for x in
+            ledger.read_text(encoding="utf-8").splitlines() if x.strip()]
+    assert rows[0]["code"] == "MALFORMED_JSON"
+    assert "_summary" in rows[-1]
+    # No temporary file survives a successful write.
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".")]
+
+
+def test_c507_a_partial_baseline_is_refused_by_default(tmp_path, capsys):
+    """C5-07. CH01 is the one detector here that LEARNS. Fitting it on silently
+    incomplete normal data changes every verdict afterwards, in both directions:
+    a missing transition becomes a false positive, a missing session becomes a
+    blind spot."""
+    telemetry = tmp_path / "run.jsonl"
+    telemetry.write_text(_line("tool_start", 1.0), encoding="utf-8")
+    baseline = tmp_path / "benign.jsonl"
+    baseline.write_text("not json\n" * 50, encoding="utf-8")
+
+    code = main(["score", str(telemetry), "--baseline", str(baseline),
+                 "--max-rejects", "2"])
+    assert code == EXIT_BUDGET
+    assert "REFUSING to fit on a partial baseline" in capsys.readouterr().err
+
+
+def test_c507_the_escape_hatch_works_and_is_recorded(tmp_path, capsys):
+    """Refusing outright would be the wrong call for an operator who knows their
+    baseline is lossy and wants it anyway. The choice is theirs and it travels
+    in provenance so a verdict can be audited against the reference it actually
+    used."""
+    telemetry = tmp_path / "run.jsonl"
+    telemetry.write_text(_line("tool_start", 1.0), encoding="utf-8")
+    baseline = tmp_path / "benign.jsonl"
+    baseline.write_text("not json\n" * 50, encoding="utf-8")
+
+    code = main(["score", str(telemetry), "--baseline", str(baseline),
+                 "--max-rejects", "2", "--allow-partial-baseline"])
+    assert code != EXIT_ERROR
+    out = capsys.readouterr()
+    assert "fitted on a PARTIAL baseline" in out.err
+    verdict = json.loads(out.out.splitlines()[0])
+    prov = verdict["data"]["provenance"]
+    assert prov["baseline_partial_allowed"] is True
+    # Fewer than 50, because the baseline read aborted on its own reject
+    # budget. That IS the partial baseline this flag exists to permit.
+    assert prov["baseline_ingest"]["records_rejected"] > 0
+    assert prov["baseline_ingest"]["aborted"] is True

@@ -85,9 +85,14 @@ class RawLine:
     oversize: bool
     nbytes: int             # bytes in the record, excluding the line terminator
     digest: str             # sha256 of an oversize record; "" otherwise
+    # C5-05. The total input budget was exhausted while this line was being
+    # read, so reading stopped part-way through it. The line is incomplete and
+    # must not be parsed; the run aborts.
+    over_budget: bool = False
 
 
-def _bounded_lines(path: Path, max_bytes: int) -> Iterator[RawLine]:
+def _bounded_lines(path: Path, max_bytes: int,
+                   max_total_bytes: int | None = None) -> Iterator[RawLine]:
     """Yield :class:`RawLine` without ever buffering an unbounded line.
 
     ``file.readline()`` reads until a newline arrives, so a producer that never
@@ -95,7 +100,20 @@ def _bounded_lines(path: Path, max_bytes: int) -> Iterator[RawLine]:
     chunks and abandons a line's CONTENT the moment it exceeds the bound, while
     continuing to count and hash what streams past, then resynchronises on the
     next newline. Peak memory is ``max_bytes + _CHUNK`` regardless of input.
+
+    C5-05. ``max_total_bytes`` is enforced HERE, mid-line, and that placement is
+    the whole fix. The caller used to check the running total after receiving a
+    complete RawLine, which has two failures: an over-long line is streamed and
+    hashed in full before anything can object, and a final line that pushes the
+    run past the cap has no later iteration to trigger it -- a 28-byte one-line
+    file was accepted under ``max_input_bytes=10``. A cap that stops work only
+    after the work is done is a report, not a budget.
+
+    Reading stops at the chunk that crosses the total, so peak work is bounded
+    by ``max_total_bytes + _CHUNK`` rather than by the size of the file.
     """
+    consumed = 0        # bytes pulled off the disk
+    emitted = 0         # bytes in the records actually yielded
     with path.open("rb") as fh:
         buf = bytearray()
         hasher: Any = None
@@ -123,15 +141,17 @@ def _bounded_lines(path: Path, max_bytes: int) -> Iterator[RawLine]:
                 hasher.update(buf)
                 buf.clear()
 
-        def finish() -> RawLine:
+        def finish(over_budget: bool = False) -> RawLine:
             return RawLine(lineno=lineno, payload=b"" if oversize else bytes(buf),
                            oversize=oversize, nbytes=nbytes,
-                           digest=hasher.hexdigest()[:16] if oversize else "")
+                           digest=hasher.hexdigest()[:16] if oversize else "",
+                           over_budget=over_budget)
 
         while True:
             chunk = fh.read(_CHUNK)
             if not chunk:
                 break
+            consumed += len(chunk)
             start = 0
             while True:
                 nl = chunk.find(b"\n", start)
@@ -139,6 +159,17 @@ def _bounded_lines(path: Path, max_bytes: int) -> Iterator[RawLine]:
                     feed(chunk[start:])
                     break
                 feed(chunk[start:nl])
+                if (max_total_bytes is not None
+                        and emitted + nbytes > max_total_bytes):
+                    # This record would take the run past the total. It is not
+                    # yielded at all: a budget that admits the record that
+                    # breaks it is one record too generous, and the review's
+                    # reproduction is exactly the single-line case where that
+                    # record is the only one there is.
+                    yield RawLine(lineno=lineno, payload=b"", oversize=False,
+                                  nbytes=nbytes, digest="", over_budget=True)
+                    return
+                emitted += nbytes
                 yield finish()
                 buf.clear()
                 hasher = None
@@ -146,6 +177,15 @@ def _bounded_lines(path: Path, max_bytes: int) -> Iterator[RawLine]:
                 oversize = False
                 lineno += 1
                 start = nl + 1
+            if max_total_bytes is not None and consumed >= max_total_bytes:
+                # Stop reading the file entirely. Whatever is buffered is a
+                # partial record and is reported as such rather than parsed.
+                if nbytes:
+                    yield finish(over_budget=True)
+                else:
+                    yield RawLine(lineno=lineno, payload=b"", oversize=False,
+                                  nbytes=0, digest="", over_budget=True)
+                return
         if nbytes:
             yield finish()                   # last line, no trailing newline
 
@@ -216,14 +256,40 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
                 f"max_reject_ratio={limits.max_reject_ratio}")
         return "", ""
 
-    for raw in _bounded_lines(p, limits.max_line_bytes):
-        lineno = raw.lineno
-
+    # C5-05. An explicit iterator, so that a live budget can be checked BEFORE
+    # the next line is requested. ``for raw in ...`` pulls a complete record out
+    # of the generator first, which means an exhausted reject budget still paid
+    # for one more full line -- read, decoded, depth-scanned and hashed -- every
+    # time it was checked.
+    lines = _bounded_lines(p, limits.max_line_bytes,
+                           max_total_bytes=limits.max_input_bytes)
+    lineno = 0
+    while True:
         code, detail = _budget_hit()
         if code:
             rep.aborted = True
             rep.abort_reason = code
             _reject(lineno, code, f"{detail}; remaining records not read")
+            return
+        try:
+            raw = next(lines)
+        except StopIteration:
+            break
+        lineno = raw.lineno
+
+        if raw.over_budget:
+            # The reader stopped mid-file because the total byte budget was
+            # reached. Anything buffered is a partial record and is never
+            # parsed: a truncated JSON object is not a record, and accepting
+            # one would be the fail-open coercion this codebase refuses
+            # everywhere else.
+            rep.aborted = True
+            rep.abort_reason = REJECT_TOO_MANY_BYTES
+            _reject(lineno, REJECT_TOO_MANY_BYTES,
+                    f"max_input_bytes={limits.max_input_bytes} reached after "
+                    f"{bytes_read + raw.nbytes} byte(s); reading stopped and "
+                    f"the remainder of the file was not read",
+                    nbytes=raw.nbytes)
             return
 
         records_read += 1

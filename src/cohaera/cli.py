@@ -31,10 +31,14 @@ convincing "0 finding(s)" line and then clear the screen above it.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import os
 import sys
+import tempfile
+from pathlib import Path
+from typing import Any
 
 from . import __version__
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest, ManifestError
@@ -196,20 +200,45 @@ def cmd_score(args: argparse.Namespace) -> int:
 
     grammar = None
     baseline_hash = ""
+    baseline_ingest: dict | None = None
     if args.baseline:
         baseline_report = IngestReport(source=str(args.baseline))
         benign = load(args.baseline, limits=limits,
                       correlator=Correlator(None, limits=limits),
                       manifest=manifest, report=baseline_report)
+        # C5-07. A partial baseline used to produce a warning and then be fitted
+        # anyway. That is the worst of both: CH01 is the one detector here that
+        # LEARNS, its whole output is "unlike what I was shown", and quietly
+        # showing it less than the operator supplied changes every verdict
+        # afterwards -- in both directions, since a missing transition becomes a
+        # false positive and a missing session becomes a blind spot.
+        #
+        # An abort can also happen with zero rejected records, so the warning
+        # never fired for the case where the reader stopped early on a budget.
+        # This checks the same budget function the target telemetry is checked
+        # against, and refuses by default.
+        baseline_problem = _budget_exceeded(baseline_report, limits)
+        if baseline_report.rejected and not baseline_problem:
+            baseline_problem = (f"{baseline_report.rejected} baseline record(s) "
+                                "were quarantined")
+        if baseline_problem and not args.allow_partial_baseline:
+            _err(f"[cohaera] REFUSING to fit on a partial baseline: "
+                 f"{sanitise_display(baseline_problem, 300)}. A baseline "
+                 "assembled from incomplete data teaches a partial normal, and "
+                 "every CH01 verdict after it is measured against the wrong "
+                 "reference. Re-run with --allow-partial-baseline if that is "
+                 "genuinely what you want; the choice is recorded in provenance.")
+            return EXIT_BUDGET
         grammar = SequenceGrammar().fit(benign)
         baseline_hash = grammar.fingerprint()
+        baseline_ingest = baseline_report.summary()
         _err(f"[cohaera] fitted grammar on {grammar.sessions_fitted} benign sessions, "
              f"{len(grammar.bigrams)} distinct transitions, baseline_hash "
              f"{baseline_hash or 'none'}")
-        if baseline_report.rejected:
-            _err(f"[cohaera] WARNING: {baseline_report.rejected} baseline record(s) "
-                 "were quarantined. A baseline assembled from partial data teaches "
-                 "a partial normal.")
+        if baseline_problem:
+            _err(f"[cohaera] WARNING: fitted on a PARTIAL baseline "
+                 f"({sanitise_display(baseline_problem, 200)}) because "
+                 "--allow-partial-baseline was given.")
 
     sessions = load(args.telemetry, limits=limits, correlator=correlator,
                     manifest=manifest, report=report, keys=keys)
@@ -231,6 +260,11 @@ def cmd_score(args: argparse.Namespace) -> int:
         "detector_version": __version__,
         "config_hash": limits.digest(),
         "baseline_hash": baseline_hash,
+        # C5-07. What the baseline was actually built from, so a verdict can be
+        # audited against the reference it was measured against rather than
+        # against the file somebody believes was used.
+        "baseline_ingest": baseline_ingest,
+        "baseline_partial_allowed": bool(args.allow_partial_baseline),
         "capability_manifest": manifest.as_dict(),
         "collector_keys": keys.as_dict(),
         "correlation_key_version": correlator.key_version,
@@ -271,7 +305,7 @@ def cmd_score(args: argparse.Namespace) -> int:
 
     if args.reject_log:
         try:
-            _write_reject_log(args.reject_log, report)
+            _write_reject_log_atomic(args.reject_log, report)
         except OSError as exc:
             _err(f"[cohaera] could not write the quarantine ledger to "
                  f"{sanitise_display(args.reject_log, 160)}: "
@@ -291,7 +325,36 @@ def cmd_score(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _write_reject_log(path: str, report: IngestReport) -> None:
+def _write_reject_log_atomic(path: str, report: IngestReport) -> None:
+    """Write the quarantine ledger without ever leaving a partial one.
+
+    C5-06. This used to open the final path directly, so a run that died
+    part-way through writing left a truncated ledger where a complete one had
+    been -- and ``_probe_writable`` had already destroyed the previous contents
+    before scoring even started. The record of what Cohaera REFUSED to score is
+    audit evidence, and audit evidence that a failed run can erase is not
+    evidence.
+
+    Written to a sibling temporary file, flushed, fsynced, then moved into place
+    with ``os.replace``, which is atomic on POSIX and on Windows. Either the old
+    ledger is there or the new one is; there is no state in between.
+    """
+    target = Path(path)
+    fd, tmp = tempfile.mkstemp(dir=str(target.parent) or ".",
+                               prefix=f".{target.name}.", suffix=".partial")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            _write_reject_log(fh, report)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def _write_reject_log(fh: Any, report: IngestReport) -> None:
     """Machine-readable quarantine ledger, one JSON object per rejected record.
 
     C4-04. This used to catch OSError, print a line to stderr and return, so a
@@ -304,10 +367,9 @@ def _write_reject_log(path: str, report: IngestReport) -> None:
 
     So it raises. The caller turns that into a non-zero exit.
     """
-    with open(path, "w", encoding="utf-8") as fh:
-        for r in report.rejects:
-            fh.write(json.dumps(r.as_dict(), sort_keys=True) + "\n")
-        fh.write(json.dumps({"_summary": report.summary()}, sort_keys=True) + "\n")
+    for r in report.rejects:
+        fh.write(json.dumps(r.as_dict(), sort_keys=True) + "\n")
+    fh.write(json.dumps({"_summary": report.summary()}, sort_keys=True) + "\n")
 
 
 def _probe_writable(path: str) -> None:
@@ -315,9 +377,20 @@ def _probe_writable(path: str) -> None:
 
     Scoring a 10 GB file and only then discovering the ledger cannot be written
     is a bad trade for the operator, and the failure is knowable up front.
+
+    C5-06. It used to probe by opening the FINAL path in write mode, which
+    truncated an existing ledger before a single record had been read -- so a
+    run that then failed to load its input had already destroyed the previous
+    run's audit evidence and never wrote a replacement. The probe now tests the
+    destination DIRECTORY with a temporary file and leaves the target alone.
     """
-    with open(path, "w", encoding="utf-8"):
-        pass
+    target = Path(path)
+    parent = target.parent if str(target.parent) else Path()
+    if target.exists() and not os.access(target, os.W_OK):
+        raise OSError(f"{path}: exists and is not writable")
+    fd, tmp = tempfile.mkstemp(dir=str(parent) or ".", prefix=".cohaera-probe-")
+    os.close(fd)
+    os.unlink(tmp)
 
 
 def _add_common(p: argparse._ActionsContainer) -> None:
@@ -333,6 +406,11 @@ def _add_common(p: argparse._ActionsContainer) -> None:
     p.add_argument("--correlation-secret-env", metavar="NAME", default=SECRET_ENV,
                    help=f"Environment variable holding the HMAC key for anonymous "
                         f"correlation keys (default {SECRET_ENV}).")
+    p.add_argument("--allow-partial-baseline", action="store_true",
+                   help="Fit the sequence grammar even when the baseline file was "
+                        "partially read or partially quarantined. Off by default: "
+                        "a partial baseline teaches a partial normal and silently "
+                        "changes every CH01 verdict. Recorded in provenance.")
     p.add_argument("--strict", action="store_true",
                    help="Exit non-zero if any record is quarantined.")
     p.add_argument("--max-rejects", type=non_negative_int, metavar="N",
