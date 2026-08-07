@@ -52,12 +52,26 @@ jobs:
           # Zero runtime dependencies is a design commitment, not an accident.
           # It is what lets Cohaera run on a locked-down collector VM and in an
           # air-gapped lab. Assert it rather than hoping.
+          #
+          # Read from the INSTALLED distribution metadata, not from pyproject.
+          # Two reasons, and the second one is why this step exists at all:
+          #
+          #   1. tomllib is Python 3.11+. Parsing pyproject.toml made this step
+          #      fail on 3.10 -- the floor this matrix tests precisely BECAUSE it
+          #      is the floor. A check that cannot run on the oldest supported
+          #      interpreter is not a check.
+          #   2. pyproject is a claim; the metadata is the outcome. A dependency
+          #      that arrives by any other route (a build hook, a vendored
+          #      setup.py, a plugin) is invisible to a pyproject parse and caught
+          #      here.
+          #
+          # importlib.metadata is 3.8+, so this runs everywhere in the matrix.
           python - <<'PY'
-          import tomllib, pathlib
-          cfg = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
-          deps = cfg["project"]["dependencies"]
-          assert deps == [], f"runtime dependencies appeared: {deps}"
-          print("runtime dependencies: 0")
+          import importlib.metadata as md
+          reqs = md.requires("cohaera") or []
+          runtime = [r for r in reqs if "extra ==" not in r]
+          assert not runtime, f"runtime dependencies appeared: {runtime}"
+          print(f"runtime dependencies: 0 ({len(reqs)} optional, all extras)")
           PY
       - name: Lint
         run: |
