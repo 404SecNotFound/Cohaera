@@ -55,7 +55,7 @@ session**. AIE then needs only a simple Log Observed rule:
 ```
 Block 1  Log Observed
          Log Source Type = cohaera session verdict
-         triggered_rules contains CH04_guardrail_overrun
+         triggered_rules contains CH04_guardrail_bypass_completed
 ```
 
 **What this buys:**
@@ -99,7 +99,7 @@ is the kind of thing worth writing up.
 | Risk Rating | 7 |
 | Rule Block | Log Observed |
 | Log Source Type | Cohaera Session Verdict |
-| Primary Criteria | `triggered_rules` contains `CH04_guardrail_overrun` |
+| Primary Criteria | `triggered_rules` contains `CH04_guardrail_bypass_completed` |
 | Group By | `session_id`, `agent_name` |
 | Suppression | 60 minutes per `agent_name` |
 | Notify | SOC queue |
@@ -117,7 +117,7 @@ agent owner on first sighting.
 | Rule Name | Agent Consequential Action After Injection Markers |
 | Risk Rating | 6 |
 | Rule Block | Log Observed |
-| Primary Criteria | `triggered_rules` contains `CH03_untrusted_to_consequential` |
+| Primary Criteria | `triggered_rules` contains `CH03_untrusted_to_completed_action` |
 | Group By | `session_id`, `agent_name`, `user` |
 | Suppression | 30 minutes per `agent_name` |
 

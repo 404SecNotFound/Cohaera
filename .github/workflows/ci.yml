@@ -1,0 +1,175 @@
+name: ci
+
+# The third external review's "High: Add CI and protected pull-request gates".
+#
+# Every job here corresponds to something a review had to run BY HAND to find a
+# defect. The point of the file is that nobody has to run them by hand again:
+#   - the hostile suite is the reproduction of eleven defects found by reading;
+#   - the fuzz smoke test is a small version of the 50,000-case run that found
+#     six exception classes;
+#   - the content job is the one that catches a renamed check ID, which Sigma
+#     validation alone cannot;
+#   - the perf job is the one that catches an amplification regression, which is
+#     an availability fault and would otherwise only show up in production.
+#
+# Branch protection is a repository setting and cannot be committed. Require
+# these checks on the default branch in Settings -> Branches.
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 is the floor declared in pyproject. Test the floor, or the floor
+        # is a claim rather than a fact.
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Runtime dependency check
+        run: |
+          # Zero runtime dependencies is a design commitment, not an accident.
+          # It is what lets Cohaera run on a locked-down collector VM and in an
+          # air-gapped lab. Assert it rather than hoping.
+          python - <<'PY'
+          import tomllib, pathlib
+          cfg = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+          deps = cfg["project"]["dependencies"]
+          assert deps == [], f"runtime dependencies appeared: {deps}"
+          print("runtime dependencies: 0")
+          PY
+      - name: Lint
+        run: ruff check src tests
+      - name: Unit and hostile tests
+        run: python -m pytest tests/ -q
+      - name: Adversarial self-test
+        run: |
+          # Passes when the catalogued evasions still work. A FAILURE here means
+          # somebody closed a known weakness without updating EVASION.md, which
+          # is the one outcome this suite exists to make noisy.
+          python tests/test_evasion.py
+
+  fuzz:
+    name: malformed-input fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Fuzz smoke test
+        run: python tests/fuzz_smoke.py 4000
+
+  content:
+    name: sigma validation and conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev,content]"
+      - name: Sigma rule validation
+        run: sigma check content/sigma/
+      - name: Sigma converts to a real backend
+        run: |
+          # Validation proves the YAML is well-formed. Conversion proves a
+          # backend can turn it into a query. Neither proves the query matches
+          # anything, which is what the conformance suite below is for.
+          sigma plugin install splunk
+          sigma convert -t splunk --without-pipeline content/sigma/
+      - name: Content conformance
+        run: python -m pytest tests/test_content.py -q
+
+  perf:
+    name: amplification regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Resource bounds
+        run: |
+          python -m pytest tests/test_hostile.py -q -k \
+            "amplify or linear or quadratic or bounded"
+
+  build:
+    name: build and install the wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+      - name: Generate fixtures
+        # tests/fixtures/*.jsonl is gitignored: it is generated output, and a
+        # generator checked in alongside its output drifts from it silently.
+        run: python tests/make_fixtures.py
+      - name: Install the wheel into a clean environment and run it
+        run: |
+          python -m venv /tmp/verify
+          /tmp/verify/bin/pip install dist/*.whl
+          # If this pulls anything in, the zero-dependency claim is broken.
+          /tmp/verify/bin/pip list --format=freeze | tee /tmp/installed.txt
+          /tmp/verify/bin/cohaera score tests/fixtures/suspect.jsonl \
+            --baseline tests/fixtures/benign.jsonl > /tmp/verdicts.jsonl
+          python - <<'PY'
+          import json, pathlib
+          rows = [json.loads(x) for x in
+                  pathlib.Path("/tmp/verdicts.jsonl").read_text().splitlines() if x]
+          assert len(rows) == 4, rows
+          assert all(r["type"] == "cohaera_session_verdict" for r in rows)
+          assert all(r["verdict_id"] for r in rows)
+          print(f"{len(rows)} verdict record(s) emitted from the installed wheel")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  sbom:
+    name: sbom
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Generate an SBOM for the built artefact
+        run: |
+          python -m pip install --upgrade pip build cyclonedx-bom
+          python -m build
+          python -m pip install dist/*.whl
+          cyclonedx-py environment -o /tmp/cohaera-sbom.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: /tmp/cohaera-sbom.json

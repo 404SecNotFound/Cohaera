@@ -162,12 +162,14 @@ flowchart TB
 
     subgraph L3["LAYER 3 · CORRELATE · COHAERA, this project"]
         direction TB
-        ASM["session assembler<br/>group by session_id, fall back to trace_id"]
+        FW["schema firewall<br/>bounded size · depth · types · quarantine ledger"]
+        ASM["session assembler<br/>session_id · trace_id · HMAC anon · isolate"]
         FEAT["feature derivation<br/>tool sequence · call class · timing · cost · depth"]
+        CAPM["capability manifest<br/>exact tool ID, declared effects"]
         GRAM["sequence grammar<br/>bigram model fitted on benign corpus"]
-        CHK["CH01 order · CH02 concealment · CH03 taint order<br/>CH04 guardrail overrun · CH05 unpaired"]
-        COV["coverage<br/>what could NOT be evaluated, and why"]
-        ASM --> FEAT --> GRAM --> CHK --> COV
+        CHK["CH01 order · CH02 concealment<br/>CH03 taint completed/attempted<br/>CH04 guardrail completed/attempted · CH05 unpaired"]
+        COV["coverage contracts<br/>per check: what could NOT be evaluated, and why"]
+        FW --> ASM --> FEAT --> CAPM --> GRAM --> CHK --> COV
     end
 
     subgraph L4["LAYER 4 · ANALYTICS AND SOC"]
@@ -179,10 +181,11 @@ flowchart TB
 
     L1 ==> L2
     SR ==>|"per-event JSONL · webhook · OTel<br/>the stream that exists today"| L3
-    COV ==>|"cohaera_session_verdict<br/>type + schema + triggered_rules + max_severity<br/>ONE record per session"| L4
+    COV ==>|"cohaera_session_verdict<br/>type + schema + verdict_id + triggered_rules<br/>+ max_severity + coverage + provenance<br/>ONE record per session"| L4
 
     style L3 fill:#0f2b46,stroke:#4a9eff,stroke-width:3px,color:#ffffff
     style SR fill:#5a1e1e,stroke:#ff6b6b,color:#ffffff
+    style FW fill:#4a3a10,stroke:#e0a800,color:#ffffff
     style COV fill:#1e4620,stroke:#5cb85c,color:#ffffff
 ```
 
@@ -201,8 +204,8 @@ observra repo:
 
 ```
 session 01KZ21ZR6B9X78G6BYWSMXYHQ1  agent=kb-research-agent  cost=$0.6413
-   [CRIT] CH03_untrusted_to_consequential
-   [HIGH] CH04_guardrail_overrun: Session continued with consequential actions
+   [CRIT] CH03_untrusted_to_completed_action
+   [HIGH] CH04_guardrail_bypass_completed: Consequential action COMPLETED
           after cost_threshold_exceeded
 ```
 
@@ -272,24 +275,77 @@ corpus with task-disjoint splits. That is what the lab below is for.
 |---|---|---|---|
 | **CH01** | `sequence_order` | Does the tool ordering match a grammar mined from benign sessions? | whole session |
 | **CH02** | `concealment_gap` | Did a consequential call succeed without appearing in the agent's final message to the human? | tool log + final response |
-| **CH03** | `untrusted_to_consequential` | Did a state change follow observed injection markers in the same session? | 2+ ordered |
-| **CH04** | `guardrail_overrun` | Did a policy event fire and the session carry on doing consequential work anyway? | 2+ ordered |
+| **CH03** | `untrusted_to_completed_action`<br/>`untrusted_to_attempted_action` | Did a state change follow observed injection markers in the same session — and did it *complete*, or only get *attempted*? | 2+ ordered |
+| **CH04** | `guardrail_bypass_completed`<br/>`post_guardrail_attempt` | Did a policy event fire and the session carry on doing consequential work anyway — completed, or attempted? | 2+ ordered |
 | **CH05** | `unpaired_calls` | Did a tool start and never terminate, meaning the session is incompletely observed? | 2 paired |
 
-Plus `coverage()`, which reports **what could not be evaluated and why**. A check
-that silently cannot run is a false negative wearing a green tick. observra's own
+### Why CH03 and CH04 are each two checks
+
+They were each one check until an external review pointed out what the merged
+wording asserted. A session where the only candidate call had **errored** was
+reported at the same severity, with the same title, as one where an irreversible
+action actually happened — and CH04's detail said *"the control produced a log
+line but did not stop the behaviour"* about a call that never completed.
+
+That sentence has two unsupported halves. The action did not happen. And nothing
+in the telemetry says which of the guardrail, the tool, the model or an unrelated
+failure prevented it, so the control being ignored is one reading and the control
+**working correctly** is another.
+
+An attempt and an effect are different facts and an analyst acts on them
+differently, so they are now different check IDs at different levels with
+different Sigma rules. `data.triggered_families` still carries the family name
+for content that wants either.
+
+### Coverage is a capability contract, not a score
+
+`coverage()` reports **what could not be evaluated and why**. A check that
+silently cannot run is a false negative wearing a green tick. observra's own
 `examples/siem_parser.json` carries a `telemetry_completeness` field described as
 *"Use to weight anomaly detection confidence"*. This is that idea, made concrete
 per check.
+
+Each check declares the **surfaces** it needs, which were present, which were
+missing, stable **reason codes**, remedies, and the assumptions it is making.
+`completeness` is the mean confidence across checks, and confidence multiplies in
+three things the previous version ignored:
+
+- **correlation quality** — 1.0 for a producer-supplied `session_id`, 0.3 for a
+  scoped anonymous bucket, 0.0 for a record with no identity at all;
+- **classification quality** — whether each tool's effect was *declared* in a
+  capability manifest or *guessed* from its name;
+- **clock quality** — the fraction of events with a usable timestamp, since CH03
+  and CH04 are ordering checks and cannot see an event without one.
+
+The practical consequence: **a session whose tools Cohaera cannot classify no
+longer scores 1.0.** Under the old count-based score it did, because unknown
+classification raised a gap that no check depended on.
 
 ### Call classification
 
 Every tool call is classified `read_only`, `state_change`, `egress`, or
 `unknown`. Egress wins over state change, because data leaving the trust
-boundary is the more consequential property for a concealment check. The keyword
-sets come from observra's own `schema/cim_schema.toml` rather than a parallel
-taxonomy invented here, and observra's `reversible` flag overrides the keyword
-guess when present.
+boundary is the more consequential property for a concealment check.
+
+Precedence, highest first:
+
+1. an exact-tool-ID **capability manifest**, if one is supplied;
+2. egress by name;
+3. observra's per-call `reversible` flag, authoritative in both directions;
+4. the name heuristic, whose keyword sets come from observra's own
+   `schema/cim_schema.toml` rather than a parallel taxonomy invented here.
+
+The manifest outranks `reversible` deliberately: that flag arrives **on the
+event**, in band, from the same path an attacker would use to hide an action. The
+manifest is loaded out of band from a path the operator chose.
+
+Steps 2 to 4 are all guesses about an attacker-supplied string, and the heuristic
+has been wrong in both directions in every review round so far — `budget_report`
+read as read-only because `get` is inside `budget`, `postmortem_read` read as
+egress because `post` is inside `postmortem`. Whole-token matching fixed those.
+It cannot fix the general case: `sync_to_partner` is egress and `sync_local_cache`
+is not, and no lexical rule separates them. See
+[`content/manifest/`](content/manifest/example_capability_manifest.json).
 
 ---
 
@@ -306,10 +362,11 @@ flowchart LR
     end
 
     subgraph ASM["Cohaera assembly"]
-        G["group by session_id<br/>fall back to trace_id"]
+        F["schema firewall<br/>bounded size · depth · types<br/>reject or flag, never guess"]
+        G["group by session_id<br/>trace_id · scoped anon · isolate"]
         S["sort by timestamp"]
         P["pair tool_start to terminal<br/>by span_id, then FIFO by name"]
-        G --> S --> P
+        F --> G --> S --> P
     end
 
     subgraph OUT["Session object"]
@@ -320,11 +377,48 @@ flowchart LR
     end
 
     IN ==> ASM ==> OUT
-    OUT ==>|"features()"| V["23-field feature vector<br/>ready for a SIEM"]
+    OUT ==>|"features()"| V["feature vector + coverage contract<br/>+ verdict identity, ready for a SIEM"]
 ```
 
 An unpaired `tool_end` is still recorded rather than discarded, because a
 terminal event with no start is itself worth surfacing.
+
+### The correlation key comes from the thing being observed
+
+This is the deepest weakness in the design and it should be said before anything
+else about deployment. Cohaera groups by a `session_id` the agent supplies. Give
+every event its own and there are no sessions, so there is no cross-event state,
+so every check goes quiet at once ([EVASION.md](EVASION.md) E12).
+
+What the assembler *can* do is be honest about which key it used. Every session
+carries `data.correlation.kind` — `session_id`, `trace_id`, `scoped_anonymous`
+or `isolated_anonymous` — and a confidence that flows into every check's
+coverage. Two specifics worth knowing:
+
+- **Records with no identity at all** — no session, no trace, no host, no user,
+  no agent, no framework — are **isolated**, not bucketed by time. They used to
+  merge, which let an injection marker and an egress call that shared nothing but
+  an arrival time produce a critical finding.
+- **Anonymous keys are HMACs**, not the identity they stand in for. The old key
+  embedded `repr()` of host, user, agent and framework, and that key is emitted
+  as `session_id` straight into a SIEM. Set `$COHAERA_CORRELATION_SECRET`; without
+  it the key is an unkeyed digest and the record says so via
+  `data.correlation.keyed`, because a few thousand hostnames are trivially
+  enumerable.
+
+### The input boundary
+
+Everything crossing it is produced by the system Cohaera is meant to assess, so
+every dimension of it is attacker-controlled: line length, nesting depth, event
+count, string length, how many calls share a name. The reader bounds all of them
+and **quarantines** what it refuses rather than coercing it into something
+plausible — a malformed tool name that becomes `<unnamed>` classifies as
+`unknown`, which is not consequential, which removes a malicious action from
+CH02, CH03 and CH04 at once.
+
+Fields that survive but are the wrong type are treated as **absent and flagged**,
+never guessed. The reason codes travel with the session in
+`data.integrity_defects` and lower the confidence of the checks that needed them.
 
 ---
 
@@ -342,11 +436,32 @@ PYTHONPATH=src python3 -m cohaera.cli score tests/fixtures/suspect.jsonl \
 Against real telemetry:
 
 ```bash
+export COHAERA_CORRELATION_SECRET='...'   # HMAC key for anonymous session keys
+
 PYTHONPATH=src python3 -m cohaera.cli score ~/.observra/telemetry.jsonl \
-    --baseline benign-corpus.jsonl > verdicts.jsonl
+    --baseline benign-corpus.jsonl \
+    --tool-manifest my-agent-capabilities.json \
+    --reject-log quarantine.jsonl \
+    --max-reject-ratio 0.01 > verdicts.jsonl
 ```
 
-Human summary goes to **stderr**. CIM records go to **stdout** as JSONL, so it
+**Exit codes**, because a pipeline that loses records must not report success:
+
+| Code | Meaning |
+|---|---|
+| `0` | every record was accepted |
+| `3` | partial success — some records were quarantined |
+| `4` | `--strict` was set and at least one record was quarantined |
+| `5` | a reject budget or resource bound was exceeded; **output is incomplete** |
+| `1` | unexpected error; trust nothing |
+
+`--tool-manifest` replaces the name heuristic with a per-tool declaration and is
+the single biggest lever on coverage confidence. See
+[`content/manifest/`](content/manifest/example_capability_manifest.json).
+
+Human summary goes to **stderr**, escaped: a producer that puts a newline and an
+ANSI sequence in a `session_id` could otherwise forge a convincing `0 finding(s)`
+line and clear the screen above it. CIM records go to **stdout** as JSONL, so it
 pipes straight into a collector:
 
 ```bash
@@ -648,20 +763,26 @@ prevention claim collapses.
 - [ ] Measured TPR and FPR with task-disjoint splits
 - [ ] CH02 semantic matching, currently lexical and its weakest point
 - [ ] Praxen Worker Remit compiler, remit sections to runtime predicates
-- [x] Sigma content pack, 6 rules, validated ([content/sigma](content/sigma))
+- [x] Sigma content pack, 9 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Unit tests, 32 passing ([tests/test_cohaera.py](tests/test_cohaera.py))
+- [x] Tests, 188 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 15 evasions ([EVASION.md](EVASION.md))
-- [x] Six correctness defects from external review, fixed with regression tests
-- [ ] Typed capability manifests per producer, replacing name heuristics
+- [x] Schema firewall, resource bounds and quarantine ledger
+- [x] Typed capability manifests per producer, replacing name heuristics
+- [x] Stable verdict, run and config identity for replay and dedup
+- [x] Per-check coverage capability contracts (`cohaera.coverage:2`)
+- [x] CI with lint, fuzz smoke, Sigma validation, conversion and wheel install
+- [x] Eleven defects from the third external review, fixed with regression tests
 - [ ] Cohaera schema 1.0 plus a tested Exabeam exporter and parser package
 - [ ] Streaming state with watermarks, replacing batch load
+- [ ] Independent effect receipts, so a logged success can be checked
+- [ ] Collector-side signing and hash chaining, AEGIS pattern
+- [ ] Approval and policy binding, so a continuation can be called a bypass
 - [ ] CH02 semantic matching
 - [ ] Validate content against a live SIEM
 - [ ] Build AIE-COHAERA-001 natively and compare against the Cohaera-fed version
-- [ ] Hash-chained verdict log, AEGIS pattern
 
 ---
 
@@ -675,12 +796,28 @@ hide is a defect.
   LLM judge and will inherit the judge's error rate. C-Trace measured exactly
   this: monitor accuracy is bounded by the field extractor.
 - **CH03 proves coexistence, not causation.** It marks sessions for review.
-- **CH01 needs a real baseline.** A grammar fitted on 12 identical sessions
-  learns 5 transitions and flags anything novel.
-- **Tool classification is keyword-based** with observra's `reversible` flag as a
-  tiebreak. Unknown-class calls are counted and reported in coverage.
+- **CH01 needs a real baseline**, and cannot verify that the baseline is benign.
+  A grammar fitted on 12 identical sessions learns 5 transitions and flags
+  anything novel. A poisoned corpus defines normal ([EVASION.md](EVASION.md) E03).
+- **Tool classification is a keyword guess** unless you supply a capability
+  manifest. It has been wrong in both directions in every review round. The
+  manifest is the fix; without one, `coverage.classification_confidence` says how
+  much of the verdict rests on the guess.
+- **CH04 cannot distinguish an ignored guardrail from an enforced one.** Nothing
+  in the telemetry declares whether a policy event is advisory or blocking, so
+  every session with one reports `POLICY_SEMANTICS_UNDECLARED`.
+- **The correlation key comes from the observed system.** Fragment `session_id`
+  on call boundaries and every check goes quiet at once. Cohaera can only be
+  honest about which key it used, not fix the key.
+- **A logged success is not a verified effect.** Nothing here checks a tool
+  result against anything outside the agent. Cohaera is an assurance control, not
+  an adversarial one: it answers "is this agent doing its job" well and "is this
+  agent lying to me" not at all.
 - **Nothing here has been measured against a labelled corpus yet.** The fixture
-  numbers are a smoke test.
+  numbers are a smoke test. The hardening in 0.2 makes the detector harder to
+  crash, harder to blind and more honest about what it did not see. **None of it
+  makes the detector better at detecting.** Those are prerequisites for measuring
+  quality, not a substitute for measuring it.
 
 ---
 
@@ -688,13 +825,18 @@ hide is a defect.
 
 ```
 src/cohaera/          the library, 0 runtime dependencies
+  limits.py           every resource bound, and the digest of the set in force
+  validate.py         the schema firewall: what a field is allowed to be
+  identity.py         correlation keys (HMAC) and stable verdict/run identity
+  capabilities.py     exact per-tool capability manifests
   model.py            Session, ToolCall, Finding, CIM emit
-  ingest.py           observra JSONL to Sessions
-  checks.py           CH01 to CH05 plus coverage()
-  cli.py              cohaera score
+  ingest.py           observra JSONL to Sessions, bounded and quarantining
+  checks.py           CH01 to CH05 plus per-check coverage contracts
+  cli.py              cohaera score, with exit codes that mean something
 
 content/              detection content
-  sigma/              6 validated Sigma rules
+  sigma/              9 validated Sigma rules
+  manifest/           example capability manifest
   aie/                LogRhythm AIE specs + correlate-in-SIEM vs upstream comparison
   parser/             Exabeam field map + observra#108 analysis
 
@@ -702,9 +844,17 @@ docs/
   PHASE0-VERIFICATION.md   raw command output backing every claim in this README
 
 tests/
-  test_cohaera.py     32 unit tests, no pytest required to run
+  test_cohaera.py     unit tests, no pytest required to run
+  test_hostile.py     one regression per reproduced defect: malformed types,
+                      resource amplification, correlation forgery, exit codes
+  test_content.py     asserts every field the Sigma pack names exists in a real
+                      record. Sigma validation cannot check this.
   test_evasion.py     15 adversarial tests that PASS when an evasion works
+  fuzz_smoke.py       seeded malformed-input fuzz, runs in CI
   make_fixtures.py    labelled benign and suspect telemetry
+
+.github/workflows/    CI: lint, tests, fuzz, Sigma validation + conversion,
+                      wheel build and clean-environment install, SBOM
 
 FINDINGS.md           three source-verified observations against observra v1.1.0
 LAB.md                full lab build, VM topology, experiment protocol
@@ -713,7 +863,11 @@ LAB.md                full lab build, VM topology, experiment protocol
 Run the tests without installing anything:
 
 ```bash
-PYTHONPATH=src python3 tests/test_cohaera.py
+PYTHONPATH=src python3 tests/test_cohaera.py     # no pytest needed
+PYTHONPATH=src python3 tests/test_evasion.py     # PASS means the evasion works
+PYTHONPATH=src python3 tests/fuzz_smoke.py 20000 # seeded, reproducible
+
+PYTHONPATH=src python3 -m pytest tests/ -q       # everything, needs pytest
 ```
 
 ---

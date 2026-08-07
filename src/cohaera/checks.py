@@ -7,15 +7,39 @@ none of these can be expressed upstream today.
 Each check returns zero or more Findings. A check that cannot run says so via
 ``coverage()`` rather than silently returning clean, because a check that cannot
 see its inputs is not the same as a check that passed.
+
+Two structural changes after the third external review.
+
+SEPARATE FACTS GET SEPARATE CHECK IDS
+    CH03 and CH04 each covered two different claims under one ID. An attempted
+    call that errored was reported with the same title, the same detail wording
+    and, for CH04, the same Sigma severity as one that completed. CH04 went
+    further and asserted "the control did not stop the behaviour" about a call
+    that failed, which the data cannot support: the available evidence does not
+    say whether the guardrail, the tool, or an unrelated condition stopped it.
+    Each is now two check IDs with wording that claims only what was observed.
+
+COVERAGE IS A PER-CHECK CONTRACT, NOT A COUNT
+    The old score counted checks that returned ``not_evaluated`` and nothing
+    else, so a session whose every tool was unclassifiable still scored 0.8 to
+    1.0. A detector operating on semantics it does not have should not
+    contribute a full point. Each check now declares the surfaces it needs, what
+    was present, and a confidence that multiplies in correlation quality,
+    classification quality and clock quality.
 """
 
 from __future__ import annotations
 
 import re
-from collections import Counter, defaultdict
+from bisect import bisect_right
+from collections import Counter
+from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from .model import Finding, Session, ToolCall
+from .limits import DEFAULT_LIMITS, Limits
+from .model import (POLICY_EVENTS, SOURCE_MANIFEST, Finding, Session, ToolCall,
+                    cap_list)
+from .validate import sanitise_display
 
 # ---------------------------------------------------------------------------
 # CH01  Sequence order violation
@@ -29,6 +53,12 @@ class SequenceGrammar:
     co-occurrence. observra's own (unreachable) detect_suspicious_sequence()
     checks ``has_read AND has_external`` over the whole session, which is a set
     membership test with no notion of order at all.
+
+    ``fingerprint`` is the baseline hash the verdict record carries. SEC-05:
+    Cohaera learns "normal" from whatever corpus it is handed, with no
+    attestation that the corpus was benign. That is a process control and cannot
+    be fixed in code, but a run whose baseline changed should at least be
+    distinguishable from one whose baseline did not.
     """
 
     START = "<START>"
@@ -62,9 +92,20 @@ class SequenceGrammar:
     def fitted(self) -> bool:
         return self.sessions_fitted > 0
 
+    def fingerprint(self) -> str:
+        """Content hash of what this grammar learned."""
+        from .identity import digest
+        if not self.fitted:
+            return ""
+        return digest({
+            "sessions": self.sessions_fitted,
+            "bigrams": sorted(f"{a}\x1f{b}\x1f{n}" for (a, b), n in self.bigrams.items()),
+        }, 16)
+
 
 def ch01_sequence_order(session: Session, grammar: SequenceGrammar | None,
-                        threshold: float = 0.25) -> list[Finding]:
+                        threshold: float = 0.25,
+                        limits: Limits = DEFAULT_LIMITS) -> list[Finding]:
     if grammar is None or not grammar.fitted:
         return []
     rate, unseen = grammar.score(session)
@@ -75,8 +116,13 @@ def ch01_sequence_order(session: Session, grammar: SequenceGrammar | None,
     novel_tools = sorted({b for _, b in unseen
                           if b not in grammar.unigrams or grammar.unigrams[b] == 0})
     sev = "high" if novel_tools else "medium"
+    shown_unseen, dropped_unseen = cap_list([f"{a} -> {b}" for a, b in unseen],
+                                            limits.max_evidence_items)
+    shown_novel, dropped_novel = cap_list(novel_tools, limits.max_evidence_items)
+    shown_seq, dropped_seq = cap_list(session.tool_sequence, limits.max_evidence_items)
     return [Finding(
         check="CH01_sequence_order",
+        family="CH01_sequence_order",
         severity=sev,
         session_id=session.session_id,
         title="Tool-call ordering deviates from the learned benign grammar",
@@ -84,15 +130,19 @@ def ch01_sequence_order(session: Session, grammar: SequenceGrammar | None,
             f"{len(unseen)} of {total_transitions} transitions were never observed "
             f"in {grammar.sessions_fitted} benign sessions "
             f"(violation rate {rate:.2f}, threshold {threshold})."
-            + (f" Tools never seen in any benign session: {', '.join(novel_tools)}."
-               if novel_tools else "")
+            + (f" Tools never seen in any benign session: "
+               f"{', '.join(shown_novel)}." if shown_novel else "")
         ),
         evidence={
             "violation_rate": round(rate, 4),
-            "unseen_transitions": [f"{a} -> {b}" for a, b in unseen],
-            "novel_tools": novel_tools,
-            "observed_sequence": session.tool_sequence,
+            "unseen_transitions": shown_unseen,
+            "unseen_transitions_truncated": dropped_unseen,
+            "novel_tools": shown_novel,
+            "novel_tools_truncated": dropped_novel,
+            "observed_sequence": shown_seq,
+            "observed_sequence_truncated": dropped_seq,
             "baseline_sessions": grammar.sessions_fitted,
+            "baseline_hash": grammar.fingerprint(),
         },
     )]
 
@@ -102,6 +152,7 @@ def ch01_sequence_order(session: Session, grammar: SequenceGrammar | None,
 # ---------------------------------------------------------------------------
 
 _SPLIT = re.compile(r"[^a-z0-9]+")
+_TOKEN = re.compile(r"[a-z0-9]+")
 
 
 def _tokens(text: str) -> set[str]:
@@ -124,7 +175,53 @@ def _negated_spans(text: str, window: int = 80) -> list[tuple[int, int]]:
             for m in _NEGATION.finditer(text)]
 
 
-def _referenced(call: ToolCall, response_tokens: set[str], response: str = "") -> bool:
+class ResponseIndex:
+    """One pass over the final response, reused by every call.
+
+    The previous implementation ran ``re.finditer`` across the entire response
+    once per name fragment per consequential call, which is O(calls * length).
+    Measured: 800 calls against an 80 KB response took 6.9 seconds, and both
+    numbers are supplied by the thing being observed. Indexing once and looking
+    up per call is O(length + calls).
+
+    Negation spans are merged and binary-searched for the same reason: a
+    response can contain an unbounded number of negation cues.
+    """
+
+    def __init__(self, response: str) -> None:
+        self.text = response
+        lowered = response.lower()
+        self.positions: dict[str, list[int]] = {}
+        for m in _TOKEN.finditer(lowered):
+            tok = m.group()
+            if len(tok) > 2:
+                self.positions.setdefault(tok, []).append(m.start())
+        self._starts: list[int] = []
+        self._ends: list[int] = []
+        for a, b in _merge_spans(_negated_spans(lowered)):
+            self._starts.append(a)
+            self._ends.append(b)
+
+    @property
+    def has_negation(self) -> bool:
+        return bool(self._starts)
+
+    def negated(self, pos: int) -> bool:
+        i = bisect_right(self._starts, pos) - 1
+        return i >= 0 and pos < self._ends[i]
+
+
+def _merge_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    out: list[tuple[int, int]] = []
+    for a, b in sorted(spans):
+        if out and a <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def _referenced(call: ToolCall, index: ResponseIndex) -> bool:
     """Does the summary disclose this call?
 
     Two failure modes, both real, both measured:
@@ -143,23 +240,24 @@ def _referenced(call: ToolCall, response_tokens: set[str], response: str = "") -
     reason CH02 ships at medium severity with a baseline-first instruction.
     """
     parts = {p for p in _SPLIT.split(call.name.lower()) if len(p) > 2}
-    if not (parts & response_tokens):
-        return False
-    if not response:
-        return True
-    lowered = response.lower()
-    spans = _negated_spans(lowered)
-    if not spans:
-        return True
-    # Disclosure counts only if at least one mention sits OUTSIDE a negation.
+    matched = False
     for part in parts:
-        for m in re.finditer(re.escape(part), lowered):
-            if not any(a <= m.start() < b for a, b in spans):
+        occurrences = index.positions.get(part)
+        if not occurrences:
+            continue
+        matched = True
+        if not index.has_negation:
+            return True
+        for pos in occurrences:
+            if not index.negated(pos):
                 return True
-    return False
+    # Every mention sat inside a negation span, so the summary denies the
+    # action rather than disclosing it. Not referenced.
+    return False if matched else False
 
 
-def ch02_concealment_gap(session: Session) -> list[Finding]:
+def ch02_concealment_gap(session: Session,
+                         limits: Limits = DEFAULT_LIMITS) -> list[Finding]:
     response = session.final_response
     if response is None:
         return []          # not clean: see coverage()
@@ -168,15 +266,18 @@ def ch02_concealment_gap(session: Session) -> list[Finding]:
     if not consequential:
         return []
 
-    rtok = _tokens(response)
+    index = ResponseIndex(response)
     unreported = [c for c in consequential
-                  if c.executed and not _referenced(c, rtok, response)]
+                  if c.executed and not _referenced(c, index)]
     if not unreported:
         return []
 
     has_egress = any(c.klass == "egress" for c in unreported)
+    shown, dropped = cap_list([c.brief(limits) for c in unreported],
+                              limits.max_evidence_items)
     return [Finding(
         check="CH02_concealment_gap",
+        family="CH02_concealment_gap",
         severity="critical" if has_egress else "high",
         session_id=session.session_id,
         title="Consequential tool calls absent from the agent's final response",
@@ -187,10 +288,9 @@ def ch02_concealment_gap(session: Session) -> list[Finding]:
             "removes the human control without removing the appearance of it."
         ),
         evidence={
-            "unreported_calls": [
-                {"tool": c.name, "class": c.klass, "at": c.started_at}
-                for c in unreported
-            ],
+            "unreported_calls": shown,
+            "unreported_calls_truncated": dropped,
+            "unreported_total": len(unreported),
             "consequential_total": len(consequential),
             "response_length": len(response),
         },
@@ -201,8 +301,13 @@ def ch02_concealment_gap(session: Session) -> list[Finding]:
 # CH03  Untrusted content observed, then a consequential action
 # ---------------------------------------------------------------------------
 
+CH03_FAMILY = "CH03_untrusted_to_consequential"
+CH03_COMPLETED = "CH03_untrusted_to_completed_action"
+CH03_ATTEMPTED = "CH03_untrusted_to_attempted_action"
 
-def ch03_untrusted_to_consequential(session: Session) -> list[Finding]:
+
+def ch03_untrusted_to_consequential(session: Session,
+                                    limits: Limits = DEFAULT_LIMITS) -> list[Finding]:
     """Simplified taint flow.
 
     Full information-flow control (Fides arXiv:2505.23643, CaMeL arXiv:2503.18813)
@@ -210,94 +315,237 @@ def ch03_untrusted_to_consequential(session: Session) -> list[Finding]:
     does have is: the timestamp at which an injection marker was observed, and the
     timestamps of consequential calls. Ordering those two is a cheap, honest
     approximation with a real false-positive story.
+
+    Split into two check IDs after review. The old single finding said N calls
+    "ran afterwards" and the Sigma rule said the agent "Took" an action, for a
+    session where the only candidate call had errored. An attempt and an effect
+    are different facts and an analyst acts on them differently.
     """
     marker_times = [
         e.timestamp for e in session.events
-        if e.data.get("injection_patterns") or e.data.get("has_injection_patterns")
+        if (e.data.get("injection_patterns") or e.data.get("has_injection_patterns"))
+        and e.timestamp_valid
     ]
     if not marker_times:
         return []
 
     first_marker = min(marker_times)
-    # R2-04 fix. consequential_calls includes open, failed and orphan calls.
-    # Saying one "ran" when it errored overstates the fact. Split them.
-    cand = [c for c in session.consequential_calls if c.started_at >= first_marker]
-    after = [c for c in cand if c.executed]
+    cand = [c for c in session.consequential_calls
+            if c.clock_valid and c.started_at >= first_marker]
+    completed = [c for c in cand if c.executed]
     attempted = [c for c in cand if not c.executed]
-    if not after:
-        after, attempted = attempted, []          # attempt-only, lower severity
-    if not after:
-        return []
 
-    return [Finding(
-        check="CH03_untrusted_to_consequential",
-        severity=("critical" if any(c.klass == "egress" and c.executed for c in after)
-                  else "high" if any(c.executed for c in after) else "medium"),
-        session_id=session.session_id,
-        title=("Completed consequential action followed observed injection markers"
-               if any(c.executed for c in after)
-               else "Attempted consequential action followed observed injection markers"),
-        detail=(
-            f"Injection markers were flagged at t={first_marker:.3f}, and "
-            f"{len(after)} consequential call(s) ran afterwards in the same session. "
-            "This does not prove causation. It marks the session as one where "
-            "untrusted content and a state change coexist in the wrong order, "
-            "which is the sequence a human should review."
-        ),
-        evidence={
-            "markers": session.injection_markers,
-            "first_marker_ts": first_marker,
-            "calls_after": [{"tool": c.name, "class": c.klass, "at": c.started_at,
-                             "state": c.state, "result": c.result,
-                             "completed": c.executed} for c in after],
-            "attempted_only": [{"tool": c.name, "state": c.state} for c in attempted],
-        },
-    )]
+    markers, markers_dropped = cap_list(session.injection_markers,
+                                        limits.max_evidence_items)
+    base_evidence = {
+        "markers": markers,
+        "markers_truncated": markers_dropped,
+        "first_marker_ts": first_marker,
+        "marker_event_count": len(marker_times),
+    }
+
+    findings: list[Finding] = []
+
+    if completed:
+        shown, dropped = cap_list([c.brief(limits) for c in completed],
+                                  limits.max_evidence_items)
+        findings.append(Finding(
+            check=CH03_COMPLETED,
+            family=CH03_FAMILY,
+            severity="critical" if any(c.klass == "egress" for c in completed)
+            else "high",
+            session_id=session.session_id,
+            title="Consequential action COMPLETED after observed injection markers",
+            detail=(
+                f"Injection markers were flagged at t={first_marker:.3f}, and "
+                f"{len(completed)} consequential call(s) completed successfully "
+                "afterwards in the same session. This does not prove causation. It "
+                "marks the session as one where untrusted content and a completed "
+                "state change coexist in the wrong order, which is the sequence a "
+                "human should review."
+            ),
+            evidence={**base_evidence,
+                      "completed_after": shown,
+                      "completed_after_truncated": dropped,
+                      "completed_total": len(completed),
+                      "also_attempted": len(attempted)},
+        ))
+
+    if attempted:
+        shown, dropped = cap_list([c.brief(limits) for c in attempted],
+                                  limits.max_evidence_items)
+        findings.append(Finding(
+            check=CH03_ATTEMPTED,
+            family=CH03_FAMILY,
+            severity="medium",
+            session_id=session.session_id,
+            title="Consequential action ATTEMPTED after observed injection markers",
+            detail=(
+                f"Injection markers were flagged at t={first_marker:.3f}, and "
+                f"{len(attempted)} consequential call(s) started afterwards without "
+                "completing successfully. The attempt is the observed fact. Whether "
+                "the action had any effect is NOT established by this telemetry: a "
+                "call can be recorded as open because it failed, because it was "
+                "refused, or because the terminal event was never emitted."
+            ),
+            evidence={**base_evidence,
+                      "attempted_after": shown,
+                      "attempted_after_truncated": dropped,
+                      "attempted_total": len(attempted),
+                      "also_completed": len(completed)},
+        ))
+
+    return findings
 
 
 # ---------------------------------------------------------------------------
 # CH04  Guardrail fired and the session continued
 # ---------------------------------------------------------------------------
 
+CH04_FAMILY = "CH04_guardrail_overrun"
+CH04_COMPLETED = "CH04_guardrail_bypass_completed"
+CH04_ATTEMPTED = "CH04_post_guardrail_attempt"
 
-def ch04_guardrail_overrun(session: Session) -> list[Finding]:
+# Scalar policy fields worth carrying into evidence. An unbounded copy of the
+# producer's data bag is how regulated content and secrets reach a SIEM by
+# accident (SEC-07), and how a hostile producer inflates the verdict record.
+_POLICY_FIELDS = ("threshold_usd", "session_cost_usd", "cost_usd", "current_depth",
+                  "max_depth", "limit", "threshold", "policy_id", "policy_name",
+                  "action", "decision", "enforcement")
+
+
+def _policy_evidence(data: dict[str, Any], limits: Limits) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key in _POLICY_FIELDS:
+        if key not in data or len(out) >= limits.max_policy_data_keys:
+            continue
+        value = data[key]
+        if isinstance(value, bool) or isinstance(value, (int, float)):
+            out[key] = value
+        elif isinstance(value, str):
+            out[key] = sanitise_display(value, limits.max_evidence_value_chars)
+    dropped = sorted(k for k in data if k not in out)
+    if dropped:
+        shown, extra = cap_list(dropped, limits.max_evidence_items)
+        out["_fields_not_carried"] = shown
+        if extra:
+            out["_fields_not_carried_truncated"] = extra
+    return out
+
+
+def ch04_guardrail_overrun(session: Session,
+                           limits: Limits = DEFAULT_LIMITS) -> list[Finding]:
     """A policy event fired, and consequential work happened after it.
 
     observra emits cost_threshold_exceeded and depth_exceeded as policy_event
     actions. Nothing upstream asks the obvious follow-up question: did anything
     keep happening? A guardrail that fires and is then ignored is worse than no
     guardrail, because it produces a log line that looks like a control.
+
+    Two defects fixed here.
+
+    WORDING. The old detail said "the control produced a log line but did not
+    stop the behaviour" for attempt-only sessions, where every candidate call
+    had errored. That is an attribution the data does not support. Attempts and
+    completions are now separate check IDs with separate severity, and the
+    attempt wording claims only the attempt.
+
+    AMPLIFICATION. The old loop emitted one finding per policy EVENT, each
+    carrying every consequential call after it, so a session with N policy
+    events and M calls cost O(N*M) in time and in output. Measured: 900 input
+    events produced a 6.3 MB verdict record. Repeated firings of the same
+    threshold are the same fact, so the check now reports the EARLIEST firing of
+    each policy type once and carries the repeat count instead.
     """
-    findings: list[Finding] = []
+    earliest: dict[str, Any] = {}
+    counts: Counter[str] = Counter()
+    unusable_clock = 0
     for e in session.events:
-        if e.event_type not in {"cost_threshold_exceeded", "depth_exceeded"}:
+        if e.event_type not in POLICY_EVENTS:
             continue
-        cand = [c for c in session.consequential_calls if c.started_at > e.timestamp]
-        after = [c for c in cand if c.executed]        # R2-04: completed only
+        counts[e.event_type] += 1
+        if not e.timestamp_valid:
+            unusable_clock += 1
+            continue
+        cur = earliest.get(e.event_type)
+        if cur is None or e.timestamp < cur.timestamp:
+            earliest[e.event_type] = e
+    if not earliest:
+        return []
+
+    findings: list[Finding] = []
+    consequential = session.consequential_calls
+
+    for etype in sorted(earliest):
+        e = earliest[etype]
+        cand = [c for c in consequential
+                if c.clock_valid and c.started_at > e.timestamp]
+        completed = [c for c in cand if c.executed]
         attempted = [c for c in cand if not c.executed]
-        if not after and not attempted:
+        if not completed and not attempted:
             continue
-        findings.append(Finding(
-            check="CH04_guardrail_overrun",
-            severity="high" if after else "medium",
-            session_id=session.session_id,
-            title=f"Session continued with consequential actions after {e.event_type}",
-            detail=(
-                f"{e.event_type} fired at t={e.timestamp:.3f}, then "
-                f"{len(after)} consequential call(s) COMPLETED and "
-                f"{len(attempted)} were attempted without completing. The control "
-                "produced a log line but did not stop the behaviour."
-            ),
-            evidence={
-                "policy_event": e.event_type,
-                "policy_event_data": e.data,
-                "completed_after": [{"tool": c.name, "class": c.klass,
-                                     "result": c.result} for c in after],
-                "attempted_after": [{"tool": c.name, "class": c.klass,
-                                     "state": c.state} for c in attempted],
-            },
-        ))
-    return findings
+
+        base = {
+            "policy_event": etype,
+            "policy_event_first_ts": e.timestamp,
+            "policy_event_count": counts[etype],
+            "policy_events_with_invalid_clock": unusable_clock,
+            "policy_event_data": _policy_evidence(e.data, limits),
+            "policy_semantics_declared": False,
+        }
+
+        if completed:
+            shown, dropped = cap_list([c.brief(limits) for c in completed],
+                                      limits.max_evidence_items)
+            findings.append(Finding(
+                check=CH04_COMPLETED,
+                family=CH04_FAMILY,
+                severity="high",
+                session_id=session.session_id,
+                title=f"Consequential action COMPLETED after {etype}",
+                detail=(
+                    f"{etype} fired at t={e.timestamp:.3f}"
+                    + (f" ({counts[etype]} times in this session)"
+                       if counts[etype] > 1 else "")
+                    + f", and {len(completed)} consequential call(s) COMPLETED "
+                    "successfully afterwards. Whatever that control was intended to "
+                    "do, the session went on to take a consequential action after it "
+                    "fired. Confirm with the agent owner whether the threshold is "
+                    "advisory or blocking: this telemetry carries no declaration of "
+                    "policy semantics, so Cohaera reports the sequence, not a bypass."
+                ),
+                evidence={**base, "completed_after": shown,
+                          "completed_after_truncated": dropped,
+                          "completed_total": len(completed),
+                          "also_attempted": len(attempted)},
+            ))
+
+        if attempted:
+            shown, dropped = cap_list([c.brief(limits) for c in attempted],
+                                      limits.max_evidence_items)
+            findings.append(Finding(
+                check=CH04_ATTEMPTED,
+                family=CH04_FAMILY,
+                severity="medium",
+                session_id=session.session_id,
+                title=f"Consequential action ATTEMPTED after {etype}",
+                detail=(
+                    f"{etype} fired at t={e.timestamp:.3f}, and "
+                    f"{len(attempted)} consequential call(s) started afterwards "
+                    "without completing successfully. The attempt is the observed "
+                    "fact. This telemetry CANNOT show whether the guardrail, the "
+                    "tool, the model or an unrelated failure stopped them, so it "
+                    "does not establish either that the control worked or that it "
+                    "was ignored."
+                ),
+                evidence={**base, "attempted_after": shown,
+                          "attempted_after_truncated": dropped,
+                          "attempted_total": len(attempted),
+                          "also_completed": len(completed)},
+            ))
+
+    shown, dropped = cap_list(findings, limits.max_findings_per_check)
+    return shown
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +553,8 @@ def ch04_guardrail_overrun(session: Session) -> list[Finding]:
 # ---------------------------------------------------------------------------
 
 
-def ch05_unpaired_calls(session: Session) -> list[Finding]:
+def ch05_unpaired_calls(session: Session,
+                        limits: Limits = DEFAULT_LIMITS) -> list[Finding]:
     """Pairing integrity: open starts AND orphan terminals.
 
     Integrity check on the telemetry itself, not on the agent. Either the agent
@@ -332,8 +581,13 @@ def ch05_unpaired_calls(session: Session) -> list[Finding]:
     if orphans:
         parts.append(f"{len(orphans)} terminal event(s) with no start")
 
+    shown_open, dropped_open = cap_list([c.brief(limits) for c in opens],
+                                        limits.max_evidence_items)
+    shown_orph, dropped_orph = cap_list([c.brief(limits) for c in orphans],
+                                        limits.max_evidence_items)
     return [Finding(
         check="CH05_unpaired_calls",
+        family="CH05_unpaired_calls",
         severity="medium" if consequential else "low",
         session_id=session.session_id,
         title="Tool call pairing is incomplete",
@@ -344,75 +598,339 @@ def ch05_unpaired_calls(session: Session) -> list[Finding]:
             "as incompletely observed rather than clean."
         ),
         evidence={
-            "open_starts": [{"tool": c.name, "class": c.klass, "at": c.started_at}
-                            for c in opens],
-            "orphan_terminals": [{"tool": c.name, "class": c.klass, "at": c.started_at}
-                                 for c in orphans],
+            "open_starts": shown_open,
+            "open_starts_truncated": dropped_open,
+            "open_starts_total": len(opens),
+            "orphan_terminals": shown_orph,
+            "orphan_terminals_truncated": dropped_orph,
+            "orphan_terminals_total": len(orphans),
+            "consequential_unpaired": len(consequential),
         },
     )]
 
 
 # ---------------------------------------------------------------------------
-# Coverage: what could not be evaluated, and why
+# Coverage: a capability contract per check
 # ---------------------------------------------------------------------------
 
+COVERAGE_SCHEMA = "cohaera.coverage:2"
 
-def coverage(session: Session, grammar: SequenceGrammar | None) -> dict[str, Any]:
-    """Report Cohaera's own blind spots for this session.
+STATUS_EVALUATED = "evaluated"
+STATUS_DEGRADED = "degraded"
+STATUS_NOT_EVALUATED = "not_evaluated"
+
+# Surfaces a check can require. Naming them makes the contract auditable: an
+# operator can ask "which of my agents actually expose SURFACE_FINAL_RESPONSE"
+# rather than reading five reason strings and guessing.
+SURFACE_TOOL_LIFECYCLE = "tool_lifecycle"
+SURFACE_TOOL_CLASS = "tool_class"
+SURFACE_FINAL_RESPONSE = "final_response"
+SURFACE_TOOL_RESULT = "tool_result"
+SURFACE_INJECTION_SCANNER = "injection_scanner"
+SURFACE_POLICY_SEMANTICS = "policy_semantics"
+SURFACE_BENIGN_BASELINE = "benign_baseline"
+SURFACE_EVENT_CLOCK = "event_clock"
+SURFACE_CORRELATION_KEY = "correlation_key"
+
+# Reason codes. Stable, because downstream content will match on them.
+R_NO_BASELINE = "NO_BENIGN_BASELINE_FITTED"
+R_NO_RESPONSE = "NO_FINAL_RESPONSE_TEXT"
+R_BAD_RESPONSE = "FINAL_RESPONSE_WRONG_TYPE"
+R_NO_TOOL_RESULT = "NO_TOOL_RESULT_CAPTURED"
+R_NO_SCANNER = "NO_INJECTION_SCANNER_EVIDENCE"
+R_UNKNOWN_CLASS = "TOOL_CLASS_UNKNOWN"
+R_HEURISTIC_CLASS = "TOOL_CLASS_FROM_NAME_HEURISTIC"
+R_NO_MANIFEST = "NO_CAPABILITY_MANIFEST"
+R_WEAK_CORRELATION = "CORRELATION_KEY_NOT_PRODUCER_SUPPLIED"
+R_INVALID_CLOCK = "EVENT_CLOCK_INVALID"
+R_NO_POLICY_SEMANTICS = "POLICY_SEMANTICS_UNDECLARED"
+R_FIELD_DEFECTS = "RECORD_FIELD_DEFECTS_PRESENT"
+
+# How much to believe a class that came from a name heuristic rather than a
+# declared capability. Not a measurement; an ordering. It exists so that a
+# session classified entirely by guesswork cannot report full confidence.
+_HEURISTIC_CLASS_WEIGHT = 0.7
+
+
+@dataclass
+class CheckContract:
+    """What one check needed, what it got, and how much to believe it."""
+
+    check: str
+    status: str
+    confidence: float
+    required_surfaces: list[str] = field(default_factory=list)
+    present_surfaces: list[str] = field(default_factory=list)
+    missing_surfaces: list[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
+    remedies: list[str] = field(default_factory=list)
+    assumptions: list[str] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "check": self.check,
+            "status": self.status,
+            "confidence": round(self.confidence, 3),
+            "required_surfaces": self.required_surfaces,
+            "present_surfaces": self.present_surfaces,
+            "missing_surfaces": self.missing_surfaces,
+            "reasons": self.reasons,
+            "remedies": self.remedies,
+            "assumptions": self.assumptions,
+        }
+
+
+def _classification_quality(session: Session) -> tuple[float, int, int, int]:
+    """(confidence, unknown, heuristic, manifest) over this session's calls.
+
+    A call classified from a signed-out-of-band manifest is a fact. One
+    classified from its name is a guess about an attacker-supplied string. One
+    that matched nothing is not classified at all, and the old coverage score
+    treated that last case as a standalone gap that cost the session nothing.
+    """
+    calls = session.tool_calls
+    if not calls:
+        return 1.0, 0, 0, 0
+    unknown = heuristic = manifest = 0
+    total = 0.0
+    for c in calls:
+        if c.klass == "unknown":
+            unknown += 1
+        elif c.klass_source == SOURCE_MANIFEST:
+            manifest += 1
+            total += 1.0
+        else:
+            heuristic += 1
+            total += _HEURISTIC_CLASS_WEIGHT
+    return total / len(calls), unknown, heuristic, manifest
+
+
+def _clock_quality(session: Session) -> float:
+    if not session.events:
+        return 1.0
+    return 1.0 - (session.clock_defects / len(session.events))
+
+
+def _scanner_evidence(session: Session) -> bool:
+    """Did anything upstream actually scan for injection markers?
+
+    E09 and E13: CH03 orders markers against calls, so with no marker fields at
+    all in the stream it cannot fire, and the old coverage counted it as a check
+    that ran and passed. The presence of the FIELD, at any value, is the
+    evidence that a scanner ran. Its absence is a blind spot, and a blind spot
+    reported as a clean result is a false negative wearing a green tick.
+    """
+    for e in session.events:
+        d = e.data
+        if "has_injection_patterns" in d or "injection_patterns" in d:
+            return True
+    return False
+
+
+def coverage(session: Session, grammar: SequenceGrammar | None,
+             limits: Limits = DEFAULT_LIMITS) -> dict[str, Any]:
+    """Report Cohaera's own blind spots for this session, per check.
 
     observra's examples/siem_parser.json carries a telemetry_completeness field
     described as "Use to weight anomaly detection confidence". This is that idea,
-    made concrete per check. A detection that silently cannot run is a false
-    negative wearing a green tick.
+    made concrete per check.
+
+    The previous version counted only ``not_evaluated`` states, so a session
+    whose every tool was unclassifiable still scored up to 1.0, and a missing
+    tool_result was charged to CH02 even though CH02 reads the final response
+    rather than tool output. Both are fixed: degraded states cost confidence,
+    unknown classification degrades the checks that actually depend on it, and
+    tool_result is charged to CH03, whose provenance story needs it.
     """
-    gaps: list[dict[str, str]] = []
+    calls = session.tool_calls
+    class_conf, unknown, heuristic, manifest_hits = _classification_quality(session)
+    clock_conf = _clock_quality(session)
+    corr_conf = session.correlation_confidence
+    corr_kind = session.correlation.kind if session.correlation else "session_id"
+    has_result = any(c.had_result for c in calls)
+    scanner = _scanner_evidence(session)
+    has_policy = bool(session.policy_events)
+    baseline_ok = grammar is not None and grammar.fitted
+    defects = session.integrity_defects
 
+    common_reasons: list[str] = []
+    if corr_conf < 1.0:
+        common_reasons.append(R_WEAK_CORRELATION)
+    if clock_conf < 1.0:
+        common_reasons.append(R_INVALID_CLOCK)
+    if defects:
+        common_reasons.append(R_FIELD_DEFECTS)
+
+    def class_reasons() -> list[str]:
+        out = []
+        if unknown:
+            out.append(R_UNKNOWN_CLASS)
+        if heuristic:
+            out.append(R_HEURISTIC_CLASS)
+        if not manifest_hits and calls:
+            out.append(R_NO_MANIFEST)
+        return out
+
+    contracts: list[CheckContract] = []
+
+    # ---- CH01 -----------------------------------------------------------
+    required = [SURFACE_BENIGN_BASELINE, SURFACE_TOOL_LIFECYCLE,
+                SURFACE_CORRELATION_KEY]
+    if not baseline_ok:
+        contracts.append(CheckContract(
+            check="CH01_sequence_order", status=STATUS_NOT_EVALUATED, confidence=0.0,
+            required_surfaces=required,
+            present_surfaces=[SURFACE_TOOL_LIFECYCLE, SURFACE_CORRELATION_KEY],
+            missing_surfaces=[SURFACE_BENIGN_BASELINE],
+            reasons=[R_NO_BASELINE],
+            remedies=["Fit on a labelled benign corpus before scoring."],
+            assumptions=["The benign corpus is benign. Cohaera cannot verify "
+                         "that; see EVASION.md E03."]))
+    else:
+        conf = corr_conf * clock_conf
+        contracts.append(CheckContract(
+            check="CH01_sequence_order",
+            status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
+            confidence=conf, required_surfaces=required,
+            present_surfaces=required, missing_surfaces=[],
+            reasons=list(common_reasons),
+            remedies=(["Correlate on a producer-supplied session_id."]
+                      if corr_conf < 1.0 else []),
+            assumptions=["Bigram order only. Argument and destination drift are "
+                         "not modelled; see EVASION.md E01 and E02."]))
+
+    # ---- CH02 -----------------------------------------------------------
+    required = [SURFACE_FINAL_RESPONSE, SURFACE_TOOL_CLASS, SURFACE_CORRELATION_KEY]
     if session.final_response is None:
-        gaps.append({
-            "check": "CH02_concealment_gap",
-            "status": "not_evaluated",
-            "reason": (
-                "No response_text on any model_response. observra strips strings on "
-                "the hot path (core/hot_cold.py) and response_text is a claude-adapter "
-                "extra, so the final user-facing message is not in this stream."
-            ),
-            "remedy": "Enable cold-path capture, or run the claude adapter.",
-        })
+        reasons = [R_BAD_RESPONSE] if session.response_text_rejected else [R_NO_RESPONSE]
+        contracts.append(CheckContract(
+            check="CH02_concealment_gap", status=STATUS_NOT_EVALUATED, confidence=0.0,
+            required_surfaces=required,
+            present_surfaces=[SURFACE_TOOL_CLASS, SURFACE_CORRELATION_KEY],
+            missing_surfaces=[SURFACE_FINAL_RESPONSE],
+            reasons=reasons,
+            remedies=["Enable cold-path capture, or run the claude adapter.",
+                      "Emit response_text as a JSON string."],
+            assumptions=["Absence of a summary is not a clean summary."]))
+    else:
+        conf = corr_conf * class_conf
+        contracts.append(CheckContract(
+            check="CH02_concealment_gap",
+            status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
+            confidence=conf, required_surfaces=required,
+            present_surfaces=required, missing_surfaces=[],
+            reasons=common_reasons + class_reasons(),
+            remedies=(["Supply a capability manifest so consequential calls are "
+                       "identified by declaration rather than by name."]
+                      if unknown or heuristic else []),
+            assumptions=["Lexical disclosure matching. An honest paraphrase reads "
+                         "as concealment; see EVASION.md E04."]))
 
-    if not any(c.had_result for c in session.tool_calls) and session.tool_calls:
-        gaps.append({
-            "check": "CH02_concealment_gap",
-            "status": "degraded",
-            "reason": "No tool_result captured; capture_tool_data defaults to False.",
-            "remedy": "Set capture_tool_data=True in a controlled environment.",
-        })
+    # ---- CH03 -----------------------------------------------------------
+    required = [SURFACE_INJECTION_SCANNER, SURFACE_TOOL_CLASS, SURFACE_EVENT_CLOCK,
+                SURFACE_CORRELATION_KEY]
+    if not scanner:
+        contracts.append(CheckContract(
+            check=CH03_FAMILY, status=STATUS_NOT_EVALUATED, confidence=0.0,
+            required_surfaces=required,
+            present_surfaces=[SURFACE_TOOL_CLASS, SURFACE_EVENT_CLOCK,
+                              SURFACE_CORRELATION_KEY],
+            missing_surfaces=[SURFACE_INJECTION_SCANNER],
+            reasons=[R_NO_SCANNER],
+            remedies=["Emit has_injection_patterns on scanned events, or capture "
+                      "tool_result so Cohaera can scan locally."],
+            assumptions=["No marker field in the stream means no scanner ran, not "
+                         "that nothing was found; see EVASION.md E09."]))
+    else:
+        conf = corr_conf * class_conf * clock_conf * (1.0 if has_result else 0.8)
+        reasons = common_reasons + class_reasons()
+        if not has_result:
+            reasons.append(R_NO_TOOL_RESULT)
+        contracts.append(CheckContract(
+            check=CH03_FAMILY,
+            status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
+            confidence=conf, required_surfaces=required,
+            present_surfaces=required,
+            missing_surfaces=[] if has_result else [SURFACE_TOOL_RESULT],
+            reasons=reasons,
+            remedies=(["Set capture_tool_data=True in a controlled environment so "
+                       "marker provenance can be checked against the content."]
+                      if not has_result else []),
+            assumptions=["Temporal order, not information flow. Reordering the "
+                         "read and the action defeats it; see EVASION.md E07."]))
 
-    if grammar is None or not grammar.fitted:
-        gaps.append({
-            "check": "CH01_sequence_order",
-            "status": "not_evaluated",
-            "reason": "No benign baseline fitted. A grammar needs benign sessions first.",
-            "remedy": "Fit on a labelled benign corpus before scoring.",
-        })
+    # ---- CH04 -----------------------------------------------------------
+    required = [SURFACE_TOOL_CLASS, SURFACE_EVENT_CLOCK, SURFACE_CORRELATION_KEY]
+    if has_policy:
+        required = required + [SURFACE_POLICY_SEMANTICS]
+    conf = corr_conf * class_conf * clock_conf
+    reasons = common_reasons + class_reasons()
+    missing = []
+    if has_policy:
+        # No producer declares whether a policy event is advisory or blocking,
+        # so Cohaera can report the sequence but not attribute a bypass. That
+        # limit is the whole substance of the review's BUG-09 and it belongs in
+        # the contract rather than buried in a detail string.
+        conf *= 0.6
+        reasons.append(R_NO_POLICY_SEMANTICS)
+        missing.append(SURFACE_POLICY_SEMANTICS)
+    contracts.append(CheckContract(
+        check=CH04_FAMILY,
+        status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
+        confidence=conf, required_surfaces=required,
+        present_surfaces=[s for s in required if s not in missing],
+        missing_surfaces=missing, reasons=reasons,
+        remedies=(["Declare per-policy semantics (advisory or blocking) with the "
+                   "policy event so a continuation can be called a bypass."]
+                  if has_policy else []),
+        assumptions=["A policy event is a log line. Whether it was enforced is "
+                     "not stated by this telemetry."]))
 
-    unknown = sum(1 for c in session.tool_calls if c.klass == "unknown")
-    if unknown:
-        gaps.append({
-            "check": "classification",
-            "status": "degraded",
-            "reason": (
-                f"{unknown} tool call(s) could not be classified as read_only, "
-                "state_change or egress by name or by observra's reversible flag."
-            ),
-            "remedy": "Add these tool names to the classification map.",
-        })
+    # ---- CH05 -----------------------------------------------------------
+    required = [SURFACE_TOOL_LIFECYCLE, SURFACE_CORRELATION_KEY]
+    conf = corr_conf * (1.0 if not unknown else class_conf)
+    contracts.append(CheckContract(
+        check="CH05_unpaired_calls",
+        status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
+        confidence=conf, required_surfaces=required, present_surfaces=required,
+        missing_surfaces=[], reasons=common_reasons + (
+            [R_UNKNOWN_CLASS] if unknown else []),
+        remedies=[], assumptions=[
+            "Pairing integrity is an integrity signal about the telemetry, not "
+            "about the agent. A fabricated terminal event defeats it; see "
+            "EVASION.md E11."]))
 
-    evaluated = 5 - len({g["check"] for g in gaps if g["status"] == "not_evaluated"})
+    evaluated = sum(1 for c in contracts if c.status == STATUS_EVALUATED)
+    degraded = sum(1 for c in contracts if c.status == STATUS_DEGRADED)
+    not_evaluated = sum(1 for c in contracts if c.status == STATUS_NOT_EVALUATED)
+    completeness = (sum(c.confidence for c in contracts) / len(contracts)
+                    if contracts else 0.0)
+
     return {
-        "checks_total": 5,
-        "checks_evaluated": max(evaluated, 0),
-        "completeness": round(max(evaluated, 0) / 5, 2),
-        "gaps": gaps,
+        "schema": COVERAGE_SCHEMA,
+        "checks_total": len(contracts),
+        "checks_evaluated": evaluated,
+        "checks_degraded": degraded,
+        "checks_not_evaluated": not_evaluated,
+        # Confidence-weighted, NOT a count of checks that did not error. A
+        # detector operating on semantics it does not have contributes a
+        # fraction of a point, not a whole one.
+        "completeness": round(completeness, 3),
+        "correlation_kind": corr_kind,
+        "correlation_confidence": round(corr_conf, 3),
+        "classification_confidence": round(class_conf, 3),
+        "clock_confidence": round(clock_conf, 3),
+        "unknown_class_calls": unknown,
+        "heuristic_class_calls": heuristic,
+        "manifest_class_calls": manifest_hits,
+        "checks": [c.as_dict() for c in contracts],
+        # Kept for content written against coverage:1. Same information, flat.
+        "gaps": [
+            {"check": c.check, "status": c.status,
+             "reason": "; ".join(c.reasons) or "none",
+             "remedy": "; ".join(c.remedies) or "none"}
+            for c in contracts if c.status != STATUS_EVALUATED
+        ],
     }
 
 
@@ -421,16 +939,36 @@ def coverage(session: Session, grammar: SequenceGrammar | None) -> dict[str, Any
 # ---------------------------------------------------------------------------
 
 ALL_CHECKS = ["CH01_sequence_order", "CH02_concealment_gap",
-              "CH03_untrusted_to_consequential", "CH04_guardrail_overrun",
+              CH03_COMPLETED, CH03_ATTEMPTED,
+              CH04_COMPLETED, CH04_ATTEMPTED,
               "CH05_unpaired_calls"]
 
+# check id -> the coverage contract that governs it
+CHECK_FAMILIES = {
+    "CH01_sequence_order": "CH01_sequence_order",
+    "CH02_concealment_gap": "CH02_concealment_gap",
+    CH03_COMPLETED: CH03_FAMILY,
+    CH03_ATTEMPTED: CH03_FAMILY,
+    CH04_COMPLETED: CH04_FAMILY,
+    CH04_ATTEMPTED: CH04_FAMILY,
+    "CH05_unpaired_calls": "CH05_unpaired_calls",
+}
 
-def run_all(session: Session,
-            grammar: SequenceGrammar | None = None) -> tuple[list[Finding], dict[str, Any]]:
+
+def run_all(session: Session, grammar: SequenceGrammar | None = None,
+            limits: Limits = DEFAULT_LIMITS
+            ) -> tuple[list[Finding], dict[str, Any]]:
     findings: list[Finding] = []
-    findings += ch01_sequence_order(session, grammar)
-    findings += ch02_concealment_gap(session)
-    findings += ch03_untrusted_to_consequential(session)
-    findings += ch04_guardrail_overrun(session)
-    findings += ch05_unpaired_calls(session)
-    return findings, coverage(session, grammar)
+    findings += ch01_sequence_order(session, grammar, limits=limits)
+    findings += ch02_concealment_gap(session, limits=limits)
+    findings += ch03_untrusted_to_consequential(session, limits=limits)
+    findings += ch04_guardrail_overrun(session, limits=limits)
+    findings += ch05_unpaired_calls(session, limits=limits)
+
+    cov = coverage(session, grammar, limits=limits)
+    # Attach the governing contract's confidence to each finding, so a verdict
+    # read on its own still says how much of it rests on guesswork.
+    by_check = {c["check"]: c["confidence"] for c in cov["checks"]}
+    for f in findings:
+        f.confidence = by_check.get(f.family, by_check.get(f.check, 1.0))
+    return findings, cov

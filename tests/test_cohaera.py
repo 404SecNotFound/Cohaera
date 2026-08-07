@@ -68,7 +68,14 @@ def test_assemble_scopes_anonymous_events_and_never_merges_them_globally():
                    "host": "host-B", "user": "bob", "tool_name": "send_email"})
     out = assemble([a, b])
     assert len(out) == 2, "unrelated producers must not share a session"
-    assert all(s.session_id.startswith("anon|") for s in out)
+    assert all(s.session_id.startswith("anon-") for s in out)
+    # BUG-07 regression. The key used to embed repr() of host, user, agent and
+    # framework, and that key is emitted as session_id straight into a SIEM. A
+    # field explicitly labelled anonymous must not carry the identity it stands
+    # in for.
+    joined = " ".join(s.session_id for s in out)
+    for leaked in ("host-A", "host-B", "alice", "bob"):
+        assert leaked not in joined, f"anonymous key leaks {leaked}"
 
     # Same producer inside the window still groups, which is the useful half.
     c = Event(raw={"event_type": "tool_start", "timestamp": BASE,
@@ -281,9 +288,27 @@ def test_ch05_severity_rises_for_consequential():
 
 
 def test_coverage_flags_unknown_classification():
+    """BUG-10. An unclassifiable tool must cost the checks that read the class.
+
+    It used to raise a standalone 'classification' gap that no check depended
+    on, so ``checks_evaluated`` and ``completeness`` were unaffected and a
+    session Cohaera did not understand still scored up to 1.0.
+    """
     s = sess(ev("tool_start", 0, tool_name="frobnicate", span_id="A"),
-             ev("tool_end", 1, tool_name="frobnicate", span_id="A"))
-    assert any(g["check"] == "classification" for g in coverage(s, None)["gaps"])
+             ev("tool_end", 1, tool_name="frobnicate", span_id="A"),
+             ev("model_response", 2, response_text="done"))
+    cov = coverage(s, None)
+    assert cov["unknown_class_calls"] == 1
+    assert cov["classification_confidence"] == 0.0
+
+    # The checks that read the class are degraded, by name, with a reason code.
+    degraded = {c["check"]: c for c in cov["checks"] if c["status"] == "degraded"}
+    for check in ("CH02_concealment_gap", "CH05_unpaired_calls"):
+        assert check in degraded, f"{check} should be degraded by unknown class"
+        assert "TOOL_CLASS_UNKNOWN" in degraded[check]["reasons"]
+
+    # And the aggregate must not read as confident.
+    assert cov["completeness"] < 0.5, cov["completeness"]
 
 
 def test_coverage_completeness_is_a_fraction():
@@ -291,6 +316,24 @@ def test_coverage_completeness_is_a_fraction():
     c = coverage(s, None)
     assert 0.0 <= c["completeness"] <= 1.0
     assert c["checks_evaluated"] <= c["checks_total"]
+    assert c["schema"] == "cohaera.coverage:2"
+
+
+def test_coverage_never_reports_full_confidence_without_a_manifest():
+    """A name heuristic is a guess about an attacker-supplied string.
+
+    Nothing that rests entirely on it should contribute a whole point, so a
+    perfectly-formed session with a producer session_id, valid clocks, a final
+    response and confidently-named tools still lands short of 1.0.
+    """
+    s = sess(ev("tool_start", 0, tool_name="send_email", span_id="A", reversible=False),
+             ev("tool_end", 1, tool_name="send_email", span_id="A", reversible=False),
+             ev("model_response", 2, response_text="I sent the email.",
+                has_injection_patterns=False))
+    cov = coverage(s, SequenceGrammar().fit([_benign(i) for i in range(3)]))
+    assert cov["completeness"] < 1.0
+    assert cov["classification_confidence"] < 1.0
+    assert any("NO_CAPABILITY_MANIFEST" in c["reasons"] for c in cov["checks"])
 
 
 # ---------------------------------------------------------------- emit

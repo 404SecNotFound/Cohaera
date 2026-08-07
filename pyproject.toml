@@ -1,10 +1,14 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+# Upper bounds as well as lower. SEC-09: an unpinned build requirement means the
+# artefact you ship is a function of the day you built it, and "setuptools>=68"
+# accepts every future major release sight unseen. Bounded here so a release is
+# reproducible; raise the ceilings deliberately, not by accident.
+requires = ["setuptools>=68,<81", "wheel>=0.42,<1"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "cohaera"
-version = "0.1.0"
+version = "0.2.0"
 description = "The correlation layer for agent telemetry. Turns observra's per-event stream into correlation-grade events a SIEM can fire rules on."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,7 +27,16 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.6"]
+# Bounded for the same reason as the build requirements. PyYAML and sigma-cli
+# are needed only by tests/test_content.py, which asserts that every field the
+# Sigma pack references actually exists in an emitted verdict. Sigma validation
+# alone proves a rule is well-formed, not that it can ever match.
+dev = [
+  "pytest>=8.0,<10",
+  "ruff>=0.6,<1",
+  "PyYAML>=6.0,<7",
+]
+content = ["sigma-cli>=3.1,<4"]
 
 [project.scripts]
 cohaera = "cohaera.cli:main"

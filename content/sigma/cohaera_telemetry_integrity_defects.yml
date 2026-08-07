@@ -1,0 +1,83 @@
+title: Agent Telemetry Records Carry Malformed Or Untyped Security Fields
+id: b1e90cfe-b88d-5633-ba1d-33958a6a1190
+status: experimental
+description: |
+  Cohaera accepted records for this session in which one or more
+  security-relevant fields were not of the type the schema declares, and treated
+  those fields as ABSENT rather than guessing at their meaning.
+
+  Two readings, and this rule exists because they are not distinguishable from
+  the record alone:
+
+    A BROKEN PRODUCER. An adapter serialising a span identifier as a list, or a
+    model response as an object, or a timestamp as a string that will not parse.
+    Ordinary and boring, and worth fixing because every defective field is a
+    check running on less evidence than it thinks.
+
+    A DELIBERATE BLINDING ATTEMPT. Every defect code here corresponds to a field
+    that a Cohaera check reads to decide whether something is consequential.
+    INVALID_TOOL_NAME_TYPE makes a call unclassifiable, which makes it not
+    consequential, which removes it from CH02, CH03 and CH04 at once.
+    INVALID_RESPONSE_TEXT_TYPE blinds CH02 entirely. INVALID_SPAN_TYPE breaks
+    call pairing. A producer that emits well-formed records for read-only tools
+    and malformed ones for its egress tools is not broken, it is hiding.
+
+  The defect codes are stable strings and are the thing to route on:
+
+    INVALID_SPAN_TYPE, SPAN_EXCEEDS_MAX_CHARS
+    INVALID_TOOL_NAME_TYPE, TOOL_NAME_EXCEEDS_MAX_CHARS
+    INVALID_RESPONSE_TEXT_TYPE, RESPONSE_TEXT_TRUNCATED
+    INVALID_SESSION_KEY_TYPE, INVALID_IDENTITY_FIELD_TYPE
+    INVALID_EVENT_TYPE, INVALID_TIMESTAMP, INVALID_REVERSIBLE_TYPE
+    INVALID_DATA_BAG_TYPE, NONFINITE_NUMERIC_FIELD
+
+  Records that could not be parsed AT ALL never become events and so never reach
+  a session. They are counted in data.provenance.ingest instead
+  (records_rejected, reject_codes) and written to the quarantine ledger by
+  --reject-log. Check both: a session with clean fields in a run with a high
+  reject_ratio is a session assembled from whatever survived.
+
+  BASELINE THIS FIRST. A newly-onboarded adapter will produce a steady trickle
+  of defects that means nothing more than a schema mismatch. The alertable event
+  is a defect rate that CHANGES for an agent that was previously clean, or one
+  that correlates with the agent's consequential tools specifically.
+references:
+    - https://github.com/404SecNotFound/Cohaera
+    - https://github.com/open-agent-ai-security/observra/issues/108
+author: Imran Hafeez
+date: 2026-08-07
+logsource:
+    product: cohaera
+    service: session_verdict
+detection:
+    selection:
+        type: 'cohaera_session_verdict'
+    defective:
+        data.integrity_defect_count|gte: 1
+    condition: selection and defective
+fields:
+    - session_id
+    - agent_name
+    - framework
+    - host
+    - user
+    - data.integrity_defects
+    - data.integrity_defect_count
+    - data.invalid_timestamp_count
+    - data.unknown_class_count
+    - data.correlation.kind
+    - data.correlation.confidence
+    - data.provenance.ingest
+    - data.coverage.completeness
+falsepositives:
+    - |
+      COMMON DURING ONBOARDING. A producer whose schema has drifted from
+      observra's CIM will emit the same defect code on every event. Baseline per
+      agent and per framework before alerting.
+    - |
+      RESPONSE_TEXT_TRUNCATED is not a defect in the producer. It means the
+      final response was longer than max_response_chars and Cohaera scanned the
+      first part of it. Raise the bound or ignore this code specifically.
+    - Custom adapters that populate optional fields with empty containers rather
+      than omitting them.
+level: low

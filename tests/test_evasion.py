@@ -83,7 +83,8 @@ def benign_grammar(n=20):
         evs, t = [], 0
         for _ in range(iterations):
             for name in BENIGN_SEQ:
-                evs += call(f"b{i}", t, name, tag=f"{i}"); t += 2
+                evs += call(f"b{i}", t, name, tag=f"{i}")
+                t += 2
         sessions.append(sess(evs, sid=f"b{i}"))
     return SequenceGrammar().fit(sessions)
 
@@ -127,7 +128,8 @@ def test_evasion_02_dilution_below_threshold():
     evs, t = [], 0
     for _ in range(4):                        # 16 benign calls
         for name in BENIGN_SEQ:
-            evs += call("x", t, name); t += 2
+            evs += call("x", t, name)
+            t += 2
     evs += call("x", t, "exfiltrate_all", reversible=False)   # the actual attack
     s = sess(evs, "x")
     findings = ch01_sequence_order(s, g)
@@ -422,6 +424,25 @@ def test_evasion_13_telemetry_is_self_reported():
 
     UNEXPECTED RESULT, worth keeping. Naive omission is partially caught, but
     only by accident. See test_evasion_13b.
+
+    HALF CLOSED, 7 August 2026. The evasion itself still works: omit the event
+    and no check fires. What no longer works is the SECOND half, which was the
+    dangerous one. Coverage used to report completeness 1.0 for this session,
+    so an unobserved session arrived at the SOC wearing full confidence.
+
+    Three corrections took that away, and each is worth stating because each was
+    independently wrong:
+
+      * nothing in this stream carries an injection-marker field, so no upstream
+        scanner ran, so CH03 could not have fired. That is now not_evaluated
+        rather than silently clean;
+      * every tool here is classified by NAME, which is a guess about a string
+        the observed system chose. A guess does not contribute a whole point;
+      * there is no capability manifest, so no class in the session is a
+        declared fact.
+
+    The attack is unchanged. What changed is that the verdict no longer claims
+    to have looked.
     """
     # Omit the send_email AND preserve the benign sequence shape, so the
     # grammar sees nothing unusual.
@@ -433,8 +454,10 @@ def test_evasion_13_telemetry_is_self_reported():
     s = sess(evs, "x")
     findings, cov = run_all(s, benign_grammar())
     assert findings == [], "E13 no longer evades"
-    assert cov["completeness"] == 1.0, \
-        "and coverage reports FULL confidence, which is the dangerous part"
+    assert cov["completeness"] < 1.0, \
+        "coverage must no longer report full confidence on an unobserved session"
+    assert any(c["status"] != "evaluated" for c in cov["checks"]), \
+        "at least one check must declare it could not fully run"
 
 
 def test_evasion_13b_naive_omission_is_caught_by_CH01_by_accident():
