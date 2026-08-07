@@ -94,7 +94,7 @@ been closed, which cost 36 new false positives and says so.
 - [Known limitations](#known-limitations)
 - [Known evasions](EVASION.md)
 - [Threat model](docs/THREAT-MODEL.md) — what this trusts, and what survives an attacker who controls the telemetry
-- [Evidence trust](docs/EVIDENCE-TRUST.md) — design for the one item three reviews have put first
+- [Evidence trust](docs/EVIDENCE-TRUST.md) — the wire formats for collector integrity, effect receipts and approval binding, and what they measured
 - [Security policy](SECURITY.md) — reporting, scope, supply chain
 - [Relationship to the upstream projects](#relationship-to-the-upstream-projects)
 
@@ -171,9 +171,10 @@ flowchart TB
         FEAT["feature derivation<br/>tool sequence · call class · timing · cost · depth"]
         CAPM["capability manifest<br/>exact tool ID, declared effects"]
         GRAM["sequence grammar<br/>bigram model fitted on benign corpus"]
-        CHK["CH01 order · CH02 concealment<br/>CH03 taint completed/attempted<br/>CH04 guardrail completed/attempted · CH05 unpaired"]
+        EVID["evidence verifier<br/>integrity chain · effect receipts · approval binding"]
+        CHK["CH01 order · CH02 concealment<br/>CH03 taint completed/attempted<br/>CH04 guardrail completed/attempted/bypassed · CH05 unpaired<br/>CH06 evidence integrity · CH07 effect contradiction"]
         COV["coverage contracts<br/>per check: what could NOT be evaluated, and why"]
-        FW --> ASM --> FEAT --> CAPM --> GRAM --> CHK --> COV
+        FW --> ASM --> FEAT --> CAPM --> GRAM --> EVID --> CHK --> COV
     end
 
     subgraph L4["LAYER 4 · ANALYTICS AND SOC"]
@@ -323,8 +324,41 @@ measurement**, and are kept only because the unit suite asserts against them.
 | **CH01** | `sequence_order` | Does the tool ordering match a grammar mined from benign sessions — either in aggregate, or on the route into a consequential call? | whole session |
 | **CH02** | `concealment_gap` | Did a consequential call succeed without appearing in the agent's final message to the human? | tool log + final response |
 | **CH03** | `untrusted_to_completed_action`<br/>`untrusted_to_attempted_action` | Did a state change follow observed injection markers in the same session — and did it *complete*, or only get *attempted*? | 2+ ordered |
-| **CH04** | `guardrail_bypass_completed`<br/>`post_guardrail_attempt` | Did a policy event fire and the session carry on doing consequential work anyway — completed, or attempted? | 2+ ordered |
+| **CH04** | `guardrail_bypass_completed`<br/>`post_guardrail_attempt`<br/>`blocking_control_bypassed` | Did a policy event fire and the session carry on doing consequential work anyway — completed, or attempted? And where the control is *declared blocking* and no approval binds to the work, was it **bypassed**? | 2+ ordered |
 | **CH05** | `unpaired_calls` | Did a tool start and never terminate, meaning the session is incompletely observed? | 2 paired |
+| **CH06** | `evidence_integrity` | Do these records verify against what the collector attested to — sequence, hash chain, signature? | whole stream |
+| **CH07** | `reported_failure_with_effect_receipt`<br/>`effect_receipt_does_not_bind` | Did a call report failure while carrying a receipt minted by the system the action happened to? | 2 paired |
+
+### CH06 and CH07 are not checks about the agent
+
+The first five ask what an agent did. Every one of them is a sound argument over
+its input and every one is conditional on the input being a faithful record —
+and until [P1](docs/EVIDENCE-TRUST.md), nothing established that. Cohaera could
+tell a malformed record from a well-formed one and could not tell a true record
+from a false one.
+
+**CH06** asks whether the evidence is admissible at all. Against a stream
+carrying `cohaera.integrity:1`, deleting a record is a detected and localised
+sequence gap, and modifying one is a chain break naming the record that moved.
+Every other finding in the session is stamped with `evidence_status`, so a
+verdict built on a stream somebody could have edited does not arrive looking
+like one that verified. The default value is `unattested`, which is where every
+deployment starts and which means *tampering was not ruled out*, not *tampering
+was ruled out*.
+
+**CH07** is the only detection here that catches a lying emitter rather than
+routing around one. A receipt is an identifier minted by the system the action
+happened to — an SMTP `Message-ID`, an object version ID — drawn from a
+namespace the agent does not control. A call whose terminal event says failure
+while carrying a receipt bound to that exact call and those exact arguments is a
+contradiction *inside the record*: the action took effect and the telemetry says
+it did not.
+
+Note the asymmetry, because it is the whole reason to collect receipts.
+**Receipts do not make `success` more believable.** A success with no receipt is
+exactly as unfalsifiable as it always was, and is reported through coverage
+(`NO_EFFECT_RECEIPT`) rather than as an alert. What they make falsifiable is
+failure and silence.
 
 ### Why CH03 and CH04 are each two checks
 
@@ -528,7 +562,21 @@ exiting `0` is the same silent data loss the exit codes exist to prevent.
 
 `--tool-manifest` replaces the name heuristic with a per-tool declaration and is
 the single biggest lever on coverage confidence. See
-[`content/manifest/`](content/manifest/example_capability_manifest.json).
+[`content/manifest/`](content/manifest/example_capability_manifest.json). Its
+`policies` section declares whether a guardrail is advisory or blocking, and it
+outranks the same declaration on the event — the operator chose the file, the
+agent wrote the event ([EVASION.md](EVASION.md) E20).
+
+`--collector-keys` supplies the public keys that `cohaera.integrity:1`
+signatures verify against, loaded out of band exactly as the manifest is.
+Without it, signed records are parsed and **not** verified, and the verdict says
+so with `NO_COLLECTOR_KEYS` rather than treating a signature it never checked as
+if it had passed. A stream carrying no integrity evidence at all reports
+`NO_INTEGRITY_EVIDENCE` and stamps every finding `evidence_status: unattested`,
+which is the state every deployment starts in.
+[`tools/collector_sign.py`](tools/collector_sign.py) is the reference producer —
+a format with no reference implementation is a specification nobody can build
+against.
 
 Human summary goes to **stderr**, escaped: a producer that puts a newline and an
 ANSI sequence in a `session_id` could otherwise forge a convincing `0 finding(s)`
@@ -832,7 +880,7 @@ prevention claim collapses.
 ## Roadmap
 
 - [x] Session assembly from observra JSONL
-- [x] CH01 to CH05
+- [x] CH01 to CH07
 - [x] Coverage reporting
 - [x] CIM emit with `type` and `schema`
 - [x] Fires on observra's shipped demo data
@@ -885,21 +933,44 @@ hide is a defect.
   manifest. It has been wrong in both directions in every review round. The
   manifest is the fix; without one, `coverage.classification_confidence` says how
   much of the verdict rests on the guess.
-- **CH04 cannot distinguish an ignored guardrail from an enforced one.** Nothing
-  in the telemetry declares whether a policy event is advisory or blocking, so
-  every session with one reports `POLICY_SEMANTICS_UNDECLARED`.
+- **CH04 cannot distinguish an ignored guardrail from an enforced one unless
+  something declares which it is.** With no declaration the session reports
+  `POLICY_SEMANTICS_UNDECLARED` and the finding claims only the sequence. With
+  one — on the event, or better, in the capability manifest — CH04 splits into a
+  bypass it can name and an advisory continuation it stays quiet about. Declaring
+  it *on the event* is believing the thing being watched, which suppresses a
+  finding and is catalogued as [EVASION.md](EVASION.md) E20; the manifest
+  overrides it for exactly that reason.
 - **The correlation key comes from the observed system.** Fragment `session_id`
   on call boundaries and every check goes quiet at once. Cohaera can only be
   honest about which key it used, not fix the key.
-- **A logged success is not a verified effect.** Nothing here checks a tool
-  result against anything outside the agent. Cohaera is an assurance control, not
-  an adversarial one: it answers "is this agent doing its job" well and "is this
-  agent lying to me" not at all.
-- **Nothing here has been measured against a labelled corpus yet.** The fixture
-  numbers are a smoke test. The hardening in 0.2 makes the detector harder to
-  crash, harder to blind and more honest about what it did not see. **None of it
-  makes the detector better at detecting.** Those are prerequisites for measuring
-  quality, not a substitute for measuring it.
+- **A logged success is still not a verified effect**, and this is the limit that
+  moved most. With `cohaera.integrity:1` on the stream, deleting or modifying a
+  record is detected rather than noticed by accident; with `cohaera.receipt:1` on
+  a call, a reported *failure* contradicted by a real effect is detected. Neither
+  makes a reported *success* checkable, and all of it is conditional on a
+  producer emitting evidence that today's producers do not. Where the collector
+  runs inside the agent's own process, the agent can reach the signing key and
+  none of it buys anything — CH06 says so rather than showing a green tick.
+  Cohaera remains an assurance control first: it answers "is this agent doing its
+  job" well, and "is this agent lying to me" only where somebody outside the
+  agent has signed for the answer.
+- **The labelled corpus is synthetic and written by the same author as the
+  detector.** It is a large improvement on twelve near-identical fixtures — task
+  families, task-disjoint splits, an unseen tool vocabulary, and benign-hard
+  confounders that are genuinely indistinguishable from the attacks they sit
+  next to — and it is still not real agent traffic. Every number in
+  [`eval/EVALUATION-CARD.md`](eval/EVALUATION-CARD.md) is an upper bound on a
+  lower bound.
+- **Most of the false-positive improvement is not a better detector.** The
+  headline rate fell from 61.8% to 44.3% when P1 landed, and the largest single
+  contributor is CH04 no longer firing on advisory thresholds. CH04 did not get
+  cleverer; a field appeared saying whether the control was advisory or blocking,
+  and a check that had been reporting a sequence because it could not report a
+  bypass stopped having to. The three genuinely new detections — deletion from a
+  chained stream, a denied effect contradicted by a receipt, an approval reused
+  for different arguments — are all conditional on producers emitting evidence
+  they do not emit today.
 
 ---
 
@@ -910,19 +981,23 @@ src/cohaera/          the library, 0 runtime dependencies
   limits.py           every resource bound, and the digest of the set in force
   validate.py         the schema firewall: what a field is allowed to be
   identity.py         correlation keys (HMAC) and stable verdict/run identity
-  capabilities.py     exact per-tool capability manifests
+  capabilities.py     exact per-tool capability manifests, and policy semantics
+  evidence.py         the P1 sidecars: integrity chain, receipts, approvals
+  ed25519.py          RFC 8032 verification, because there are no dependencies
   model.py            Session, ToolCall, Finding, CIM emit
   ingest.py           observra JSONL to Sessions, bounded and quarantining
-  checks.py           CH01 to CH05 plus per-check coverage contracts
+  checks.py           CH01 to CH07 plus per-check coverage contracts
   cli.py              cohaera score, with exit codes that mean something
 
 content/              detection content
-  sigma/              9 validated Sigma rules
+  sigma/              13 validated Sigma rules
   manifest/           example capability manifest
   aie/                LogRhythm AIE specs + correlate-in-SIEM vs upstream comparison
   parser/             Exabeam field map + observra#108 analysis
 
 docs/
+  EVIDENCE-TRUST.md        the P1 design, the wire formats, and what they bought
+  THREAT-MODEL.md          who this defends against, and who it does not
   PHASE0-VERIFICATION.md   raw command output backing every claim in this README
 
 tests/
@@ -932,6 +1007,9 @@ tests/
   test_content.py     asserts every field the Sigma pack names exists in a real
                       record. Sigma validation cannot check this.
   test_evasion.py     22 adversarial tests that PASS when an evasion works
+  test_evidence.py    the P1 mechanisms, attacked: RFC 8032 vectors, forged
+                      signatures, deletion, modification, replay, reorder,
+                      approval substitution and receipt copying
   fuzz_smoke.py       seeded malformed-input fuzz, runs in CI
   make_fixtures.py    labelled benign and suspect telemetry
 

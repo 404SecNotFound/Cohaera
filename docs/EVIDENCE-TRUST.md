@@ -3,13 +3,30 @@
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Evidence trust: design for P1
+# Evidence trust: design and implementation for P1
 
-**Status: design. No code implements any of this.** It is written down first
-because the mistake this project is most exposed to is shipping a field that
-looks like a control — the reason the capability manifest has no `signature`
-field today is that nothing would verify one, and a signature nobody checks is
-worse than no signature.
+**Status: built.** This document was written as a design, before any of it
+existed, because the mistake this project is most exposed to is shipping a field
+that looks like a control — the reason the capability manifest has no
+`signature` field today is that nothing would verify one, and a signature nobody
+checks is worse than no signature.
+
+It is kept as written, with the implementation notes folded in, so that the
+difference between what was planned and what was built is readable rather than
+tidied away. Four things changed on contact with the code and each is marked
+**BUILT** or **CHANGED** at the point it applies:
+
+| Where | Change | Why |
+|---|---|---|
+| §2 chain | `chain[n] = H(chain[n-1] ‖ H(canonical(record)))` — the record is folded in through its own digest | A verifier meeting an out-of-order stream has to hold every record it cannot yet chain. Holding 32 bytes per pending record instead of the record makes the reorder buffer a fixed cost rather than one the producer chooses |
+| §2 | Two codes added: `INTEGRITY_EVIDENCE_PARTIAL` and `INTEGRITY_RECORDS_REORDERED` | The first closes the obvious way round a chain — strip the sidecar from the record you edited (EVASION.md E21). The second distinguishes the conclusion the verifier reached, which the design said it must and did not give a code for |
+| §4 | Enforcement may also be declared in the **capability manifest**, and the manifest wins | The design read `enforcement` off the event only. That field suppresses a finding and arrives in band, so an agent that wanted CH04 quiet would send it. EVASION.md E20 |
+| §4 | CH04's blocking case is a **new check ID**, not a rewording of the old one | Renaming `CH04_guardrail_bypass_completed` would silently change what every existing Sigma rule matches |
+
+Implementation is in [`src/cohaera/evidence.py`](../src/cohaera/evidence.py) and
+[`src/cohaera/ed25519.py`](../src/cohaera/ed25519.py); the reference producer is
+[`tools/collector_sign.py`](../tools/collector_sign.py); the tests are
+[`tests/test_evidence.py`](../tests/test_evidence.py). What it measured is §8.
 
 Three external reviews have put the same item at the top and it has been open
 each time: *independent effect receipts, collector-side signing and hash
@@ -265,19 +282,30 @@ it first even though it is listed last.
 
 ## 5. Staging
 
-| Stage | Work | Who changes | Blocked on |
+| Stage | Work | Who changes | Status |
 |---|---|---|---|
-| **0** | Freeze the three schemas above. Parse and verify what is present; report absence through coverage. No new required fields | Cohaera | Nothing. Producers emitting none of it see no change except honest coverage codes |
-| **1** | Approval binding, and CH04 split into bypass / continuation on declared `enforcement` | Policy engine | Stage 0 |
-| **2** | Collector chain and signatures, CH06, `--collector-keys` | Collector (observra) | Stage 0, plus a key distribution decision |
-| **3** | Effect receipts, CH07 contradiction detection | Every tool adapter, incrementally | Stage 0 |
+| **0** | Freeze the three schemas above. Parse and verify what is present; report absence through coverage. No new required fields | Cohaera | **BUILT.** Producers emitting none of it see no change except honest coverage codes |
+| **1** | Approval binding, and CH04 split into bypass / continuation on declared `enforcement` | Policy engine | **BUILT**, plus the manifest override E20 forced |
+| **2** | Collector chain and signatures, CH06, `--collector-keys` | Collector (observra) | **BUILT.** Key *distribution* is still a file, and still says so |
+| **3** | Effect receipts, CH07 contradiction detection | Every tool adapter, incrementally | **BUILT.** The slow part is unchanged: every integration, one at a time |
 
-Stage 0 is deliberately the largest commitment and the smallest change: it is
-the promise that the fields mean something, made before anyone emits them.
+Stage 0 was deliberately the largest commitment and the smallest change: the
+promise that the fields mean something, made before anyone emits them. Nothing
+in stages 1 to 3 required a producer to change in order for Cohaera to keep
+working — a stream carrying none of these three schemas scores exactly as it did
+before, and says `NO_INTEGRITY_EVIDENCE`, `NO_APPROVAL_EVIDENCE` and
+`NO_EFFECT_RECEIPT` instead of quietly reporting that it looked.
+
+The one thing still outstanding from this document is **key distribution**.
+`--collector-keys` reads a JSON file the operator names, which is the same trust
+model the capability manifest has. Rotation, revocation and multi-collector
+fleets need more than a file, and the verdict records the key file's digests so
+that two runs disagreeing about which keys were trusted are distinguishable
+after the fact. That is honest, and it is not a trust store.
 
 ---
 
-## 6. How this gets graded
+## 6. How this got graded
 
 The same discipline E02 forced, applied in advance: **a corpus can only grade
 fixes for attacks it contains**, and the current corpus contains none of these.
@@ -301,13 +329,62 @@ Before any of the above lands, `eval/corpus/generate.py` needs kinds for it:
 Without those, a P1 write-up would report "no change in recall or false
 positives" and that sentence would be about the corpus, not the detector.
 
+**All of them were built, and one was declined.** `attack_forged_success` — a
+reported success with no receipt — is deliberately **not** in the corpus, and
+the reason is the same discipline that put the others in it. Its telemetry is
+byte-identical to a genuinely receiptless tool reporting success. Labelling one
+of two identical inputs "attack" would not measure a detector; it would measure
+the label. That case is reported through coverage as `NO_EFFECT_RECEIPT` and
+`tests/test_evidence.py` asserts it produces no finding, which is the whole
+claim receipts make in that direction: they do not make `success` more
+believable, they make `failure` and silence falsifiable.
+
+The kinds that were built are `attack_omitted_call`, `attack_denied_effect`,
+`attack_reused_approval`, `benign_hard_reordered_stream`,
+`benign_hard_approved_continuation` and `benign_hard_reapproved_retry`.
+
+---
+
+## 8. What it measured
+
+Unseen vocabulary, task-disjoint split, with a capability manifest. Full numbers
+in [`eval/EVALUATION-CARD.md`](../eval/EVALUATION-CARD.md) §3b.
+
+| | before P1 | after P1 |
+|---|---|---|
+| recall | 100.0% | 100.0% |
+| false positive rate | 61.8% | **44.3%** |
+| false positives per 1000 sessions | 404 | **317** |
+| CH04 alert precision | 50% | **100%** |
+| `benign_hard_advisory_threshold` false positives | 40 | **0** |
+| `attack_omitted_call` recall | — (undetectable) | **100%** |
+| `attack_denied_effect` recall | — (undetectable) | **100%** |
+| `attack_reused_approval` recall | — (undetectable) | **100%** |
+
+Read the false-positive line correctly. **Almost none of that improvement is a
+better detector.** CH04 stopped firing on advisory thresholds because a field
+appeared that says whether the control was advisory or blocking; the check did
+not get cleverer, it stopped being asked a question it could not answer. The
+three new recall rows are genuinely new detections, and every one of them is
+conditional on a producer emitting something it does not emit today.
+
+One detector change did come out of this, and it came from a confounder rather
+than from design. A retry of a failed call produces a novel `X -> X` transition
+into a consequential destination, so CH01's dilution-resistant count trigger
+fired on 8 of 32 `benign_hard_reapproved_retry` sessions — the most ordinary
+thing a governed agent does. Same tool, same argument digest, previous attempt
+unsuccessful is now not a novel route, which took CH01 from 77.8% to 81.1% alert
+precision and cannot launder an attack: the failed first copy sits at the end of
+the same novel transition and is still counted.
+
 ---
 
 ## 7. What P1 is worth, honestly
 
 The fourth review holds this project at 3.5/10 largely on this item. Completing
-all three stages would not make the telemetry trustworthy. It would make the
-following statements true, and none of them are true today:
+all three stages does not make the telemetry trustworthy. It makes the following
+statements true — **against a stream that carries the evidence**, which is the
+clause that does all the work and which no deployment satisfies by default:
 
 - deleting an event from a signed stream is **detectable**, not merely
   occasionally unlucky;
@@ -324,3 +401,10 @@ collector process, defeats all of it. That attacker is strictly more expensive
 than today's, which requires only that the agent emit whatever it likes. Raising
 the price is what a control at this layer can do; anything stronger has to come
 from outside the agent, and that is [E13](../EVASION.md) and stays open.
+
+And the price is only raised where the collector sits outside the agent's blast
+radius. Where the adapter runs in-process — which is how observra is most often
+deployed — the agent can reach the signing key, and a perfectly verified chain
+is a perfectly verified chain of whatever the agent chose to say. CH06's
+coverage contract states that as an assumption on every session it evaluates,
+rather than letting a green tick imply otherwise.

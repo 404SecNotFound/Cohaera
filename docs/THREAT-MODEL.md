@@ -21,7 +21,7 @@ The short version, and the only sentence that matters if you read no further:
 ## 1. What Cohaera is
 
 A batch or streaming analyser that reads observra-normalised agent telemetry as
-JSONL, groups events into sessions, runs five correlation checks, and emits one
+JSONL, groups events into sessions, runs seven correlation checks, and emits one
 verdict record per session for a SIEM.
 
 It has **no network listener, no database, no credentials, no write access to
@@ -54,8 +54,8 @@ the right inherits whatever Cohaera got right.
 |---|---|---|
 | **A1. Compromised or misaligned agent** | Chooses its own actions; its telemetry is emitted honestly by an uncompromised adapter | The threat Cohaera is *for* |
 | **A2. Prompt injection via tool output** | Controls text the agent reads, therefore influences A1's actions | Cohaera sees the consequences, not the injection |
-| **A3. Agent controlling its own emitter** | Chooses what telemetry exists at all: omit, fabricate, fragment, re-key | **Defeats Cohaera.** E11, E12, E13 |
-| **A4. Attacker on the telemetry path** | Modifies records in flight or at rest before Cohaera reads them | Same effect as A3, no agent compromise needed |
+| **A3. Agent controlling its own emitter** | Chooses what telemetry exists at all: omit, fabricate, fragment, re-key | **Defeats Cohaera**, unless the collector signs outside the agent's reach. E11, E12, E13, and §5 |
+| **A4. Attacker on the telemetry path** | Modifies records in flight or at rest before Cohaera reads them | **Detected** on a stream carrying `cohaera.integrity:1` — deletion, modification and selective stripping all leave evidence. Undetectable without it, which is every deployment today |
 | **A5. Attacker supplying malformed input** | Writes arbitrary bytes into the JSONL | The ingest trust boundary. Twenty-two defects fixed here |
 | **A6. Baseline poisoner** | Influences the corpus the grammar is fitted on | E03. Process control, not a code control |
 | **A7. Supply chain** | Compromises a dependency, a GitHub Action, or a published artefact | See §7 |
@@ -152,13 +152,35 @@ anonymous key scores around 0.68, not 1.0.
 That is a smaller thing than detection and a real one: the blind spot becomes
 routable instead of invisible.
 
-Closing it needs evidence Cohaera cannot generate — kernel or network
+### What P1 evidence trust changed, and for whom
+
+Closing this needs evidence Cohaera cannot generate — kernel or network
 observation of the agent's actual syscalls
 ([AgentSight, arXiv:2508.02736](https://arxiv.org/abs/2508.02736)), or a
 tamper-evident signed log at the point of emission
 ([AEGIS, arXiv:2603.12621](https://arxiv.org/abs/2603.12621)). Both are
-collector-side. Both are on the roadmap as **P1 evidence trust**, and neither is
-started.
+collector-side. **The second is now built** — see
+[EVIDENCE-TRUST.md](EVIDENCE-TRUST.md) — and it changes the actor table rather
+than the limitation:
+
+| Actor | Before | After, on a stream carrying `cohaera.integrity:1` |
+|---|---|---|
+| **A4. Attacker on the telemetry path** | Undetectable | **Detected.** Deleting a record leaves a sequence gap; modifying one breaks the chain; stripping the sidecar from the record you edited leaves a session that is partly attested, which is itself reported (E21) |
+| **A3. Agent controlling its own emitter** | Defeats Cohaera | Defeats Cohaera *unless the collector is outside its reach*. The signing key is the whole of the difference, and where the adapter runs in-process the agent holds it |
+
+So A4 moves and A3 does not, and the distinction is the one to hold on to. What
+P1 buys is **a lie now costs a signing key the agent does not hold**, or a
+receipt bound to the exact call and the exact arguments. Where the agent does
+hold the key, a perfectly verified chain is a perfectly verified chain of
+whatever it chose to say, and CH06's coverage contract states that as an
+assumption on every session it evaluates rather than letting the green tick
+imply otherwise.
+
+One narrow new detection cuts against A3 directly, and it is worth naming
+because it is the only one: a call whose terminal event reports **failure**
+while carrying an effect receipt bound to it is a contradiction inside the
+record, and the receipt is drawn from a namespace the agent does not control
+(CH07). It does not make a reported *success* checkable. Nothing here does.
 
 ## 6. What the checks can and cannot conclude
 
@@ -169,8 +191,10 @@ Stated per check, because "CH03 fired" means something narrower than it sounds.
 | **CH01** sequence order | This ordering, or this route into a consequential call, is not in the fitted benign grammar | That the session is malicious. A legitimate rare action produces the same shape. Reports `not_evaluated` rather than firing when the baseline was fitted on a different workload |
 | **CH02** concealment | A consequential call succeeded and the final response does not name it | That the agent lied. An honest paraphrase reads identically (E04). A mention that cannot be told apart from a sibling tool's is reported as *ambiguous*, not as clean (E16) |
 | **CH03** taint | An injection marker was recorded before a consequential call, in the same session | Information flow. It is an ordering, not a taint trace, and it inherits the upstream scanner's blind spots (E09) |
-| **CH04** guardrail | A policy event fired and consequential work continued | That the guardrail was ignored. Nothing in the schema declares advisory versus blocking, so both fire; `attempted` and `completed` are separate check IDs at separate severities |
+| **CH04** guardrail | A policy event fired and consequential work continued — and, where the control is *declared blocking* and no approval binds to that work, that it was **bypassed** | That the guardrail was ignored, where nothing declares advisory versus blocking. A declaration read off the event is the agent's own claim and suppresses the check when it says `advisory` (E20); the manifest overrides it |
 | **CH05** unpaired | A call started and no terminal event was recorded | That the call ran. A timeout, a dropped event and a deleted event are indistinguishable here |
+| **CH06** evidence integrity | These records do not verify against what the collector attested to: a sequence gap, a chain break, a bad signature, an unsupplied key | Who did it. A collector holding the signing key can produce a perfectly chained stream of lies, and where the adapter runs in the agent's process that is the normal configuration, not a compromise |
+| **CH07** effect contradiction | A call reported failure while carrying a receipt bound to that exact call and those exact arguments | That the receipt is genuine. Cohaera is offline and cannot ask the authority. It checks that the receipt **binds**, not that it is real — and it makes no claim at all about a reported *success* |
 
 Every one of those "does not conclude" columns is a measured false positive
 source in [`eval/EVALUATION-CARD.md`](../eval/EVALUATION-CARD.md) §3, not a
