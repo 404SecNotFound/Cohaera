@@ -32,7 +32,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from cohaera.capabilities import CapabilityManifest, ManifestError
+from cohaera.capabilities import EMPTY_MANIFEST, CapabilityManifest, ManifestError
 from cohaera.checks import (
     SequenceGrammar,
     ch02_concealment_gap,
@@ -1443,3 +1443,166 @@ def test_c409_peak_memory_is_bounded_by_the_line_limit(tmp_path):
                               quiet=True))
     assert rep.rejects[0].bytes_seen == 4_000_000
     assert len(events) == 1, "the reader must resynchronise after an oversize line"
+
+
+# =====================================================================
+# C4-10  one digest answering two questions, badly
+# =====================================================================
+#
+# The manifest carried a single hash of its bytes. Reformatting the file --
+# `jq .`, an editor's trailing newline, a key reorder by a serialiser -- changed
+# it, so every verdict after a cosmetic edit looked like it had run under a
+# different policy. The review proposed replacing it with a digest of the parsed
+# semantics; that direction loses the tamper signal, because a semantic digest
+# reports no change for an edit to a field this parser does not read.
+#
+# Both now ship. These tests pin each one to the question it answers, and pin
+# the gap between them, which is the reading neither gives alone.
+
+
+_M_COMPACT = b'{"producer":"p","tools":{"send":{"effects":["egress"],"destination":"x"}}}'
+_M_PRETTY = b"""{
+  "producer": "p",
+  "tools": {
+    "send": {
+      "destination": "x",
+      "effects": ["egress"]
+    }
+  }
+}
+"""
+
+
+def _manifest_at(tmp_path, name: str, blob: bytes) -> CapabilityManifest:
+    p = tmp_path / name
+    p.write_bytes(blob)
+    return CapabilityManifest.from_file(p)
+
+
+def test_c410_reformatting_changed_the_recorded_policy_identity(tmp_path):
+    """The reproduction: same policy, two spellings, two digests.
+
+    Before the fix there was one digest and it moved here, so a whitespace edit
+    was indistinguishable in the verdict from a capability being redeclared.
+    """
+    compact = _manifest_at(tmp_path, "a.json", _M_COMPACT)
+    pretty = _manifest_at(tmp_path, "b.json", _M_PRETTY)
+
+    assert compact.file_digest != pretty.file_digest, \
+        "the byte digest must still move for any edit -- it is the tamper signal"
+    assert compact.semantic_digest == pretty.semantic_digest, \
+        "reformatting changed nothing Cohaera acts on; the semantic digest moved"
+
+
+def test_c410_an_unparsed_field_moves_only_the_file_digest(tmp_path):
+    """Why the byte digest was not replaced.
+
+    ``owner`` is not a field this version reads. The semantic digest is silent
+    about it -- correctly, by its own definition -- and that silence is exactly
+    why something stricter has to travel alongside it.
+    """
+    base = _manifest_at(tmp_path, "a.json", _M_COMPACT)
+    with_extra = _manifest_at(
+        tmp_path, "b.json",
+        b'{"producer":"p","tools":{"send":{"effects":["egress"],'
+        b'"destination":"x","owner":"someone-else"}}}')
+
+    assert base.semantic_digest == with_extra.semantic_digest
+    assert base.file_digest != with_extra.file_digest, \
+        "an edit Cohaera cannot interpret must still be visible in the verdict"
+
+
+@pytest.mark.parametrize("spec, why", [
+    ({"effects": ["egress", "write"], "destination": "x"}, "an added effect"),
+    ({"effects": ["egress"], "destination": "y"}, "a redirected destination"),
+    ({"effects": ["egress"], "destination": "x", "requires_approval": True},
+     "an approval requirement"),
+    ({"effects": ["egress"], "destination": "x", "reversible": True},
+     "a reversibility claim"),
+    ({"effects": ["egress"], "destination": "x", "sensitive_args": ["token"]},
+     "a sensitive argument"),
+])
+def test_c410_every_parsed_field_moves_the_semantic_digest(spec, why):
+    """A semantic digest that misses a parsed field is worse than none: it
+    asserts sameness it has not checked."""
+    base = CapabilityManifest.from_obj(
+        {"tools": {"send": {"effects": ["egress"], "destination": "x"}}})
+    changed = CapabilityManifest.from_obj({"tools": {"send": spec}})
+    assert base.semantic_digest != changed.semantic_digest, \
+        f"{why} left the semantic digest unchanged"
+
+
+def test_c410_semantic_digest_normalises_spelling_not_meaning():
+    """Orderings and duplicates are spelling. ``effects`` is a set, and naming
+    an argument sensitive twice does not make it more sensitive."""
+    a = CapabilityManifest.from_obj({"tools": {"t": {
+        "effects": ["write", "read", "delete"],
+        "sensitive_args": ["b", "a", "b"]}}})
+    b = CapabilityManifest.from_obj({"tools": {"t": {
+        "effects": ["delete", "read", "write"],
+        "sensitive_args": ["a", "b"]}}})
+    assert a.semantic_digest == b.semantic_digest
+
+    # But an absent declaration is not an empty one where the parser can tell
+    # the difference: reversible=None is "unstated", not "not reversible".
+    unstated = CapabilityManifest.from_obj({"tools": {"t": {"effects": ["write"]}}})
+    stated = CapabilityManifest.from_obj(
+        {"tools": {"t": {"effects": ["write"], "reversible": False}}})
+    assert unstated.semantic_digest != stated.semantic_digest
+
+
+def test_c410_producer_metadata_is_not_part_of_the_semantics():
+    """A version bump must not look like a capability change. Both labels still
+    reach the verdict verbatim; they just do not perturb the policy identity."""
+    tools = {"tools": {"t": {"effects": ["read"]}}}
+    plain = CapabilityManifest.from_obj(tools)
+    labelled = CapabilityManifest.from_obj(
+        {**tools, "producer": "acme", "manifest_version": "9",
+         "producer_schema_version": "2.0.0"})
+    assert plain.semantic_digest == labelled.semantic_digest
+    assert labelled.as_dict()["producer"] == "acme"
+
+
+def test_c410_no_manifest_is_distinguishable_from_an_empty_one():
+    """"Nothing was loaded" and "something was loaded and declared nothing" are
+    different states. Hashing the empty tool map would give the first one a
+    policy identity it has not got."""
+    assert EMPTY_MANIFEST.semantic_digest == ""
+    assert EMPTY_MANIFEST.file_digest == ""
+    assert not EMPTY_MANIFEST.loaded
+
+
+def test_c410_both_digests_reach_the_verdict(tmp_path):
+    """The gap between the two is only readable if both are emitted."""
+    m = _manifest_at(tmp_path, "m.json", _M_COMPACT)
+    block = m.as_dict()
+    assert block["file_digest"] == m.file_digest
+    assert block["semantic_digest"] == m.semantic_digest
+    assert block["file_digest"] != block["semantic_digest"], \
+        "two digests over different inputs collided; one of them is not what it says"
+
+    telemetry = write_jsonl(tmp_path, [json.dumps(
+        {"event_type": "tool_start", "timestamp": BASE, "session_id": "s",
+         "tool_name": "send", "span_id": "A"})])
+    proc = _run_cli(["score", str(telemetry),
+                     "--tool-manifest", str(tmp_path / "m.json")], tmp_path)
+    verdict = json.loads(proc.stdout.splitlines()[0])
+    prov = verdict["data"]["provenance"]["capability_manifest"]
+    assert prov["file_digest"] == m.file_digest
+    assert prov["semantic_digest"] == m.semantic_digest
+
+
+def test_c410_run_identity_still_moves_on_a_cosmetic_manifest_edit(tmp_path):
+    """The strictness the review's version would have dropped.
+
+    A run ID is the identity of a configuration. Two runs whose manifest FILES
+    differ are two configurations, whatever the semantics say -- the semantic
+    digest travels in provenance for the reader, not in the run ID.
+    """
+    common = dict(detector_version="test", config_hash="c", source="t",
+                  input_digest="d")
+    compact = _manifest_at(tmp_path, "a.json", _M_COMPACT)
+    pretty = _manifest_at(tmp_path, "b.json", _M_PRETTY)
+    assert compact.semantic_digest == pretty.semantic_digest
+    assert (run_id(**common, manifest_hash=compact.file_digest)
+            != run_id(**common, manifest_hash=pretty.file_digest))

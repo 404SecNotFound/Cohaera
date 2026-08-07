@@ -295,7 +295,8 @@ def run_condition(corpus: list[Labelled], regime: str, seed: int,
         "grammar_transitions": len(grammar.bigrams),
         "baseline_hash": grammar.fingerprint(),
         "manifest_loaded": manifest.loaded,
-        "manifest_digest": manifest.digest,
+        "manifest_file_digest": manifest.file_digest,
+        "manifest_semantic_digest": manifest.semantic_digest,
         "manifest_tools": len(manifest.tools),
     }
 

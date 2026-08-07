@@ -379,6 +379,15 @@ The manifest outranks `reversible` deliberately: that flag arrives **on the
 event**, in band, from the same path an attacker would use to hide an action. The
 manifest is loaded out of band from a path the operator chose.
 
+It is not signed — that needs a key distribution story this project does not have
+— so every verdict instead carries two digests of it in
+`provenance.capability_manifest`. `file_digest` covers the exact bytes and moves
+for any edit at all, including one to a field this version does not parse.
+`semantic_digest` covers the declarations Cohaera parsed out of them and moves
+only when the meaning changes. Matching semantics with differing bytes is a
+reformat; differing semantics means verdicts either side of the edit are
+answering different questions.
+
 Steps 2 to 4 are all guesses about an attacker-supplied string, and the heuristic
 has been wrong in both directions in every review round so far — `budget_report`
 read as read-only because `get` is inside `budget`, `postmortem_read` read as
@@ -828,7 +837,7 @@ prevention claim collapses.
 - [x] Sigma content pack, 9 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 280 passing across unit, hostile-input and content conformance
+- [x] Tests, 292 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 17 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger

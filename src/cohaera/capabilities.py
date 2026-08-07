@@ -27,6 +27,37 @@ does not exist yet, and shipping a signature field that nothing verifies would
 be worse than shipping none. What is here is the digest, recorded in every
 verdict, so that two runs disagreeing about what a tool does are distinguishable
 after the fact.
+
+TWO DIGESTS, NOT ONE (C4-10)
+    The recorded digest used to be a hash of the file's bytes alone, so
+    re-indenting the JSON or reordering its keys changed it and every verdict
+    after the edit looked like it had run under a different policy. The fourth
+    review proposed replacing it with a hash of the parsed semantics. That trade
+    goes the wrong way on its own: a semantic digest reports *no change* for an
+    edit that adds a field this parser does not yet read, and "did the policy
+    file change at all" is exactly the question a tamper signal has to answer
+    strictly.
+
+    So both ship, and they answer different questions:
+
+        file_digest      sha256 of the exact bytes read from disk. The tamper
+                         signal. Moves for any edit, including ones Cohaera
+                         cannot interpret.
+        semantic_digest  sha256 of the parsed capability records -- every field
+                         Cohaera acts on, normalised and canonically ordered.
+                         Moves only when the meaning changes.
+
+    The pair is worth more than either alone, because the *gap* between them is
+    itself a reading. Same semantic digest, different file digest: a reformat,
+    or an edit in a part of the file this version does not parse. Different
+    semantic digest: the policy changed, and every verdict on either side of the
+    change is answering a different question.
+
+    ``semantic_digest`` deliberately excludes ``producer``, ``manifest_version``
+    and ``producer_schema_version``. Those are labels travelling with the
+    verdict, not inputs to any classification, and folding them in would make a
+    version bump indistinguishable from a capability change -- which is the
+    failure the semantic digest exists to avoid.
 """
 
 from __future__ import annotations
@@ -54,6 +85,12 @@ VALID_EFFECTS = frozenset({EFFECT_READ, EFFECT_WRITE, EFFECT_DELETE,
 # says nothing about it.
 _EGRESS = {EFFECT_EGRESS}
 _STATE_CHANGE = {EFFECT_WRITE, EFFECT_DELETE, EFFECT_EXECUTE}
+
+# Tagged into the semantic digest so the digest commits to the SET OF FIELDS it
+# covers, not just their values. When a later version starts parsing a field it
+# ignores today, that field joins the semantics; bumping this tag makes every
+# digest visibly change rather than silently mean something new.
+SEMANTICS_SCHEMA = "cohaera.manifest.semantics:1"
 
 
 class ManifestError(ValueError):
@@ -85,6 +122,26 @@ class Capability:
     def consequential(self) -> bool:
         return self.klass in {"state_change", "egress"}
 
+    def semantics(self) -> dict[str, Any]:
+        """This record reduced to what it MEANS, with spelling normalised away.
+
+        Two declarations that Cohaera would act on identically must reduce to
+        the same structure here, or the semantic digest is just a slower byte
+        digest. Hence: effects sorted (a set, written as a list); sensitive_args
+        sorted and de-duplicated (a set of argument names, and naming one twice
+        does not make it more sensitive); an empty ``destination`` folded to
+        None, because a declared-but-blank destination is an absent one.
+
+        Faithfulness to what the file literally said is ``file_digest``'s job.
+        """
+        return {
+            "effects": sorted(self.effects),
+            "reversible": self.reversible,
+            "destination": self.destination or None,
+            "requires_approval": self.requires_approval,
+            "sensitive_args": sorted(set(self.sensitive_args)),
+        }
+
 
 @dataclass(frozen=True)
 class CapabilityManifest:
@@ -94,7 +151,11 @@ class CapabilityManifest:
     manifest_version: str = ""
     producer_schema_version: str = ""
     tools: dict[str, Capability] = field(default_factory=dict)
-    digest: str = ""
+    # See the module docstring. file_digest is the tamper signal and is empty
+    # for a manifest built in memory; semantic_digest is defined for every
+    # manifest, file-backed or not, because it is computed from the records.
+    file_digest: str = ""
+    semantic_digest: str = ""
 
     @property
     def loaded(self) -> bool:
@@ -115,13 +176,14 @@ class CapabilityManifest:
             "manifest_version": self.manifest_version,
             "producer_schema_version": self.producer_schema_version,
             "tool_count": len(self.tools),
-            "digest": self.digest,
+            "file_digest": self.file_digest,
+            "semantic_digest": self.semantic_digest,
         }
 
     # ---- loading --------------------------------------------------------
 
     @classmethod
-    def from_obj(cls, obj: Any, digest: str = "",
+    def from_obj(cls, obj: Any, file_digest: str = "",
                  limits: Limits = DEFAULT_LIMITS) -> CapabilityManifest:
         if not isinstance(obj, dict):
             raise ManifestError("manifest root must be a JSON object")
@@ -205,7 +267,8 @@ class CapabilityManifest:
             value = obj.get(key, "")
             meta[key] = "" if value == "" else _bounded_str(value, f"'{key}'")
 
-        return cls(tools=tools, digest=digest, **meta)
+        return cls(tools=tools, file_digest=file_digest,
+                   semantic_digest=semantic_digest(tools), **meta)
 
     @classmethod
     def from_file(cls, path: str | Path,
@@ -226,8 +289,33 @@ class CapabilityManifest:
             raise ManifestError(f"{p}: not readable as UTF-8 JSON: {exc}") from exc
         except RecursionError as exc:                  # deeply nested manifest
             raise ManifestError(f"{p}: nesting too deep to parse") from exc
-        return cls.from_obj(obj, digest=hashlib.sha256(blob).hexdigest()[:16],
+        return cls.from_obj(obj, file_digest=hashlib.sha256(blob).hexdigest()[:16],
                             limits=limits)
+
+
+def semantic_digest(tools: dict[str, Capability]) -> str:
+    """Hash what the manifest MEANS: every parsed field, canonically ordered.
+
+    Deliberately not routed through ``identity.canonical``. Everything hashed
+    here has already been through ``from_obj``'s type checks -- strings, bools,
+    and members of ``VALID_EFFECTS`` -- so there is no producer-controlled float
+    that could arrive as NaN and no structure that needs coercing. Hashing it
+    directly also keeps ``capabilities`` free of an import edge to ``identity``,
+    which imports ``validate``, which nothing on this path needs.
+
+    An empty manifest hashes to "" rather than to the digest of an empty tool
+    map. "No manifest was loaded" and "a manifest was loaded and declared
+    nothing" are different states, and only one of them should be reported as a
+    policy identity.
+    """
+    if not tools:
+        return ""
+    payload = {
+        "schema": SEMANTICS_SCHEMA,
+        "tools": {tool_id: cap.semantics() for tool_id, cap in tools.items()},
+    }
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
 EMPTY_MANIFEST = CapabilityManifest()

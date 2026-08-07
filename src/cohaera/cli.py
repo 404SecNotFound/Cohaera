@@ -120,7 +120,8 @@ def _load_manifest(path: str | None,
         return EMPTY_MANIFEST
     manifest = CapabilityManifest.from_file(path, limits=limits)
     _err(f"[cohaera] capability manifest {sanitise_display(path, 160)}: "
-         f"{len(manifest.tools)} tool(s), digest {manifest.digest}, "
+         f"{len(manifest.tools)} tool(s), file digest {manifest.file_digest}, "
+         f"semantic digest {manifest.semantic_digest}, "
          f"producer {sanitise_display(manifest.producer or '?', 80)}")
     return manifest
 
@@ -201,7 +202,7 @@ def cmd_score(args: argparse.Namespace) -> int:
         # C4-01: the CONTENT of what was read, not the summary counts.
         input_digest=report.content_digest,
         baseline_hash=baseline_hash,
-        manifest_hash=manifest.digest,
+        manifest_hash=manifest.file_digest,
     )
     provenance = {
         "analysis_run_id": run,

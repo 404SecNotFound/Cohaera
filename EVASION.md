@@ -253,9 +253,11 @@ be aimed at the wrong function entirely.
 
 Eleven defects, C4-01 to C4-11. Seven were spot-checked first and all seven
 reproduced, so the review was treated as reliable and the remainder were
-reproduced individually before any of them were touched. Nine are fixed here,
-with regression tests in [`tests/test_hostile.py`](tests/test_hostile.py); the
-two that are not are listed below with the reason.
+reproduced individually before any of them were touched. All eleven are closed.
+Nine are in the table below, with regression tests in
+[`tests/test_hostile.py`](tests/test_hostile.py). The remaining two follow it:
+C4-10, taken in a different form than the review proposed, and C4-11, fixed
+structurally rather than with a test.
 
 The unifying theme this time is different from the third review's, and worse.
 The third review found inputs the code had never been shown. This one found
@@ -277,14 +279,38 @@ are only absent when you measure.
 | C4-08 | The `Session` cache keyed on `len(self.events)`. | Length is not content. `s.events[0] = other` left the length unchanged, so every cached feature -- tool classes, egress counts, the digest `verdict_id` commits to -- was served from the old set, and a read-only tool stood in for an exfiltration. | **Fixed.** Same fault as C4-07 one layer up, and the same answer: batch-assembled sessions are **sealed**, `events` becomes a tuple, and neither `append` nor index assignment exists. The streaming path keeps `add_event`, which bumps a revision counter the cache also reads. |
 | C4-09 | Oversize rejects logged `bytes_seen=0` and an empty digest. | For the one reject class where size *is* the finding, the ledger recorded no size. The byte count was already being computed to enforce the bound and was thrown away. | **Fixed.** `_bounded_lines` yields the real byte count and a digest streamed over the whole line without ever retaining it, so an oversize record is identifiable and comparable across runs, and its content reaches the run identity that C4-01 added. |
 
-**C4-10, semantic manifest digest: not taken.** The review proposed replacing the
-manifest's byte digest with a digest of its parsed semantics, so that
-reformatting the file does not change the recorded hash. That trade goes the
-wrong way for a security control. The question the digest answers is "did the
-policy file change at all", and the byte digest answers it strictly; a semantic
-digest would report *no change* for an edit that added a field Cohaera does not
-yet read. If the semantic digest is wanted for change-management ergonomics it
-should ship **alongside** the byte digest, not instead of it.
+**C4-10, semantic manifest digest: taken, but not as proposed.** The review asked
+for the manifest's byte digest to be *replaced* by a digest of its parsed
+semantics, so that reformatting the file does not change the recorded hash. The
+complaint was real and reproduced: `{"tools":{...}}` and the same object run
+through `jq .` decode identically and hashed to `7a3e43e5c162b176` and
+`a162bd5deb0977bd`, so a cosmetic edit made every verdict after it look like it
+had run under a different policy.
+
+The proposed fix goes the wrong way on its own. The question a byte digest
+answers is "did the policy file change at all", and it answers it strictly; a
+semantic digest reports *no change* for an edit that adds a field Cohaera does
+not yet parse. Replacing one with the other trades a tamper signal for
+ergonomics.
+
+Both now ship, in every verdict's provenance block:
+`capability_manifest.file_digest` over the exact bytes read, and
+`capability_manifest.semantic_digest` over the parsed records — effects,
+reversibility, destination, approval and sensitive arguments, canonically
+ordered and tagged with a schema version so the digest commits to the *set* of
+fields it covers. Producer name and version numbers are excluded, so a version
+bump cannot read as a capability change.
+
+The pair is worth more than either alone, because the gap between them is a
+reading: same semantic digest and a different file digest means a reformat, or
+an edit in a part of the file this version does not parse. `analysis_run_id`
+keeps committing to the file digest only — a run ID is the strict identity of a
+configuration, and the semantic digest cannot move without the file digest
+moving too, so folding it in would add nothing while dropping the file digest
+would hide exactly the edits it exists to catch. Twelve regression tests in
+[`tests/test_hostile.py`](tests/test_hostile.py), including one per parsed field:
+a semantic digest that misses a field is worse than no digest, because it
+asserts a sameness it has not checked.
 
 **C4-11, README drift: fixed, and made structural.** The README said "188
 passing" against a tree with 197 and listed "CH02 semantic matching" twice in one
@@ -379,7 +405,7 @@ regression tests.
 | CH05 | Orphan terminal events were constructed with `result="success"` and never flagged. | An irreversible action appearing from nowhere was invisible | **Fixed.** `orphan_end` state, reported by CH05. |
 
 The review's C-05 finding, no executable test suite, was accurate at revision
-`45d3bf8`. There are now 280 tests: unit, hostile-input, content conformance and
+`45d3bf8`. There are now 292 tests: unit, hostile-input, content conformance and
 17 evasion characterizations, plus a seeded fuzz smoke test in CI.
 
 ### What is still open from the third review

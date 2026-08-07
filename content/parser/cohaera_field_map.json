@@ -272,7 +272,7 @@
     "provenance": {
       "type": "object",
       "index": true,
-      "description": "What produced this verdict: analysis_run_id, detector_version, config_hash (digest of the resource bounds in force), baseline_hash (digest of the fitted benign grammar), capability_manifest (producer and digest), correlation_key_version, and ingest (accepted, rejected, defective record counts plus reason-code histograms). Two runs that disagree are distinguishable from this block alone.",
+      "description": "What produced this verdict: analysis_run_id, detector_version, config_hash (digest of the resource bounds in force), baseline_hash (digest of the fitted benign grammar), capability_manifest (producer, tool_count, and two digests -- file_digest over the manifest's exact bytes, semantic_digest over the capability declarations Cohaera parsed from them), correlation_key_version, and ingest (accepted, rejected, defective record counts plus reason-code histograms). Two runs that disagree are distinguishable from this block alone. A pair of runs whose semantic_digest matches and whose file_digest differs ran under the same policy, differently spelled -- or under an edit this detector version does not parse.",
       "subfields": [
         "analysis_run_id",
         "detector_version",

@@ -225,6 +225,15 @@ def run_id(*, detector_version: str, config_hash: str, source: str,
     same run and should be recognisable as a duplicate rather than counted
     twice. Change any input and the ID changes, so a re-analysis after a
     baseline update is visibly a different run.
+
+    ``manifest_hash`` is the manifest's FILE digest, not its semantic one, and
+    that is not an oversight. A run ID is the strict identity of a
+    configuration: the semantic digest cannot move without the file digest
+    moving too, so folding it in would add no distinguishing power, while
+    dropping the file digest in its favour would make a reformat -- or an edit
+    to a field this version does not parse -- invisible in the run's identity.
+    Both digests still travel in the verdict's provenance block, where the gap
+    between them is readable (C4-10).
     """
     return digest({
         "detector_version": detector_version, "config_hash": config_hash,

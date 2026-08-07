@@ -307,7 +307,7 @@ def test_every_emitted_check_id_has_a_rule():
 
 def test_example_manifest_loads_and_is_useful():
     manifest = CapabilityManifest.from_file(MANIFEST)
-    assert manifest.loaded and manifest.digest
+    assert manifest.loaded and manifest.file_digest and manifest.semantic_digest
     assert manifest.klass_for("send_email") == "egress"
     assert manifest.klass_for("delete_record") == "state_change"
     assert manifest.klass_for("draft_reply") == "read_only"
@@ -320,8 +320,10 @@ def test_example_manifest_loads_and_is_useful():
 def test_example_manifest_is_valid_json_with_a_stable_digest():
     blob = MANIFEST.read_bytes()
     json.loads(blob.decode("utf-8"))
-    assert (CapabilityManifest.from_file(MANIFEST).digest
-            == CapabilityManifest.from_file(MANIFEST).digest)
+    a = CapabilityManifest.from_file(MANIFEST)
+    b = CapabilityManifest.from_file(MANIFEST)
+    assert a.file_digest == b.file_digest
+    assert a.semantic_digest == b.semantic_digest
 
 
 def test_manifest_corrects_a_heuristic_misclassification():
