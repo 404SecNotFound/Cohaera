@@ -592,8 +592,13 @@ prevention claim collapses.
 - [ ] Measured TPR and FPR with task-disjoint splits
 - [ ] CH02 semantic matching, currently lexical and its weakest point
 - [ ] Praxen Worker Remit compiler, remit sections to runtime predicates
-- [ ] Sigma and LogRhythm AIE content pack
-- [ ] Exabeam ABA parser field mapping
+- [x] Sigma content pack, 6 rules, validated ([content/sigma](content/sigma))
+- [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
+- [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
+- [x] Unit tests, 32 passing ([tests/test_cohaera.py](tests/test_cohaera.py))
+- [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
+- [ ] Validate content against a live SIEM
+- [ ] Build AIE-COHAERA-001 natively and compare against the Cohaera-fed version
 - [ ] Hash-chained verdict log, AEGIS pattern
 
 ---
@@ -614,6 +619,39 @@ hide is a defect.
   tiebreak. Unknown-class calls are counted and reported in coverage.
 - **Nothing here has been measured against a labelled corpus yet.** The fixture
   numbers are a smoke test.
+
+---
+
+## Repository map
+
+```
+src/cohaera/          the library, 0 runtime dependencies
+  model.py            Session, ToolCall, Finding, CIM emit
+  ingest.py           observra JSONL to Sessions
+  checks.py           CH01 to CH05 plus coverage()
+  cli.py              cohaera score
+
+content/              detection content
+  sigma/              6 validated Sigma rules
+  aie/                LogRhythm AIE specs + correlate-in-SIEM vs upstream comparison
+  parser/             Exabeam field map + observra#108 analysis
+
+docs/
+  PHASE0-VERIFICATION.md   raw command output backing every claim in this README
+
+tests/
+  test_cohaera.py     32 unit tests, no pytest required to run
+  make_fixtures.py    labelled benign and suspect telemetry
+
+FINDINGS.md           three source-verified observations against observra v1.1.0
+LAB.md                full lab build, VM topology, experiment protocol
+```
+
+Run the tests without installing anything:
+
+```bash
+PYTHONPATH=src python3 tests/test_cohaera.py
+```
 
 ---
 

@@ -1,0 +1,57 @@
+title: Agent Took A Consequential Action After Reading Untrusted Content
+id: 6e972919-fc68-45cb-9bf9-30475720e2c1
+status: experimental
+description: |
+  Injection markers were observed in an agent session, and a state-changing or
+  egress tool call ran afterwards in the same session.
+
+  This is a simplified taint-flow signal. Full information-flow control (Fides
+  arXiv:2505.23643, CaMeL arXiv:2503.18813) labels every value; Cohaera has
+  timestamps, so it orders the marker against the consequential call. Cheap,
+  and honest about what it proves.
+
+  IMPORTANT: this proves coexistence in a particular order, not causation. It
+  marks a session for human review. Do not write a suppression or containment
+  action off this rule alone.
+
+  Observra's own demo data contains exactly this pattern, and in that case the
+  agent behaved correctly and ignored the embedded instruction. Treat the rule
+  as a review trigger with a real benign rate.
+references:
+    - https://github.com/404SecNotFound/Cohaera
+    - https://arxiv.org/abs/2505.23643
+    - https://arxiv.org/abs/2503.18813
+    - https://genai.owasp.org/llm-top-10/
+author: Imran Hafeez
+date: 2026-08-07
+tags:
+    - owasp.llm01.prompt.injection
+    - owasp.llm06.excessive.agency
+    - cohaera.ch03
+logsource:
+    product: cohaera
+    service: session_verdict
+detection:
+    selection:
+        type: 'cohaera_session_verdict'
+        data.triggered_rules|contains: 'CH03_untrusted_to_consequential'
+    condition: selection
+fields:
+    - session_id
+    - agent_name
+    - user
+    - data.injection_markers
+    - data.tool_sequence
+    - data.egress_count
+    - data.state_change_count
+falsepositives:
+    - |
+      EXPECTED AND COMMON. A correctly-behaving agent that reads hostile
+      content, ignores it, and then does its legitimate job will fire this rule.
+      That is the intended behaviour of the check, not a defect.
+    - |
+      observra's injection scanner uses five regexes with a wide surface. The
+      BASE64_BLOB pattern is [A-Za-z0-9+/]{20,} and matches any hash, ULID, JWT
+      segment or API key. Expect marker noise from that pattern specifically.
+    - Security tooling agents that legitimately process attack samples.
+level: medium

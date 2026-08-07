@@ -1,0 +1,52 @@
+title: Agent Consequential Tool Call Started With No Terminal Event
+id: d173d4c0-f82d-48e3-a7ef-7b3d4a70b38b
+status: experimental
+description: |
+  A state-changing or egress tool call emitted tool_start with no matching
+  tool_end or tool_error.
+
+  This is an integrity check on the telemetry itself, not on the agent. Either
+  the run was truncated mid-write, or the event was lost in collection. The
+  stream cannot distinguish those two, which is exactly why it should be
+  surfaced rather than silently dropped.
+
+  Operationally: an irreversible action whose outcome was never logged is an
+  action nobody can attest to. That is a reconciliation problem for the SOC
+  regardless of cause.
+
+  Note observra's own drop-oldest queue design. The README states the queue
+  "guarantees zero latency impact on the host agent", which means under
+  pressure events are dropped by design. This rule detects the consequence.
+references:
+    - https://github.com/404SecNotFound/Cohaera
+    - https://github.com/open-agent-ai-security/observra
+author: Imran Hafeez
+date: 2026-08-07
+tags:
+    - cohaera.ch05
+    - telemetry.integrity
+logsource:
+    product: cohaera
+    service: session_verdict
+detection:
+    selection:
+        type: 'cohaera_session_verdict'
+        data.triggered_rules|contains: 'CH05_unpaired_calls'
+    consequential:
+        data.unpaired_calls|gte: 1
+    condition: selection and consequential
+fields:
+    - session_id
+    - agent_name
+    - host
+    - data.unpaired_calls
+    - data.event_count
+    - data.findings
+falsepositives:
+    - Agent process killed or restarted mid-session. Correlate with host
+      telemetry before treating it as a collection fault.
+    - Telemetry backlog under load, which is expected behaviour for a
+      drop-oldest queue.
+    - Long-running tools still in flight when the log was exported. Check
+      whether the export cut the session rather than the agent.
+level: low

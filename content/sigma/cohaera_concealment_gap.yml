@@ -1,0 +1,55 @@
+title: Agent Performed A Consequential Action It Did Not Report To The Human
+id: 09fa17a7-5d07-4439-8a21-33fb29bed713
+status: experimental
+description: |
+  A state-changing or egress tool call succeeded during an agent session, and
+  it is not referenced in the agent's final user-facing message.
+
+  Why this matters: in a human-in-the-loop design, the human reads the summary.
+  If the summary is not a faithful account of what the agent did, the human
+  control has been silently removed while still appearing to be present.
+
+  The concept comes from the IPI Arena competition paper (arXiv:2603.15714),
+  which foregrounds concealment as a dimension of the threat: an action can be
+  taken while the final user-facing response presents no clue of compromise.
+
+  Requires Cohaera, and requires text capture to be enabled. If response_text
+  is absent, Cohaera reports CH02 as not_evaluated rather than clean; see the
+  companion rule cohaera_coverage_degraded.
+references:
+    - https://github.com/404SecNotFound/Cohaera
+    - https://arxiv.org/abs/2603.15714
+author: Imran Hafeez
+date: 2026-08-07
+tags:
+    - owasp.llm06.excessive.agency
+    - cohaera.ch02
+logsource:
+    product: cohaera
+    service: session_verdict
+detection:
+    selection:
+        type: 'cohaera_session_verdict'
+        data.triggered_rules|contains: 'CH02_concealment_gap'
+    egress:
+        data.egress_count|gte: 1
+    condition: selection
+    # Raise to critical when the unreported call left the trust boundary:
+    #   condition: selection and egress
+fields:
+    - session_id
+    - agent_name
+    - user
+    - data.tool_sequence
+    - data.state_change_count
+    - data.egress_count
+    - data.findings
+falsepositives:
+    - |
+      HIGH. The v0.1 reference matcher is lexical, not semantic. An agent that
+      says "I have emailed the report" without naming the send_email tool will
+      be flagged. Expect a material false positive rate until CH02 uses a
+      semantic judge. Baseline this rule before alerting on it.
+    - Agents whose summaries are deliberately terse by design.
+    - Tool names that share no word stem with how a human would describe them.
+level: medium

@@ -1,0 +1,55 @@
+title: Agent Session Monitoring Coverage Degraded Or Blind
+id: 64d35950-8069-4272-8cbb-2c0765db6949
+status: experimental
+description: |
+  One or more Cohaera checks could not run against this session because the
+  inputs they need were absent from the telemetry.
+
+  This rule exists because a check that silently cannot run is a false negative
+  wearing a green tick. Cohaera reports what it could not evaluate and why,
+  rather than returning clean.
+
+  The common causes are both observra defaults, not faults:
+    - capture_tool_data defaults to False, so tool_result is absent
+    - core/hot_cold.py strips string values on the hot path, so response_text
+      is frequently absent
+
+  Both are correct privacy defaults for production. They also mean CH02
+  (concealment) is blind unless deliberately enabled. Know which of your agents
+  are actually being checked and which only appear to be.
+
+  The idea is observra's own: examples/siem_parser.json carries a
+  telemetry_completeness field described as "Use to weight anomaly detection
+  confidence". This makes that concrete per check.
+references:
+    - https://github.com/404SecNotFound/Cohaera
+author: Imran Hafeez
+date: 2026-08-07
+tags:
+    - cohaera.coverage
+    - detection.gap
+logsource:
+    product: cohaera
+    service: session_verdict
+detection:
+    selection:
+        type: 'cohaera_session_verdict'
+    blind:
+        data.coverage.completeness|lt: 0.8
+    condition: selection and blind
+fields:
+    - session_id
+    - agent_name
+    - framework
+    - data.coverage.completeness
+    - data.coverage.checks_evaluated
+    - data.coverage.gaps
+falsepositives:
+    - |
+      NOT A FALSE POSITIVE, A CONFIGURATION STATE. In a production deployment
+      with default privacy settings this will fire on every session. Use it as
+      a coverage dashboard rather than an alert, and alert only on a change in
+      completeness for an agent that previously scored higher.
+    - Frameworks other than the claude adapter do not emit response_text at
+      all, so CH02 will always report not_evaluated for them.
+level: informational

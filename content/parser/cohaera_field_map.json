@@ -1,0 +1,271 @@
+{
+  "_metadata": {
+    "description": "SIEM parser configuration for Cohaera session verdict records",
+    "log_source": "cohaera-session-verdict",
+    "format": "json",
+    "transport": "Webhook, OTel log export, or file collection of JSONL",
+    "schema_version": "cohaera:0.1",
+    "note": "One record per agent SESSION, not per event. Emits 'type' and 'schema' at top level specifically because observra#108 records that the Exabeam sender emits 'event_type' where the published ABA parser expects 'type', and never emits 'schema'.",
+    "status": "UNTESTED against a live Exabeam or LogRhythm parser. Validate before deploying."
+  },
+  "top_level_fields": {
+    "type": {
+      "type": "string",
+      "description": "Always cohaera_session_verdict. Parser match key.",
+      "index": true
+    },
+    "schema": {
+      "type": "string",
+      "description": "Schema marker, e.g. cohaera:0.1. Parser match key.",
+      "index": true
+    },
+    "event_type": {
+      "type": "string",
+      "description": "Duplicate of type, for backwards compatibility with observra-shaped consumers.",
+      "index": false
+    },
+    "timestamp": {
+      "type": "number",
+      "format": "epoch_seconds",
+      "description": "Session end time.",
+      "index": true
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Correlation key. Matches observra session_id.",
+      "index": true
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "Correlation key across delegations.",
+      "index": true
+    },
+    "agent_name": {
+      "type": "string",
+      "description": "First agent seen in the session.",
+      "nullable": true,
+      "index": true
+    },
+    "framework": {
+      "type": "string",
+      "description": "adk, claude, langgraph, openai, mcp, unknown.",
+      "index": true
+    },
+    "host": {
+      "type": "string",
+      "nullable": true,
+      "description": "Host the agent ran on."
+    },
+    "user": {
+      "type": "string",
+      "nullable": true,
+      "description": "Service account the agent ran as.",
+      "index": true
+    },
+    "log_source_type": {
+      "type": "string",
+      "description": "Always cohaera."
+    }
+  },
+  "data_fields": {
+    "injection_markers": {
+      "type": "array",
+      "description": "OBSERVRA#108 DROPPED FIELD. Union of injection_patterns across the session.",
+      "index": true,
+      "maps_from": "observra data.injection_patterns"
+    },
+    "max_delegation_depth": {
+      "type": "integer",
+      "description": "OBSERVRA#108 DROPPED FIELD. Max current_depth observed.",
+      "maps_from": "observra data.current_depth"
+    },
+    "handoff_chain": {
+      "type": "array",
+      "description": "OBSERVRA#108 DROPPED FIELDS. Source->target pairs, the delegation graph.",
+      "maps_from": "observra data.source_agent + data.target_agent"
+    },
+    "handoff_count": {
+      "type": "integer",
+      "description": "Number of agent handoffs in the session."
+    },
+    "triggered_rules": {
+      "type": "array",
+      "description": "OBSERVRA#108 DROPPED FIELD, re-emitted. Cohaera check IDs that fired.",
+      "index": true,
+      "example": [
+        "CH03_untrusted_to_consequential",
+        "CH04_guardrail_overrun"
+      ]
+    },
+    "max_severity": {
+      "type": "string",
+      "description": "OBSERVRA#108 DROPPED FIELD, re-emitted at session level.",
+      "enum": [
+        "info",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "index": true
+    },
+    "policy_events": {
+      "type": "array",
+      "description": "observra policy events seen: cost_threshold_exceeded, depth_exceeded."
+    },
+    "tool_sequence": {
+      "type": "array",
+      "description": "Ordered tool names. The correlation primitive. Does not exist in observra.",
+      "index": false
+    },
+    "tool_call_count": {
+      "type": "integer"
+    },
+    "distinct_tools": {
+      "type": "integer"
+    },
+    "read_only_count": {
+      "type": "integer",
+      "description": "Calls classified read_only."
+    },
+    "state_change_count": {
+      "type": "integer",
+      "description": "Calls classified state_change (irreversible).",
+      "index": true
+    },
+    "egress_count": {
+      "type": "integer",
+      "description": "Calls classified egress (leaves the trust boundary).",
+      "index": true
+    },
+    "unknown_class_count": {
+      "type": "integer",
+      "description": "Calls that could not be classified. Non-zero means tune the classification map."
+    },
+    "unpaired_calls": {
+      "type": "integer",
+      "description": "tool_start with no terminal event. Telemetry integrity signal."
+    },
+    "error_count": {
+      "type": "integer"
+    },
+    "duration_s": {
+      "type": "number"
+    },
+    "event_count": {
+      "type": "integer",
+      "description": "observra events assembled into this session."
+    },
+    "total_cost_usd": {
+      "type": "number"
+    },
+    "has_final_response_text": {
+      "type": "boolean",
+      "description": "Whether CH02 had its input. False means CH02 was blind."
+    },
+    "tool_results_captured": {
+      "type": "integer",
+      "description": "Calls with tool_result present. Zero means capture_tool_data was off."
+    },
+    "finding_count": {
+      "type": "integer"
+    },
+    "findings": {
+      "type": "array",
+      "description": "Full finding objects: check, severity, title, detail, evidence."
+    },
+    "coverage": {
+      "type": "object",
+      "description": "checks_total, checks_evaluated, completeness, gaps[]. Weight confidence by this."
+    }
+  },
+  "correlation_keys": {
+    "session": "session_id",
+    "trace": "trace_id",
+    "description": "Join back to the underlying observra per-event records on session_id to pivot from a verdict to the raw evidence."
+  },
+  "detection_rules_note": "Unlike observra's nine rules, every condition below references SESSION state. That is the point. Cohaera evaluates them at session close and writes results to triggered_rules[] and max_severity, so the SIEM can use simple contains-queries rather than compound followed-by rules.",
+  "detection_rules": [
+    {
+      "name": "Guardrail Overrun",
+      "severity": "high",
+      "condition": "triggered_rules contains 'CH04_guardrail_overrun'",
+      "events_required": "2+",
+      "expressible_in_observra": false,
+      "description": "A policy control fired and the session went on doing consequential work.",
+      "fields": [
+        "session_id",
+        "agent_name",
+        "policy_events",
+        "state_change_count",
+        "egress_count"
+      ]
+    },
+    {
+      "name": "Concealment Gap",
+      "severity": "medium",
+      "condition": "triggered_rules contains 'CH02_concealment_gap'",
+      "events_required": "tool log + final response",
+      "expressible_in_observra": false,
+      "description": "A consequential call succeeded and is absent from the agent's final message to the human.",
+      "fields": [
+        "session_id",
+        "agent_name",
+        "tool_sequence",
+        "egress_count"
+      ]
+    },
+    {
+      "name": "Untrusted Content Then Consequential Action",
+      "severity": "medium",
+      "condition": "triggered_rules contains 'CH03_untrusted_to_consequential'",
+      "events_required": "2+ ordered",
+      "expressible_in_observra": false,
+      "description": "REVIEW TRIGGER, NOT A VERDICT. Injection markers preceded a state change in the same session.",
+      "fields": [
+        "session_id",
+        "injection_markers",
+        "tool_sequence"
+      ]
+    },
+    {
+      "name": "Sequence Order Violation",
+      "severity": "medium",
+      "condition": "triggered_rules contains 'CH01_sequence_order'",
+      "events_required": "whole session + fitted baseline",
+      "expressible_in_observra": false,
+      "description": "Tool ordering contains transitions absent from the benign baseline.",
+      "fields": [
+        "session_id",
+        "agent_name",
+        "tool_sequence",
+        "distinct_tools"
+      ]
+    },
+    {
+      "name": "Unpaired Consequential Call",
+      "severity": "low",
+      "condition": "triggered_rules contains 'CH05_unpaired_calls' AND unpaired_calls >= 1",
+      "events_required": "2 paired",
+      "expressible_in_observra": false,
+      "description": "An irreversible action started and its outcome was never logged.",
+      "fields": [
+        "session_id",
+        "unpaired_calls",
+        "event_count"
+      ]
+    },
+    {
+      "name": "Monitoring Coverage Degraded",
+      "severity": "informational",
+      "condition": "coverage.completeness < 0.8",
+      "events_required": "session",
+      "expressible_in_observra": false,
+      "description": "DASHBOARD NOT ALERT. One or more checks could not run. A clean result here does not mean checked and clean.",
+      "fields": [
+        "agent_name",
+        "coverage"
+      ]
+    }
+  ]
+}

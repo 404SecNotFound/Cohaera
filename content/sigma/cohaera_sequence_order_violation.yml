@@ -1,0 +1,53 @@
+title: Agent Tool-Call Ordering Deviates From Its Learned Baseline
+id: e62a1854-70ed-491d-b7e1-2fa6833b4502
+status: experimental
+description: |
+  The tool-call ordering in this session contains transitions never observed in
+  the benign baseline corpus for this agent, above the configured violation
+  rate threshold.
+
+  Severity is raised when the session used a tool that appears in no benign
+  session at all, which is a first-time-action signal rather than a
+  reordering signal.
+
+  The two-axis split (order violation vs semantic drift) is borrowed from
+  TraceAegis (arXiv:2510.11203). This rule implements the order axis.
+
+  Contrast with observra's own detect_suspicious_sequence(), which tests
+  has_read AND has_external over the whole session. That is set membership with
+  no notion of order, and as of v1.1.0 it is dead code that nothing calls, so
+  the "Suspicious Tool Sequence" rule it feeds can never fire.
+references:
+    - https://github.com/404SecNotFound/Cohaera
+    - https://arxiv.org/abs/2510.11203
+    - https://www.exabeam.com/blog/security-operations-center/what-makes-agent-activity-harder-to-detect/
+author: Imran Hafeez
+date: 2026-08-07
+tags:
+    - owasp.llm06.excessive.agency
+    - cohaera.ch01
+logsource:
+    product: cohaera
+    service: session_verdict
+detection:
+    selection:
+        type: 'cohaera_session_verdict'
+        data.triggered_rules|contains: 'CH01_sequence_order'
+    condition: selection
+fields:
+    - session_id
+    - agent_name
+    - data.tool_sequence
+    - data.distinct_tools
+    - data.findings
+falsepositives:
+    - |
+      HIGH IF THE BASELINE IS THIN. A grammar fitted on a small or homogeneous
+      corpus learns few transitions and will flag anything novel. Fit on real
+      variety and record baseline_sessions in the finding evidence so an analyst
+      can judge how much to trust it.
+    - Legitimate new capability. A newly added tool is novel by definition.
+      Re-fit the baseline after any deliberate change to the agent.
+    - Agents with genuinely non-deterministic planning, where ordering varies
+      run to run without security significance.
+level: medium
