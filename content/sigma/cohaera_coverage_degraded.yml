@@ -2,14 +2,35 @@ title: Agent Session Monitoring Coverage Degraded Or Blind
 id: 64d35950-8069-4272-8cbb-2c0765db6949
 status: experimental
 description: |
-  One or more Cohaera checks could not run against this session because the
-  inputs they need were absent from the telemetry.
+  One or more Cohaera checks could not run, or could only run on partial
+  evidence, against this session.
 
   This rule exists because a check that silently cannot run is a false negative
   wearing a green tick. Cohaera reports what it could not evaluate and why,
   rather than returning clean.
 
-  The common causes are both observra defaults, not faults:
+  WHAT CHANGED IN coverage:2. The previous score counted only checks that
+  returned not_evaluated, so a session whose every tool was UNCLASSIFIABLE still
+  scored 0.8 to 1.0. completeness is now confidence-weighted, and the confidence
+  of each check multiplies in three things it previously ignored:
+
+    data.coverage.correlation_confidence
+        How the session was assembled. 1.0 for a producer-supplied session_id,
+        0.9 for trace_id, 0.3 for a scoped anonymous bucket, 0.0 for a record
+        with no identity at all. A verdict assembled out of guesswork should not
+        present itself as one assembled from a real key.
+
+    data.coverage.classification_confidence
+        Whether each tool's effect was DECLARED in a capability manifest, guessed
+        from its name, or not determined at all. A name heuristic is a guess
+        about a string the observed system chose, so it contributes a fraction.
+        Supply --tool-manifest to raise this.
+
+    data.coverage.clock_confidence
+        The fraction of events carrying a usable timestamp. CH03 and CH04 are
+        ordering checks and cannot see an event whose clock is unparseable.
+
+  The common causes of a LOW score are both observra defaults, not faults:
     - capture_tool_data defaults to False, so tool_result is absent
     - core/hot_cold.py strips string values on the hot path, so response_text
       is frequently absent
@@ -18,6 +39,10 @@ description: |
   (concealment) is blind unless deliberately enabled. Know which of your agents
   are actually being checked and which only appear to be.
 
+  Per-check detail is in data.coverage.checks[], each carrying status,
+  confidence, required_surfaces, present_surfaces, missing_surfaces, reasons and
+  the assumptions the check is making. Route on the reason codes, not the prose.
+
   The idea is observra's own: examples/siem_parser.json carries a
   telemetry_completeness field described as "Use to weight anomaly detection
   confidence". This makes that concrete per check.
@@ -25,6 +50,7 @@ references:
     - https://github.com/404SecNotFound/Cohaera
 author: Imran Hafeez
 date: 2026-08-07
+modified: 2026-08-07
 # Tags intentionally omitted. Sigma validation rejects private namespaces
 # (owasp.*, cohaera.*) and MITRE ATLAS IDs were not verified against the
 # current matrix. Add them in your own pipeline if it accepts them.
@@ -35,7 +61,10 @@ detection:
     selection:
         type: 'cohaera_session_verdict'
     blind:
-        data.coverage.completeness|lte: 0.8   # lte, not lt: 0.8 is the COMMON case
+        # lte, not lt. Under coverage:2 a well-instrumented session with no
+        # capability manifest lands around 0.7 to 0.8, so this is the COMMON
+        # case rather than the exceptional one. Treat it as a dashboard.
+        data.coverage.completeness|lte: 0.8
     condition: selection and blind
 fields:
     - session_id
@@ -43,13 +72,21 @@ fields:
     - framework
     - data.coverage.completeness
     - data.coverage.checks_evaluated
+    - data.coverage.checks_degraded
+    - data.coverage.checks_not_evaluated
+    - data.coverage.correlation_confidence
+    - data.coverage.classification_confidence
+    - data.coverage.clock_confidence
+    - data.coverage.unknown_class_calls
     - data.coverage.gaps
 falsepositives:
     - |
       NOT A FALSE POSITIVE, A CONFIGURATION STATE. In a production deployment
-      with default privacy settings this will fire on every session. Use it as
-      a coverage dashboard rather than an alert, and alert only on a change in
-      completeness for an agent that previously scored higher.
+      with default privacy settings and no capability manifest this will fire on
+      every session. Use it as a coverage dashboard rather than an alert, and
+      alert only on a DROP in completeness for an agent that previously scored
+      higher. That drop is the interesting event: it means an agent's
+      observability regressed.
     - Frameworks other than the claude adapter do not emit response_text at
       all, so CH02 will always report not_evaluated for them.
 level: informational

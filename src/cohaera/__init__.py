@@ -15,15 +15,38 @@ that a SIEM can actually write rules against.
 It does not replace behavioural analytics. It feeds it.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
-from .checks import SequenceGrammar, run_all
+from .capabilities import Capability, CapabilityManifest, ManifestError
+from .checks import SequenceGrammar, coverage, run_all
+from .identity import CorrelationKey, Correlator
 from .ingest import assemble, load, read_events
+from .limits import DEFAULT_LIMITS, Limits
 from .model import Event, Finding, Session, ToolCall, to_cim_event
+from .validate import IngestReport, RecordView, Reject, sanitise_display
 
 __all__ = [
+    "DEFAULT_LIMITS",
+    "Capability",
+    "CapabilityManifest",
+    "CorrelationKey",
+    "Correlator",
+    "Event",
+    "Finding",
+    "IngestReport",
+    "Limits",
+    "ManifestError",
+    "RecordView",
+    "Reject",
+    "SequenceGrammar",
+    "Session",
+    "ToolCall",
     "__version__",
-    "Event", "Session", "ToolCall", "Finding",
-    "read_events", "assemble", "load",
-    "SequenceGrammar", "run_all", "to_cim_event",
+    "assemble",
+    "coverage",
+    "load",
+    "read_events",
+    "run_all",
+    "sanitise_display",
+    "to_cim_event",
 ]

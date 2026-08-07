@@ -1,0 +1,127 @@
+{
+  "_README": [
+    "EXAMPLE capability manifest. Copy it, replace the tools, keep the shape.",
+    "",
+    "Cohaera's default classifier guesses what a tool does from its NAME. That",
+    "guess has been wrong in both directions in every review round so far:",
+    "budget_report read as read_only because 'get' is inside 'budget';",
+    "postmortem_read read as egress because 'post' is inside 'postmortem'.",
+    "Whole-token matching fixed those. It cannot fix the general case, because",
+    "sync_to_partner is egress and sync_local_cache is not, and no amount of",
+    "tokenising separates them.",
+    "",
+    "A manifest replaces the guess with a declaration, keyed on the EXACT tool",
+    "ID the producer emits in tool_name. Tools not listed here fall back to the",
+    "heuristic and DEGRADE that session's coverage confidence, which is the",
+    "intended pressure: the score tells you how much of the verdict rests on",
+    "guesswork.",
+    "",
+    "Precedence, highest first:",
+    "  1. this manifest, matched on exact tool_id",
+    "  2. egress by name",
+    "  3. the producer's per-call 'reversible' flag",
+    "  4. the name heuristic",
+    "",
+    "The manifest outranks 'reversible' deliberately. That flag arrives on the",
+    "event, in band, from the same path an attacker would use to hide an action.",
+    "This file is loaded out of band from a path the operator chose.",
+    "",
+    "NOT SIGNED. Signing needs a key distribution story that does not exist yet,",
+    "and a signature field that nothing verifies is worse than none. Cohaera",
+    "records the file's SHA-256 digest in every verdict's provenance block, so",
+    "two runs that disagree about what a tool does are distinguishable after the",
+    "fact. Treat the file as configuration under change control.",
+    "",
+    "Usage: cohaera score run.jsonl --tool-manifest this_file.json"
+  ],
+
+  "manifest_version": "1",
+  "producer": "observra/claude-adapter",
+  "producer_schema_version": "1.1.0",
+
+  "tools": {
+    "search_tickets": {
+      "effects": ["read"],
+      "reversible": true,
+      "destination": "internal:ticketing"
+    },
+    "fetch_ticket": {
+      "effects": ["read"],
+      "reversible": true,
+      "destination": "internal:ticketing"
+    },
+    "get_device_status": {
+      "effects": ["read"],
+      "reversible": true,
+      "destination": "internal:mdm"
+    },
+    "draft_reply": {
+      "effects": ["read"],
+      "reversible": true,
+      "destination": "internal:none",
+      "_note": "Drafting produces no external effect. Sending does."
+    },
+
+    "send_email": {
+      "effects": ["egress", "write"],
+      "reversible": false,
+      "destination": "external:smtp",
+      "requires_approval": true,
+      "sensitive_args": ["to", "cc", "bcc", "attachments", "body"]
+    },
+    "send_email_followup": {
+      "effects": ["egress", "write"],
+      "reversible": false,
+      "destination": "external:smtp",
+      "requires_approval": true,
+      "sensitive_args": ["to", "body"]
+    },
+    "post_webhook": {
+      "effects": ["egress"],
+      "reversible": false,
+      "destination": "external:https",
+      "requires_approval": true,
+      "sensitive_args": ["url", "payload"]
+    },
+
+    "delete_record": {
+      "effects": ["delete"],
+      "reversible": false,
+      "destination": "internal:crm",
+      "requires_approval": true
+    },
+    "transfer_funds": {
+      "effects": ["write", "execute"],
+      "reversible": false,
+      "destination": "external:payments",
+      "requires_approval": true,
+      "sensitive_args": ["account", "amount", "beneficiary"]
+    },
+
+    "budget_report": {
+      "effects": ["read"],
+      "reversible": true,
+      "destination": "internal:finance",
+      "_note": "The heuristic read this as read_only for the WRONG reason ('get' inside 'budget'). Right answer, wrong evidence. A declaration makes it right for the right reason."
+    },
+    "postmortem_read": {
+      "effects": ["read"],
+      "reversible": true,
+      "destination": "internal:wiki",
+      "_note": "The heuristic classified this as egress ('post' inside 'postmortem') until whole-token matching landed."
+    },
+    "sync_local_cache": {
+      "effects": ["write"],
+      "reversible": true,
+      "destination": "internal:none",
+      "_note": "The heuristic still calls this egress because 'sync' is an egress keyword. It is not. This entry is why exact IDs beat token matching."
+    },
+    "sync_to_partner": {
+      "effects": ["egress", "write"],
+      "reversible": false,
+      "destination": "external:partner-api",
+      "requires_approval": true,
+      "_note": "Same verb as sync_local_cache, opposite trust boundary. No lexical rule separates these two."
+    }
+  }
+}

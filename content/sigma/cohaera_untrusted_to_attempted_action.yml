@@ -1,0 +1,67 @@
+title: Agent Attempted A Consequential Action After Reading Untrusted Content
+id: b74578b4-e979-5f21-ab43-83af8f1b2159
+status: experimental
+description: |
+  Injection markers were observed in an agent session, and a state-changing or
+  egress tool call STARTED afterwards WITHOUT completing successfully. It
+  errored, or it was left open with no terminal event.
+
+  READ THIS BEFORE TUNING. The attempt is the observed fact. Whether the action
+  had any effect is NOT established by this telemetry, and neither is the reason
+  it did not complete. A call is recorded as incomplete when it failed, when it
+  was refused, when the tool timed out, and when the terminal event was simply
+  never emitted. Cohaera cannot tell those apart and does not claim to.
+
+  This rule exists because the previous single CH03 rule presented an errored
+  call using the word "Took" in its title and "ran afterwards" in its evidence,
+  which asserted an effect the data did not support. Split out at a lower level
+  so an analyst can see the sequence without being told an outcome.
+
+  Its sibling 6e972919-fc68-45cb-9bf9-30475720e2c1 matches the completed case
+  and is the one to route to an incident queue.
+
+  Worth investigating despite the level, for one specific reason: an agent that
+  repeatedly ATTEMPTS consequential actions after reading hostile content is
+  exhibiting the behaviour the attack is trying to produce, whether or not any
+  individual attempt landed. Correlate on repetition over time in your
+  behavioural layer rather than alerting per session.
+references:
+    - https://github.com/404SecNotFound/Cohaera
+    - https://arxiv.org/abs/2505.23643
+    - https://genai.owasp.org/llm-top-10/
+author: Imran Hafeez
+date: 2026-08-07
+related:
+    - id: 6e972919-fc68-45cb-9bf9-30475720e2c1
+      type: similar
+logsource:
+    product: cohaera
+    service: session_verdict
+detection:
+    selection:
+        type: 'cohaera_session_verdict'
+        data.triggered_rules|contains: 'CH03_untrusted_to_attempted_action'
+    condition: selection
+fields:
+    - session_id
+    - agent_name
+    - user
+    - data.injection_markers
+    - data.tool_sequence
+    - data.unpaired_consequential_count
+    - data.error_count
+    - data.coverage.completeness
+falsepositives:
+    - |
+      A flaky tool in an agent that also reads untrusted content will fire this
+      on every transient failure. Baseline the per-agent rate before alerting.
+    - |
+      An agent whose adapter drops terminal events under load produces open
+      calls that are indistinguishable from refused ones. Check
+      data.orphan_terminals and data.open_starts before concluding anything
+      about enforcement.
+    - |
+      Same marker-noise caveat as the completed-action rule. observra's
+      BASE64_BLOB pattern is [A-Za-z0-9+/]{20,} and matches any hash, ULID or
+      JWT segment.
+level: low

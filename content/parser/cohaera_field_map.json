@@ -4,9 +4,16 @@
     "log_source": "cohaera-session-verdict",
     "format": "json",
     "transport": "Webhook, OTel log export, or file collection of JSONL",
-    "schema_version": "cohaera:0.1",
+    "schema_version": "cohaera:0.2",
     "note": "One record per agent SESSION, not per event. Emits 'type' and 'schema' at top level specifically because observra#108 records that the Exabeam sender emits 'event_type' where the published ABA parser expects 'type', and never emits 'schema'.",
-    "status": "UNTESTED against a live Exabeam or LogRhythm parser. Validate before deploying."
+    "status": "UNTESTED against a live Exabeam or LogRhythm parser. Validate before deploying. The Sigma pack IS tested: all nine rules pass Sigma CLI 3.1.0 validation, convert to Splunk SPL, and every field named below is asserted to exist in a real emitted record by tests/test_content.py.",
+    "breaking_changes_in_0_2": [
+      "CH03_untrusted_to_consequential SPLIT into CH03_untrusted_to_completed_action and CH03_untrusted_to_attempted_action. Content matching the old ID matches nothing. data.triggered_families still carries the old family name.",
+      "CH04_guardrail_overrun SPLIT into CH04_guardrail_bypass_completed and CH04_post_guardrail_attempt, at different severities.",
+      "data.coverage is now schema cohaera.coverage:2. completeness is confidence-weighted rather than a count of checks that did not error, so the SAME session scores LOWER than it did under 0.1. Re-baseline any threshold written against it.",
+      "New top-level fields: verdict_id, findings_digest, sequence.",
+      "New data fields: correlation, integrity_defects, integrity_defect_count, invalid_timestamp_count, provenance, triggered_families, policy_event_count, manifest_classified_count."
+    ]
   },
   "top_level_fields": {
     "type": {
@@ -65,6 +72,21 @@
     "log_source_type": {
       "type": "string",
       "description": "Always cohaera."
+    },
+    "verdict_id": {
+      "type": "string",
+      "index": true,
+      "description": "Stable digest of (analysis run, session, findings). Scoring the same input twice under the same configuration produces the same value, so a SIEM retry is recognisable as a duplicate. Any change to the input, the bounds, the baseline or the detector version changes it. DEDUPLICATE ON THIS."
+    },
+    "findings_digest": {
+      "type": "string",
+      "index": false,
+      "description": "Digest of the findings list alone. Two verdicts with the same findings_digest and different verdict_ids are the same conclusion reached in two different runs."
+    },
+    "sequence": {
+      "type": "integer",
+      "index": false,
+      "description": "Zero-based position of this session in the run's output. A gap means a record was lost in transport."
     }
   },
   "data_fields": {
@@ -93,8 +115,13 @@
       "description": "OBSERVRA#108 DROPPED FIELD, re-emitted. Cohaera check IDs that fired.",
       "index": true,
       "example": [
-        "CH03_untrusted_to_consequential",
-        "CH04_guardrail_overrun"
+        "CH01_sequence_order",
+        "CH02_concealment_gap",
+        "CH03_untrusted_to_completed_action",
+        "CH03_untrusted_to_attempted_action",
+        "CH04_guardrail_bypass_completed",
+        "CH04_post_guardrail_attempt",
+        "CH05_unpaired_calls"
       ]
     },
     "max_severity": {
@@ -176,20 +203,100 @@
     },
     "coverage": {
       "type": "object",
-      "description": "checks_total, checks_evaluated, completeness, gaps[]. Weight confidence by this."
+      "index": true,
+      "description": "Schema cohaera.coverage:2. Per-check capability contracts. checks[] carries check, status (evaluated | degraded | not_evaluated), confidence, required_surfaces, present_surfaces, missing_surfaces, reasons (stable codes), remedies and assumptions. completeness is the mean confidence and is NOT a count of checks that did not error: unknown tool classification, an anonymous correlation key and unparseable clocks all reduce it. gaps[] is a flattened view kept for content written against coverage:1.",
+      "subfields": [
+        "schema",
+        "checks_total",
+        "checks_evaluated",
+        "checks_degraded",
+        "checks_not_evaluated",
+        "completeness",
+        "correlation_kind",
+        "correlation_confidence",
+        "classification_confidence",
+        "clock_confidence",
+        "unknown_class_calls",
+        "heuristic_class_calls",
+        "manifest_class_calls",
+        "checks",
+        "gaps"
+      ]
+    },
+    "triggered_families": {
+      "type": "array",
+      "index": true,
+      "description": "Check FAMILIES that fired, e.g. CH03_untrusted_to_consequential. Use this to match a behaviour regardless of whether the action completed or was only attempted; use triggered_rules to distinguish them."
+    },
+    "correlation": {
+      "type": "object",
+      "index": true,
+      "description": "How this session was assembled. kind is one of session_id, trace_id, scoped_anonymous, isolated_anonymous. confidence is 1.0, 0.9, 0.3 and 0.0 respectively. keyed says whether the anonymous key is an HMAC (a deployment secret was configured) or an unkeyed digest. A verdict on an anonymous key is a low-confidence verdict and this field is how you tell.",
+      "subfields": [
+        "kind",
+        "confidence",
+        "key_version",
+        "keyed"
+      ]
+    },
+    "integrity_defects": {
+      "type": "object",
+      "index": true,
+      "description": "Reason code -> count, for fields that were not of the type the schema declares and were therefore treated as ABSENT. Every code here corresponds to a field some check reads to decide whether an action is consequential, so a producer emitting malformed types on its egress tools specifically is hiding rather than broken. See the Sigma rule b1e90cfe-b88d-5633-ba1d-33958a6a1190."
+    },
+    "integrity_defect_count": {
+      "type": "integer",
+      "index": true,
+      "description": "Sum of integrity_defects. Alert on a CHANGE for an agent that was previously clean, not on the absolute value."
+    },
+    "invalid_timestamp_count": {
+      "type": "integer",
+      "index": false,
+      "description": "Events with no usable clock. CH03 and CH04 are ordering checks and cannot see these events at all."
+    },
+    "policy_event_count": {
+      "type": "integer",
+      "index": true,
+      "description": "How many times a policy control fired. CH04 reports the EARLIEST firing of each policy type once and carries the repeat count here, because emitting one finding per firing made the verdict record grow with the square of the input."
+    },
+    "manifest_classified_count": {
+      "type": "integer",
+      "index": false,
+      "description": "Calls whose effect was DECLARED in a capability manifest rather than guessed from the tool name. The gap between this and tool_call_count is how much of the verdict rests on a name heuristic."
+    },
+    "unpaired_consequential_count": {
+      "type": "integer",
+      "index": true,
+      "description": "Consequential calls that never reached the complete state. Used by the CH05 rule to separate a truncated read from an irreversible action with no recorded outcome."
+    },
+    "provenance": {
+      "type": "object",
+      "index": true,
+      "description": "What produced this verdict: analysis_run_id, detector_version, config_hash (digest of the resource bounds in force), baseline_hash (digest of the fitted benign grammar), capability_manifest (producer and digest), correlation_key_version, and ingest (accepted, rejected, defective record counts plus reason-code histograms). Two runs that disagree are distinguishable from this block alone.",
+      "subfields": [
+        "analysis_run_id",
+        "detector_version",
+        "config_hash",
+        "baseline_hash",
+        "capability_manifest",
+        "correlation_key_version",
+        "correlation_keyed",
+        "ingest"
+      ]
     }
   },
   "correlation_keys": {
     "session": "session_id",
     "trace": "trace_id",
-    "description": "Join back to the underlying observra per-event records on session_id to pivot from a verdict to the raw evidence."
+    "description": "Join back to the underlying observra per-event records on session_id to pivot from a verdict to the raw evidence.",
+    "confidence": "Read data.correlation.kind before joining on session_id. An isolated_anonymous key identifies exactly one record and must never be used to correlate; a scoped_anonymous key is a (host, user, agent, framework, time-window) bucket and not a real session."
   },
   "detection_rules_note": "Unlike observra's nine rules, every condition below references SESSION state. That is the point. Cohaera evaluates them at session close and writes results to triggered_rules[] and max_severity, so the SIEM can use simple contains-queries rather than compound followed-by rules.",
   "detection_rules": [
     {
       "name": "Guardrail Overrun",
       "severity": "high",
-      "condition": "triggered_rules contains 'CH04_guardrail_overrun'",
+      "condition": "triggered_rules contains 'CH04_guardrail_bypass_completed'",
       "events_required": "2+",
       "expressible_in_observra": false,
       "description": "A policy control fired and the session went on doing consequential work.",
@@ -218,7 +325,7 @@
     {
       "name": "Untrusted Content Then Consequential Action",
       "severity": "medium",
-      "condition": "triggered_rules contains 'CH03_untrusted_to_consequential'",
+      "condition": "triggered_rules contains 'CH03_untrusted_to_completed_action'",
       "events_required": "2+ ordered",
       "expressible_in_observra": false,
       "description": "REVIEW TRIGGER, NOT A VERDICT. Injection markers preceded a state change in the same session.",

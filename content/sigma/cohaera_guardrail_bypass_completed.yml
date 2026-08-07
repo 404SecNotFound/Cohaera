@@ -1,0 +1,73 @@
+title: Agent Guardrail Fired And A Consequential Action Completed Afterwards
+id: aa4b5aa2-7fa0-4d59-aed2-db47bfb71196
+status: experimental
+description: |
+  A policy control (cost threshold, delegation depth) fired during an agent
+  session, and the session went on to COMPLETE state-changing or egress tool
+  calls afterwards.
+
+  This is the highest-confidence rule in the pack. A guardrail that fires and is
+  then ignored is worse than no guardrail, because a coverage review counts it
+  as a control that is present and working.
+
+  ONE HONEST LIMIT, and it is why this rule no longer says "bypass" in its
+  detail text. Nothing in observra's telemetry declares whether a policy event
+  is ADVISORY or BLOCKING. Cohaera can therefore establish the sequence -- the
+  control fired, then a consequential action completed -- but it cannot
+  establish that anything was circumvented, because it does not know the control
+  was supposed to stop anything. The verdict carries
+  data.coverage.checks[].reasons = POLICY_SEMANTICS_UNDECLARED for exactly this,
+  and CH04's confidence is multiplied down while it is present.
+
+  Confirm the intended semantics with the agent owner once, then treat this rule
+  as high confidence for that agent.
+
+  Its sibling d9fc7fc6-ac5e-58c6-a9df-164d229fbb96 matches sessions where the
+  post-guardrail calls only ATTEMPTED. They were one rule, at level high, until
+  an external review pointed out that the shared detail text asserted "the
+  control did not stop the behaviour" about a call that had ERRORED -- an
+  attribution the available evidence cannot support.
+
+  Requires Cohaera. observra cannot express this: its rule engine signature is
+  evaluate_rules(event_type, data), which sees one event at a time.
+references:
+    - https://github.com/404SecNotFound/Cohaera
+    - https://github.com/open-agent-ai-security/observra/issues/108
+    - https://genai.owasp.org/llm-top-10/
+author: Imran Hafeez
+date: 2026-08-07
+modified: 2026-08-07
+related:
+    - id: d9fc7fc6-ac5e-58c6-a9df-164d229fbb96
+      type: similar
+# Tags intentionally omitted. Sigma validation rejects private namespaces
+# (owasp.*, cohaera.*) and MITRE ATLAS IDs were not verified against the
+# current matrix. Add them in your own pipeline if it accepts them.
+logsource:
+    product: cohaera
+    service: session_verdict
+detection:
+    selection:
+        type: 'cohaera_session_verdict'
+        data.triggered_rules|contains: 'CH04_guardrail_bypass_completed'
+    condition: selection
+fields:
+    - session_id
+    - agent_name
+    - user
+    - host
+    - data.policy_events
+    - data.policy_event_count
+    - data.total_cost_usd
+    - data.state_change_count
+    - data.egress_count
+    - data.tool_sequence
+    - data.coverage.completeness
+falsepositives:
+    - Deliberate soft-limit design where the threshold is advisory and the
+      operator has accepted that the session continues. Confirm the intended
+      behaviour with the agent owner before tuning this out. This is the
+      POLICY_SEMANTICS_UNDECLARED case above, and it is the common one.
+    - Batch or long-running agents whose cost threshold is set unrealistically
+      low for the workload.
+level: high
