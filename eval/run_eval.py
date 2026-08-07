@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cohaera import __version__
+from cohaera.checks import MIN_CALLS_FOR_VOCABULARY_JUDGEMENT
 from cohaera.limits import DEFAULT_LIMITS
 from eval.corpus import generate as gen
 from eval.harness import (
@@ -220,15 +221,36 @@ def render_card(results: dict[str, Any], seed: int, summary: dict) -> str:
         f"precision. A corpus with harder attacks would show more. This is a floor on "
         f"the effect, not an estimate of it.\n")
     add(
-        f"`family_holdout` is the number to look at before pointing Cohaera at an "
-        f"agent whose benign history you have not fitted on. The sequence grammar has "
-        f"never seen the test families' tools, so CH01 has nothing to compare against "
-        f"and flags everything: false positive rate "
+        "`family_holdout` is the number to look at before pointing Cohaera at an "
+        "agent whose benign history you have not fitted on. The sequence grammar has "
+        "never seen the test families' tools, so CH01 has nothing to compare "
+        "against.\n")
+    add(
+        "It used to flag everything in that situation: false positive rate 100.0% "
+        "(256/256), precision 33.3%, which is exactly the attack base rate and "
+        "therefore an alarm carrying no information. A bigram model applied outside "
+        "its distribution scores every transition as unseen, and the rate pins to "
+        "1.0 whether the session is benign or not.\n")
+    add(
+        f"CH01 now declines instead. When a session of at least "
+        f"{MIN_CALLS_FOR_VOCABULARY_JUDGEMENT} calls uses tools the baseline mostly "
+        f"does not know, the check reports `not_evaluated` with reason "
+        f"`BASELINE_VOCABULARY_MISMATCH` rather than firing. False positive rate in "
+        f"this regime is now "
         f"**{fam['false_positive_rate']['value']:.1%}** "
         f"({fam['false_positive_rate']['numerator']}/"
-        f"{fam['false_positive_rate']['denominator']}). CH01 does not transfer across "
-        f"workloads, and a deployment that fits one baseline across a fleet of "
-        f"differently-tasked agents gets a paging storm rather than a detector.\n")
+        f"{fam['false_positive_rate']['denominator']}), precision "
+        f"**{fam['precision']['value']:.1%}**, and recall is unchanged at "
+        f"**{fam['recall']['value']:.1%}** because the checks that were doing the "
+        f"real detection here never depended on the grammar.\n")
+    add(
+        f"What is left is within noise of `task_disjoint`'s "
+        f"{honest['false_positive_rate']['value']:.1%}, which is the honest read: "
+        f"the workload-transfer failure is gone and the residual is the "
+        f"benign-hard confounder problem that every regime shares.\n")
+    add(
+        "CH01 still does not transfer across workloads. The difference is that it "
+        "now says so in the coverage contract instead of paging somebody.\n")
 
     # ---- where the false positives come from ----------------------------
     add("### 3. Where the false positives come from")

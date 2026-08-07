@@ -56,12 +56,20 @@ on both sides.
 | split regime | recall | false positive rate | precision | note |
 |---|---|---|---|---|
 | task_disjoint | 100.0% [97%-100%] (120/120) | 60.6% [55%-66%] (160/264) | 42.9% [37%-49%] (120/280) | the honest number |
-| family_holdout | 100.0% [97%-100%] (128/128) | 100.0% [99%-100%] (256/256) | 33.3% [29%-38%] (128/384) | baseline never saw the test workload |
+| family_holdout | 100.0% [97%-100%] (128/128) | 62.5% [56%-68%] (160/256) | 44.4% [39%-50%] (128/288) | baseline never saw the test workload |
 | random_LEAKY | 100.0% [97%-100%] (133/133) | 61.8% [56%-68%] (155/251) | 46.2% [41%-52%] (133/288) | **contaminated, not a result** |
 
 **Measured inflation from the leaky split: +3.3% precision and +1.1% false positive rate.** Smaller than MCPShield's 26-point AUROC figure, and the reason is worth stating rather than hiding: recall here is saturated at 100%, so leakage has no headroom to inflate it and shows up only in precision. A corpus with harder attacks would show more. This is a floor on the effect, not an estimate of it.
 
-`family_holdout` is the number to look at before pointing Cohaera at an agent whose benign history you have not fitted on. The sequence grammar has never seen the test families' tools, so CH01 has nothing to compare against and flags everything: false positive rate **100.0%** (256/256). CH01 does not transfer across workloads, and a deployment that fits one baseline across a fleet of differently-tasked agents gets a paging storm rather than a detector.
+`family_holdout` is the number to look at before pointing Cohaera at an agent whose benign history you have not fitted on. The sequence grammar has never seen the test families' tools, so CH01 has nothing to compare against.
+
+It used to flag everything in that situation: false positive rate 100.0% (256/256), precision 33.3%, which is exactly the attack base rate and therefore an alarm carrying no information. A bigram model applied outside its distribution scores every transition as unseen, and the rate pins to 1.0 whether the session is benign or not.
+
+CH01 now declines instead. When a session of at least 3 calls uses tools the baseline mostly does not know, the check reports `not_evaluated` with reason `BASELINE_VOCABULARY_MISMATCH` rather than firing. False positive rate in this regime is now **62.5%** (160/256), precision **44.4%**, and recall is unchanged at **100.0%** because the checks that were doing the real detection here never depended on the grammar.
+
+What is left is within noise of `task_disjoint`'s 60.6%, which is the honest read: the workload-transfer failure is gone and the residual is the benign-hard confounder problem that every regime shares.
+
+CH01 still does not transfer across workloads. The difference is that it now says so in the coverage contract instead of paging somebody.
 
 ### 3. Where the false positives come from
 

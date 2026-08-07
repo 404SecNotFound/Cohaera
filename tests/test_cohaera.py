@@ -405,3 +405,88 @@ if __name__ == "__main__":
             failed.append(name)
     print(f"\n{len(fns) - len(failed)}/{len(fns)} passed")
     sys.exit(1 if failed else 0)
+
+
+# ------------------------------------------- CH01 out-of-distribution baseline
+
+def _session_of(names, sid="ood"):
+    events = []
+    for i, name in enumerate(names):
+        events += [ev("tool_start", i * 2, sid, tool_name=name, span_id=f"{sid}{i}"),
+                   ev("tool_end", i * 2 + 1, sid, tool_name=name, span_id=f"{sid}{i}")]
+    return sess(*events, sid=sid)
+
+
+def _grammar_over(*sequences):
+    return SequenceGrammar().fit(
+        [_session_of(seq, sid=f"b{i}") for i, seq in enumerate(sequences)])
+
+
+def test_ch01_declines_when_the_baseline_never_saw_this_workload():
+    """The measured defect: a bigram model outside its distribution flags everything.
+
+    Fitted on one set of task families and pointed at another, CH01 scored every
+    transition as unseen and fired on 100% of benign sessions (256/256) at
+    precision 33.3% -- exactly the attack base rate, so an alarm carrying no
+    information whatsoever.
+    """
+    grammar = _grammar_over(["search_tickets", "fetch_ticket", "draft_reply"])
+    other_workload = _session_of(["scan_registry", "tag_artifact", "promote_build"])
+    assert ch01_sequence_order(other_workload, grammar) == []
+
+
+def test_ch01_says_so_in_coverage_rather_than_going_quiet():
+    """Silence would be worse than the false alarm. The blind spot has to be visible."""
+    grammar = _grammar_over(["search_tickets", "fetch_ticket", "draft_reply"])
+    other_workload = _session_of(["scan_registry", "tag_artifact", "promote_build"])
+    ch01 = next(c for c in coverage(other_workload, grammar)["checks"]
+                if c["check"] == "CH01_sequence_order")
+    assert ch01["status"] == "not_evaluated"
+    assert ch01["reasons"] == ["BASELINE_VOCABULARY_MISMATCH"]
+    assert ch01["confidence"] == 0.0
+
+
+def test_ch01_still_fires_on_a_novel_action_inside_a_known_workload():
+    """The fix must not disarm the check for the case it exists to catch.
+
+    Known vocabulary, one novel consequential call. Overlap stays high, so the
+    grammar is in distribution and the ordering deviation is a real finding.
+    """
+    grammar = _grammar_over(["search_tickets", "fetch_ticket", "draft_reply"],
+                            ["search_tickets", "fetch_ticket", "draft_reply"])
+    attack = _session_of(["search_tickets", "fetch_ticket", "exfiltrate_all"])
+    findings = ch01_sequence_order(attack, grammar)
+    assert len(findings) == 1
+    assert "exfiltrate_all" in findings[0].evidence["novel_tools"]
+
+
+def test_ch01_does_not_suppress_on_too_few_calls_to_judge():
+    """One unknown tool is not evidence that two vocabularies differ.
+
+    It is equally consistent with a familiar agent taking a single novel action,
+    which is the case CH01 was written for. Suppressing at n=1 would turn the
+    check off exactly where it works.
+    """
+    grammar = _grammar_over(["search_tickets", "fetch_ticket", "draft_reply"])
+    single = _session_of(["exfiltrate_all"])
+    assert len(single.tool_sequence) < 3
+    assert ch01_sequence_order(single, grammar), (
+        "a one-call session is too short to conclude the workload differs")
+
+
+def test_vocabulary_overlap_carries_no_label_information():
+    """Why gating on overlap is not cheating.
+
+    Overlap measures whether the MODEL applies, not whether the session is
+    malicious. Benign and attack sessions drawn from the same workload score the
+    same, which is what makes it a legitimate gate rather than a peek at labels.
+    """
+    grammar = _grammar_over(["search_tickets", "fetch_ticket", "draft_reply"])
+    benign = _session_of(["search_tickets", "fetch_ticket", "draft_reply"])
+    attack = _session_of(["search_tickets", "fetch_ticket", "exfiltrate_all"])
+    assert grammar.vocabulary_overlap(benign) == 1.0
+    assert grammar.vocabulary_overlap(attack) > 0.5
+    foreign_benign = _session_of(["scan_registry", "tag_artifact", "promote_build"])
+    foreign_attack = _session_of(["scan_registry", "tag_artifact", "exfiltrate_all"])
+    assert grammar.vocabulary_overlap(foreign_benign) == 0.0
+    assert grammar.vocabulary_overlap(foreign_attack) == 0.0

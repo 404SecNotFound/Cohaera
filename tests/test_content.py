@@ -106,11 +106,24 @@ def _reference_record() -> dict:
     ]
     session = Session(session_id="conformance", events=events)
 
-    # a baseline the session violates -> CH01
-    benign = Session(session_id="b", events=[
-        _ev("tool_start", 0, "b", tool_name="fetch_kb", span_id="x"),
-        _ev("tool_end", 1, "b", tool_name="fetch_kb", span_id="x")])
-    grammar = SequenceGrammar().fit([benign])
+    # A baseline this session violates by ORDER, not by vocabulary -> CH01.
+    #
+    # It has to know the tools. CH01 now reports not_evaluated when the baseline
+    # was fitted on a different workload, because a bigram model out of its
+    # distribution scores every transition as unseen and flags every session in
+    # that workload. This fixture used to fit on fetch_kb alone and rely on the
+    # reference session's other four tools all being novel, which is exactly the
+    # out-of-distribution case rather than a detection.
+    #
+    # So the baseline runs the same tools in a benign order and the reference
+    # session reorders them. That is what CH01 is for.
+    benign_events = []
+    for i, name in enumerate(["fetch_kb", "delete_record", "send_email",
+                              "transfer_funds"]):
+        benign_events += [
+            _ev("tool_start", i * 2, "b", tool_name=name, span_id=f"b{i}"),
+            _ev("tool_end", i * 2 + 1, "b", tool_name=name, span_id=f"b{i}")]
+    grammar = SequenceGrammar().fit([Session(session_id="b", events=benign_events)])
 
     findings, cov = run_all(session, grammar)
     provenance = {
