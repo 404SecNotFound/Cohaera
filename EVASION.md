@@ -43,6 +43,7 @@ of this file under [Defects found by external review](#defects-found-by-external
 | E13 | all | Omit the event entirely | Emitter access | No |
 | E13b | — | Naive omission **is** caught by CH01 | — | *unplanned win* |
 | E16 | CH02 | Conceal a write by naming the adjacent read from the same tool suite | Free | Needs semantics |
+| E17 | CH01 | Pad with unknown tool names to force `not_evaluated` | 2 unknown calls | Per-agent baselines |
 
 ---
 
@@ -118,6 +119,44 @@ call boundaries. That raises the cost of E12 from zero to slightly above zero.
 
 Do not oversell either. They are happy accidents to be aware of, not controls to
 rely on.
+
+---
+
+## E17. Padding with unknown tools switches CH01 off
+
+**Introduced deliberately by a fix, and recorded rather than buried.**
+
+CH01 used to fire on every session whose tools its baseline had never seen. The
+evaluation corpus measured what that costs: fitted on one set of task families
+and pointed at another, CH01 flagged **100% of benign sessions (256/256)** at
+precision **33.3%** -- exactly the attack base rate, so an alarm carrying no
+information at all. A bigram model outside its distribution scores every
+transition as unseen and the rate pins to 1.0 whether the session is benign or
+not.
+
+CH01 now reports `not_evaluated` with reason `BASELINE_VOCABULARY_MISMATCH` when
+a session of three or more calls uses tools the baseline mostly does not know.
+False positive rate in that regime fell to **62.5%**, precision rose to
+**44.4%**, and **recall did not move** -- the checks doing the real detection
+there never depended on the grammar. What remains is within noise of the
+in-distribution regime's 60.6%, so the transfer failure is gone and the residual
+is the benign-hard confounder problem every regime shares.
+
+**The cost.** An attacker who pads a session with unfamiliar tool names drags
+vocabulary overlap under the threshold and switches CH01 off. Two unknown reads
+either side of a known-vocabulary attack is enough.
+
+**Why it is still the right trade.** Before the fix CH01 did not detect that
+attacker either. It fired on everything in that regime, benign included, which is
+noise rather than detection. The trade is a worthless alarm for an honest
+`not_evaluated`, and the blind spot is now in the coverage contract where a SOC
+can route on the reason code instead of discovering it from a pager.
+
+**Fix:** per-agent baselines. An agent's own tools are then always in vocabulary,
+and padding with unknown names becomes the anomaly rather than the escape hatch.
+That needs deployment machinery Cohaera does not have.
+
+Backed by `test_evasion_17_pad_with_unknown_tools_to_suppress_CH01`.
 
 ---
 
@@ -340,8 +379,8 @@ regression tests.
 | CH05 | Orphan terminal events were constructed with `result="success"` and never flagged. | An irreversible action appearing from nowhere was invisible | **Fixed.** `orphan_end` state, reported by CH05. |
 
 The review's C-05 finding, no executable test suite, was accurate at revision
-`45d3bf8`. There are now 274 tests: unit, hostile-input, content conformance and
-16 evasion characterizations, plus a seeded fuzz smoke test in CI.
+`45d3bf8`. There are now 280 tests: unit, hostile-input, content conformance and
+17 evasion characterizations, plus a seeded fuzz smoke test in CI.
 
 ### What is still open from the third review
 

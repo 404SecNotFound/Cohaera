@@ -94,6 +94,38 @@ class SequenceGrammar:
     def fitted(self) -> bool:
         return self.sessions_fitted > 0
 
+    def vocabulary_overlap(self, session: Session) -> float:
+        """Fraction of this session's calls whose tool the baseline has seen.
+
+        This is the question "is the grammar even in a position to judge?", and
+        it is deliberately separate from "does this session look unusual?".
+
+        A bigram model has no way to tell those apart on its own. Every unseen
+        transition scores the same whether the agent did something new or the
+        baseline was fitted on a different workload entirely, and the second case
+        drives the rate straight to 1.0. Measured on the evaluation corpus, that
+        is not a hypothetical: with the baseline fitted on different task
+        families, CH01 flagged 100% of benign sessions (256/256) at precision
+        33.3%, which is exactly the attack base rate -- an alarm carrying no
+        information at all.
+
+        Overlap separates the two cases cleanly. On the same corpus:
+
+            baseline covers the workload   0.67 - 1.00   (benign AND attack)
+            baseline never saw it          0.00          (benign AND attack)
+
+        Note that the ranges are identical for benign and attack sessions. That
+        matters: this measures whether the MODEL applies, not whether the session
+        is malicious, so gating on it cannot smuggle in label information.
+
+        An empty session returns 1.0. There is no vocabulary to mismatch, so
+        there is no evidence the grammar is out of its depth.
+        """
+        names = session.tool_sequence
+        if not names:
+            return 1.0
+        return sum(1 for n in names if n in self.unigrams) / len(names)
+
     def fingerprint(self) -> str:
         """Content hash of what this grammar learned."""
         if not self.fitted:
@@ -104,10 +136,54 @@ class SequenceGrammar:
         }, 16)
 
 
+# Below this share of known tools, the grammar is being applied to a workload it
+# was not fitted on, and CH01 reports not_evaluated instead of firing. The
+# evaluation corpus separates the two regimes at 0.00 versus 0.67, so anything in
+# (0, 0.67] behaves identically on that data and the exact value is not delicate.
+# It is a threshold on ONE corpus, though, so it is a named constant rather than
+# a magic number, and a deployment whose agents share tools across workloads
+# should measure its own before trusting it.
+MIN_VOCABULARY_OVERLAP = 0.5
+
+# ...and only once there are enough calls to draw that conclusion. One unknown
+# tool is not evidence that two vocabularies differ; it is equally consistent
+# with a familiar agent taking a single novel action, which is precisely what
+# CH01 exists to catch. Suppressing on n=1 would have turned the check off for
+# the case it was written for.
+#
+# Chosen on that principle rather than fitted: every session in the evaluation
+# corpus has at least three calls, so this constant changes nothing there and
+# cannot have been tuned to flatter the numbers. It only governs sessions too
+# short to judge.
+MIN_CALLS_FOR_VOCABULARY_JUDGEMENT = 3
+
+
+def _baseline_out_of_distribution(
+        session: Session, grammar: SequenceGrammar,
+        min_overlap: float = MIN_VOCABULARY_OVERLAP) -> bool:
+    """Is the grammar being asked about a workload it was never fitted on?
+
+    Two conditions, and both are needed. The session must use tools the baseline
+    largely does not know, AND it must be long enough for that to mean something.
+    """
+    calls = session.tool_sequence
+    if len(calls) < MIN_CALLS_FOR_VOCABULARY_JUDGEMENT:
+        return False
+    return grammar.vocabulary_overlap(session) < min_overlap
+
+
 def ch01_sequence_order(session: Session, grammar: SequenceGrammar | None,
                         threshold: float = 0.25,
-                        limits: Limits = DEFAULT_LIMITS) -> list[Finding]:
+                        limits: Limits = DEFAULT_LIMITS,
+                        min_vocabulary_overlap: float = MIN_VOCABULARY_OVERLAP
+                        ) -> list[Finding]:
     if grammar is None or not grammar.fitted:
+        return []
+    # Out-of-distribution check BEFORE the score, because the score is
+    # meaningless when the baseline has never seen these tools: every transition
+    # is unseen, the rate pins to 1.0, and the check fires on every session in
+    # the workload. See SequenceGrammar.vocabulary_overlap for the measurement.
+    if _baseline_out_of_distribution(session, grammar, min_vocabulary_overlap):
         return []
     rate, unseen = grammar.score(session)
     if rate <= threshold or not unseen:
@@ -633,6 +709,7 @@ SURFACE_CORRELATION_KEY = "correlation_key"
 
 # Reason codes. Stable, because downstream content will match on them.
 R_NO_BASELINE = "NO_BENIGN_BASELINE_FITTED"
+R_BASELINE_VOCABULARY_MISMATCH = "BASELINE_VOCABULARY_MISMATCH"
 R_NO_RESPONSE = "NO_FINAL_RESPONSE_TEXT"
 R_BAD_RESPONSE = "FINAL_RESPONSE_WRONG_TYPE"
 R_NO_TOOL_RESULT = "NO_TOOL_RESULT_CAPTURED"
@@ -785,6 +862,27 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
             remedies=["Fit on a labelled benign corpus before scoring."],
             assumptions=["The benign corpus is benign. Cohaera cannot verify "
                          "that; see EVASION.md E03."]))
+    elif _baseline_out_of_distribution(session, grammar):
+        # The baseline exists but was fitted on a different workload. Reporting
+        # this as not_evaluated rather than firing is the whole fix: a bigram
+        # model out of its distribution scores every transition as unseen and
+        # flags everything, which measured 100% false positives at exactly the
+        # attack base rate. Silence here would be worse than the alarm, so the
+        # blind spot goes in the contract where a SOC can route on it.
+        contracts.append(CheckContract(
+            check="CH01_sequence_order", status=STATUS_NOT_EVALUATED, confidence=0.0,
+            required_surfaces=required,
+            present_surfaces=[SURFACE_TOOL_LIFECYCLE, SURFACE_CORRELATION_KEY],
+            missing_surfaces=[SURFACE_BENIGN_BASELINE],
+            reasons=[R_BASELINE_VOCABULARY_MISMATCH],
+            remedies=["Fit a baseline on this agent's own workload. A grammar "
+                      "fitted on differently-tasked agents does not transfer.",
+                      f"Baseline covers "
+                      f"{grammar.vocabulary_overlap(session):.0%} of this "
+                      f"session's tools; CH01 needs "
+                      f"{MIN_VOCABULARY_OVERLAP:.0%}."],
+            assumptions=["An unseen tool vocabulary means the model does not "
+                         "apply, not that the session is anomalous."]))
     else:
         conf = corr_conf * clock_conf
         contracts.append(CheckContract(

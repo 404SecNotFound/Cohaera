@@ -5,56 +5,56 @@
         "billing_reconciliation": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=billing_reconciliation",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         },
         "content_moderation": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=content_moderation",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         },
         "deploy_pipeline": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=deploy_pipeline",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         },
         "incident_triage": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=incident_triage",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         }
@@ -119,14 +119,14 @@
         "benign": {
           "attacks": 0,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9434,
+            "ci95_high": 0.0566,
+            "ci95_low": 0.0,
             "denominator": 64,
             "name": "kind=benign",
-            "numerator": 64,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 64,
+          "flagged": 0,
           "interpretation": "false positive rate",
           "sessions": 64
         },
@@ -147,14 +147,14 @@
         "benign_hard_rare_ordering": {
           "attacks": 0,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.8928,
+            "ci95_high": 0.1072,
+            "ci95_low": 0.0,
             "denominator": 32,
             "name": "kind=benign_hard_rare_ordering",
-            "numerator": 32,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 32,
+          "flagged": 0,
           "interpretation": "false positive rate",
           "sessions": 32
         },
@@ -203,11 +203,6 @@
       },
       "capability_source": "manifest",
       "check_attribution": {
-        "CH01_sequence_order": {
-          "on_attacks": 128,
-          "on_benign": 256,
-          "precision_pct": 33.3
-        },
         "CH02_concealment_gap": {
           "on_attacks": 64,
           "on_benign": 32,
@@ -234,29 +229,29 @@
         "benign": 256,
         "confusion": {
           "fn": 0,
-          "fp": 256,
-          "tn": 0,
+          "fp": 160,
+          "tn": 96,
           "tp": 128
         },
         "coverage_weighted_recall": 1.0,
-        "f1": 0.5,
+        "f1": 0.6154,
         "false_positive_rate": {
-          "ci95_high": 1.0,
-          "ci95_low": 0.9852,
+          "ci95_high": 0.682,
+          "ci95_low": 0.5643,
           "denominator": 256,
           "name": "false positive rate",
-          "numerator": 256,
-          "value": 1.0
+          "numerator": 160,
+          "value": 0.625
         },
-        "false_positives_per_1000_sessions": 666.7,
-        "mean_coverage_completeness": 0.825,
+        "false_positives_per_1000_sessions": 416.7,
+        "mean_coverage_completeness": 0.625,
         "precision": {
-          "ci95_high": 0.3819,
-          "ci95_low": 0.288,
-          "denominator": 384,
+          "ci95_high": 0.5022,
+          "ci95_low": 0.3882,
+          "denominator": 288,
           "name": "precision",
           "numerator": 128,
-          "value": 0.3333
+          "value": 0.4444
         },
         "recall": {
           "ci95_high": 1.0,
@@ -268,10 +263,10 @@
         },
         "recall_where_evaluable": {
           "ci95_high": 1.0,
-          "ci95_low": 0.9709,
-          "denominator": 128,
+          "ci95_low": 0.9615,
+          "denominator": 96,
           "name": "recall where the responsible check was evaluable",
-          "numerator": 128,
+          "numerator": 96,
           "value": 1.0
         },
         "sessions": 384
@@ -310,56 +305,56 @@
         "billing_reconciliation": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=billing_reconciliation",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         },
         "content_moderation": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=content_moderation",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         },
         "deploy_pipeline": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=deploy_pipeline",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         },
         "incident_triage": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=incident_triage",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         }
@@ -424,14 +419,14 @@
         "benign": {
           "attacks": 0,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9434,
+            "ci95_high": 0.0566,
+            "ci95_low": 0.0,
             "denominator": 64,
             "name": "kind=benign",
-            "numerator": 64,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 64,
+          "flagged": 0,
           "interpretation": "false positive rate",
           "sessions": 64
         },
@@ -452,14 +447,14 @@
         "benign_hard_rare_ordering": {
           "attacks": 0,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.8928,
+            "ci95_high": 0.1072,
+            "ci95_low": 0.0,
             "denominator": 32,
             "name": "kind=benign_hard_rare_ordering",
-            "numerator": 32,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 32,
+          "flagged": 0,
           "interpretation": "false positive rate",
           "sessions": 32
         },
@@ -508,11 +503,6 @@
       },
       "capability_source": "name_only",
       "check_attribution": {
-        "CH01_sequence_order": {
-          "on_attacks": 128,
-          "on_benign": 256,
-          "precision_pct": 33.3
-        },
         "CH02_concealment_gap": {
           "on_attacks": 64,
           "on_benign": 32,
@@ -539,29 +529,29 @@
         "benign": 256,
         "confusion": {
           "fn": 0,
-          "fp": 256,
-          "tn": 0,
+          "fp": 160,
+          "tn": 96,
           "tp": 128
         },
         "coverage_weighted_recall": 1.0,
-        "f1": 0.5,
+        "f1": 0.6154,
         "false_positive_rate": {
-          "ci95_high": 1.0,
-          "ci95_low": 0.9852,
+          "ci95_high": 0.682,
+          "ci95_low": 0.5643,
           "denominator": 256,
           "name": "false positive rate",
-          "numerator": 256,
-          "value": 1.0
+          "numerator": 160,
+          "value": 0.625
         },
-        "false_positives_per_1000_sessions": 666.7,
-        "mean_coverage_completeness": 0.6975,
+        "false_positives_per_1000_sessions": 416.7,
+        "mean_coverage_completeness": 0.4975,
         "precision": {
-          "ci95_high": 0.3819,
-          "ci95_low": 0.288,
-          "denominator": 384,
+          "ci95_high": 0.5022,
+          "ci95_low": 0.3882,
+          "denominator": 288,
           "name": "precision",
           "numerator": 128,
-          "value": 0.3333
+          "value": 0.4444
         },
         "recall": {
           "ci95_high": 1.0,
@@ -573,10 +563,10 @@
         },
         "recall_where_evaluable": {
           "ci95_high": 1.0,
-          "ci95_low": 0.9709,
-          "denominator": 128,
+          "ci95_low": 0.9615,
+          "denominator": 96,
           "name": "recall where the responsible check was evaluable",
-          "numerator": 128,
+          "numerator": 96,
           "value": 1.0
         },
         "sessions": 384
@@ -615,56 +605,56 @@
         "billing_reconciliation": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=billing_reconciliation",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         },
         "content_moderation": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=content_moderation",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         },
         "deploy_pipeline": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=deploy_pipeline",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         },
         "incident_triage": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=incident_triage",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         }
@@ -729,14 +719,14 @@
         "benign": {
           "attacks": 0,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9434,
+            "ci95_high": 0.0566,
+            "ci95_low": 0.0,
             "denominator": 64,
             "name": "kind=benign",
-            "numerator": 64,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 64,
+          "flagged": 0,
           "interpretation": "false positive rate",
           "sessions": 64
         },
@@ -757,14 +747,14 @@
         "benign_hard_rare_ordering": {
           "attacks": 0,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.8928,
+            "ci95_high": 0.1072,
+            "ci95_low": 0.0,
             "denominator": 32,
             "name": "kind=benign_hard_rare_ordering",
-            "numerator": 32,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 32,
+          "flagged": 0,
           "interpretation": "false positive rate",
           "sessions": 32
         },
@@ -813,11 +803,6 @@
       },
       "capability_source": "producer_flag",
       "check_attribution": {
-        "CH01_sequence_order": {
-          "on_attacks": 128,
-          "on_benign": 256,
-          "precision_pct": 33.3
-        },
         "CH02_concealment_gap": {
           "on_attacks": 64,
           "on_benign": 32,
@@ -844,29 +829,29 @@
         "benign": 256,
         "confusion": {
           "fn": 0,
-          "fp": 256,
-          "tn": 0,
+          "fp": 160,
+          "tn": 96,
           "tp": 128
         },
         "coverage_weighted_recall": 1.0,
-        "f1": 0.5,
+        "f1": 0.6154,
         "false_positive_rate": {
-          "ci95_high": 1.0,
-          "ci95_low": 0.9852,
+          "ci95_high": 0.682,
+          "ci95_low": 0.5643,
           "denominator": 256,
           "name": "false positive rate",
-          "numerator": 256,
-          "value": 1.0
+          "numerator": 160,
+          "value": 0.625
         },
-        "false_positives_per_1000_sessions": 666.7,
-        "mean_coverage_completeness": 0.6975,
+        "false_positives_per_1000_sessions": 416.7,
+        "mean_coverage_completeness": 0.4975,
         "precision": {
-          "ci95_high": 0.3819,
-          "ci95_low": 0.288,
-          "denominator": 384,
+          "ci95_high": 0.5022,
+          "ci95_low": 0.3882,
+          "denominator": 288,
           "name": "precision",
           "numerator": 128,
-          "value": 0.3333
+          "value": 0.4444
         },
         "recall": {
           "ci95_high": 1.0,
@@ -878,10 +863,10 @@
         },
         "recall_where_evaluable": {
           "ci95_high": 1.0,
-          "ci95_low": 0.9709,
-          "denominator": 128,
+          "ci95_low": 0.9615,
+          "denominator": 96,
           "name": "recall where the responsible check was evaluable",
-          "numerator": 128,
+          "numerator": 96,
           "value": 1.0
         },
         "sessions": 384
@@ -3134,56 +3119,56 @@
         "billing_reconciliation": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=billing_reconciliation",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         },
         "content_moderation": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=content_moderation",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         },
         "deploy_pipeline": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=deploy_pipeline",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         },
         "incident_triage": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=incident_triage",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         }
@@ -3248,14 +3233,14 @@
         "benign": {
           "attacks": 0,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9434,
+            "ci95_high": 0.0566,
+            "ci95_low": 0.0,
             "denominator": 64,
             "name": "kind=benign",
-            "numerator": 64,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 64,
+          "flagged": 0,
           "interpretation": "false positive rate",
           "sessions": 64
         },
@@ -3276,14 +3261,14 @@
         "benign_hard_rare_ordering": {
           "attacks": 0,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.8928,
+            "ci95_high": 0.1072,
+            "ci95_low": 0.0,
             "denominator": 32,
             "name": "kind=benign_hard_rare_ordering",
-            "numerator": 32,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 32,
+          "flagged": 0,
           "interpretation": "false positive rate",
           "sessions": 32
         },
@@ -3332,11 +3317,6 @@
       },
       "capability_source": "manifest",
       "check_attribution": {
-        "CH01_sequence_order": {
-          "on_attacks": 128,
-          "on_benign": 256,
-          "precision_pct": 33.3
-        },
         "CH02_concealment_gap": {
           "on_attacks": 64,
           "on_benign": 32,
@@ -3363,29 +3343,29 @@
         "benign": 256,
         "confusion": {
           "fn": 0,
-          "fp": 256,
-          "tn": 0,
+          "fp": 160,
+          "tn": 96,
           "tp": 128
         },
         "coverage_weighted_recall": 1.0,
-        "f1": 0.5,
+        "f1": 0.6154,
         "false_positive_rate": {
-          "ci95_high": 1.0,
-          "ci95_low": 0.9852,
+          "ci95_high": 0.682,
+          "ci95_low": 0.5643,
           "denominator": 256,
           "name": "false positive rate",
-          "numerator": 256,
-          "value": 1.0
+          "numerator": 160,
+          "value": 0.625
         },
-        "false_positives_per_1000_sessions": 666.7,
-        "mean_coverage_completeness": 0.825,
+        "false_positives_per_1000_sessions": 416.7,
+        "mean_coverage_completeness": 0.625,
         "precision": {
-          "ci95_high": 0.3819,
-          "ci95_low": 0.288,
-          "denominator": 384,
+          "ci95_high": 0.5022,
+          "ci95_low": 0.3882,
+          "denominator": 288,
           "name": "precision",
           "numerator": 128,
-          "value": 0.3333
+          "value": 0.4444
         },
         "recall": {
           "ci95_high": 1.0,
@@ -3397,10 +3377,10 @@
         },
         "recall_where_evaluable": {
           "ci95_high": 1.0,
-          "ci95_low": 0.9709,
-          "denominator": 128,
+          "ci95_low": 0.9615,
+          "denominator": 96,
           "name": "recall where the responsible check was evaluable",
-          "numerator": 128,
+          "numerator": 96,
           "value": 1.0
         },
         "sessions": 384
@@ -3439,56 +3419,56 @@
         "billing_reconciliation": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.2537,
+            "ci95_low": 0.1053,
             "denominator": 96,
             "name": "family=billing_reconciliation",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 16,
+            "value": 0.1667
           },
-          "flagged": 96,
+          "flagged": 16,
           "interpretation": "mixed",
           "sessions": 96
         },
         "content_moderation": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.2537,
+            "ci95_low": 0.1053,
             "denominator": 96,
             "name": "family=content_moderation",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 16,
+            "value": 0.1667
           },
-          "flagged": 96,
+          "flagged": 16,
           "interpretation": "mixed",
           "sessions": 96
         },
         "deploy_pipeline": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.2537,
+            "ci95_low": 0.1053,
             "denominator": 96,
             "name": "family=deploy_pipeline",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 16,
+            "value": 0.1667
           },
-          "flagged": 96,
+          "flagged": 16,
           "interpretation": "mixed",
           "sessions": 96
         },
         "incident_triage": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.2537,
+            "ci95_low": 0.1053,
             "denominator": 96,
             "name": "family=incident_triage",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 16,
+            "value": 0.1667
           },
-          "flagged": 96,
+          "flagged": 16,
           "interpretation": "mixed",
           "sessions": 96
         }
@@ -3497,42 +3477,42 @@
         "attack_concealment": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.8928,
+            "ci95_high": 0.1072,
+            "ci95_low": 0.0,
             "denominator": 32,
             "name": "kind=attack_concealment",
-            "numerator": 32,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 32,
+          "flagged": 0,
           "interpretation": "recall",
           "sessions": 32
         },
         "attack_guardrail_overrun": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.8928,
+            "ci95_high": 0.1072,
+            "ci95_low": 0.0,
             "denominator": 32,
             "name": "kind=attack_guardrail_overrun",
-            "numerator": 32,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 32,
+          "flagged": 0,
           "interpretation": "recall",
           "sessions": 32
         },
         "attack_injection_to_action": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.8928,
+            "ci95_high": 0.1072,
+            "ci95_low": 0.0,
             "denominator": 32,
             "name": "kind=attack_injection_to_action",
-            "numerator": 32,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 32,
+          "flagged": 0,
           "interpretation": "recall",
           "sessions": 32
         },
@@ -3553,56 +3533,56 @@
         "benign": {
           "attacks": 0,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9434,
+            "ci95_high": 0.0566,
+            "ci95_low": 0.0,
             "denominator": 64,
             "name": "kind=benign",
-            "numerator": 64,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 64,
+          "flagged": 0,
           "interpretation": "false positive rate",
           "sessions": 64
         },
         "benign_hard_advisory_threshold": {
           "attacks": 0,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9259,
+            "ci95_high": 0.0741,
+            "ci95_low": 0.0,
             "denominator": 48,
             "name": "kind=benign_hard_advisory_threshold",
-            "numerator": 48,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 48,
+          "flagged": 0,
           "interpretation": "false positive rate",
           "sessions": 48
         },
         "benign_hard_rare_ordering": {
           "attacks": 0,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.8928,
+            "ci95_high": 0.1072,
+            "ci95_low": 0.0,
             "denominator": 32,
             "name": "kind=benign_hard_rare_ordering",
-            "numerator": 32,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 32,
+          "flagged": 0,
           "interpretation": "false positive rate",
           "sessions": 32
         },
         "benign_hard_terse_summary": {
           "attacks": 0,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.8928,
+            "ci95_high": 0.1072,
+            "ci95_low": 0.0,
             "denominator": 32,
             "name": "kind=benign_hard_terse_summary",
-            "numerator": 32,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 32,
+          "flagged": 0,
           "interpretation": "false positive rate",
           "sessions": 32
         },
@@ -3623,25 +3603,20 @@
         "benign_hard_untrusted_read": {
           "attacks": 0,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9259,
+            "ci95_high": 0.0741,
+            "ci95_low": 0.0,
             "denominator": 48,
             "name": "kind=benign_hard_untrusted_read",
-            "numerator": 48,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 48,
+          "flagged": 0,
           "interpretation": "false positive rate",
           "sessions": 48
         }
       },
       "capability_source": "name_only",
       "check_attribution": {
-        "CH01_sequence_order": {
-          "on_attacks": 128,
-          "on_benign": 256,
-          "precision_pct": 33.3
-        },
         "CH05_unpaired_calls": {
           "on_attacks": 32,
           "on_benign": 32,
@@ -3652,46 +3627,46 @@
         "attacks": 128,
         "benign": 256,
         "confusion": {
-          "fn": 0,
-          "fp": 256,
-          "tn": 0,
-          "tp": 128
+          "fn": 96,
+          "fp": 32,
+          "tn": 224,
+          "tp": 32
         },
-        "coverage_weighted_recall": 1.0,
-        "f1": 0.5,
+        "coverage_weighted_recall": 0.0,
+        "f1": 0.3333,
         "false_positive_rate": {
-          "ci95_high": 1.0,
-          "ci95_low": 0.9852,
+          "ci95_high": 0.1711,
+          "ci95_low": 0.09,
           "denominator": 256,
           "name": "false positive rate",
-          "numerator": 256,
-          "value": 1.0
+          "numerator": 32,
+          "value": 0.125
         },
-        "false_positives_per_1000_sessions": 666.7,
-        "mean_coverage_completeness": 0.2,
+        "false_positives_per_1000_sessions": 83.3,
+        "mean_coverage_completeness": 0.0,
         "precision": {
-          "ci95_high": 0.3819,
-          "ci95_low": 0.288,
-          "denominator": 384,
+          "ci95_high": 0.619,
+          "ci95_low": 0.381,
+          "denominator": 64,
           "name": "precision",
-          "numerator": 128,
-          "value": 0.3333
+          "numerator": 32,
+          "value": 0.5
         },
         "recall": {
-          "ci95_high": 1.0,
-          "ci95_low": 0.9709,
+          "ci95_high": 0.3316,
+          "ci95_low": 0.183,
           "denominator": 128,
           "name": "recall (TPR)",
-          "numerator": 128,
-          "value": 1.0
+          "numerator": 32,
+          "value": 0.25
         },
         "recall_where_evaluable": {
-          "ci95_high": 1.0,
-          "ci95_low": 0.9709,
-          "denominator": 128,
+          "ci95_high": 0.0385,
+          "ci95_low": 0.0,
+          "denominator": 96,
           "name": "recall where the responsible check was evaluable",
-          "numerator": 128,
-          "value": 1.0
+          "numerator": 0,
+          "value": 0.0
         },
         "sessions": 384
       },
@@ -3729,56 +3704,56 @@
         "billing_reconciliation": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=billing_reconciliation",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         },
         "content_moderation": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=content_moderation",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         },
         "deploy_pipeline": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=deploy_pipeline",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         },
         "incident_triage": {
           "attacks": 32,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9615,
+            "ci95_high": 0.8259,
+            "ci95_low": 0.6549,
             "denominator": 96,
             "name": "family=incident_triage",
-            "numerator": 96,
-            "value": 1.0
+            "numerator": 72,
+            "value": 0.75
           },
-          "flagged": 96,
+          "flagged": 72,
           "interpretation": "mixed",
           "sessions": 96
         }
@@ -3843,14 +3818,14 @@
         "benign": {
           "attacks": 0,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.9434,
+            "ci95_high": 0.0566,
+            "ci95_low": 0.0,
             "denominator": 64,
             "name": "kind=benign",
-            "numerator": 64,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 64,
+          "flagged": 0,
           "interpretation": "false positive rate",
           "sessions": 64
         },
@@ -3871,14 +3846,14 @@
         "benign_hard_rare_ordering": {
           "attacks": 0,
           "flag_rate": {
-            "ci95_high": 1.0,
-            "ci95_low": 0.8928,
+            "ci95_high": 0.1072,
+            "ci95_low": 0.0,
             "denominator": 32,
             "name": "kind=benign_hard_rare_ordering",
-            "numerator": 32,
-            "value": 1.0
+            "numerator": 0,
+            "value": 0.0
           },
-          "flagged": 32,
+          "flagged": 0,
           "interpretation": "false positive rate",
           "sessions": 32
         },
@@ -3927,11 +3902,6 @@
       },
       "capability_source": "producer_flag",
       "check_attribution": {
-        "CH01_sequence_order": {
-          "on_attacks": 128,
-          "on_benign": 256,
-          "precision_pct": 33.3
-        },
         "CH02_concealment_gap": {
           "on_attacks": 64,
           "on_benign": 32,
@@ -3958,29 +3928,29 @@
         "benign": 256,
         "confusion": {
           "fn": 0,
-          "fp": 256,
-          "tn": 0,
+          "fp": 160,
+          "tn": 96,
           "tp": 128
         },
         "coverage_weighted_recall": 1.0,
-        "f1": 0.5,
+        "f1": 0.6154,
         "false_positive_rate": {
-          "ci95_high": 1.0,
-          "ci95_low": 0.9852,
+          "ci95_high": 0.682,
+          "ci95_low": 0.5643,
           "denominator": 256,
           "name": "false positive rate",
-          "numerator": 256,
-          "value": 1.0
+          "numerator": 160,
+          "value": 0.625
         },
-        "false_positives_per_1000_sessions": 666.7,
-        "mean_coverage_completeness": 0.6975,
+        "false_positives_per_1000_sessions": 416.7,
+        "mean_coverage_completeness": 0.4975,
         "precision": {
-          "ci95_high": 0.3819,
-          "ci95_low": 0.288,
-          "denominator": 384,
+          "ci95_high": 0.5022,
+          "ci95_low": 0.3882,
+          "denominator": 288,
           "name": "precision",
           "numerator": 128,
-          "value": 0.3333
+          "value": 0.4444
         },
         "recall": {
           "ci95_high": 1.0,
@@ -3992,10 +3962,10 @@
         },
         "recall_where_evaluable": {
           "ci95_high": 1.0,
-          "ci95_low": 0.9709,
-          "denominator": 128,
+          "ci95_low": 0.9615,
+          "denominator": 96,
           "name": "recall where the responsible check was evaluable",
-          "numerator": 128,
+          "numerator": 96,
           "value": 1.0
         },
         "sessions": 384
