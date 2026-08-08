@@ -30,14 +30,20 @@ would make both harder to check. **Cohaera itself never calls them.** Do not
 sign production telemetry with this on a host where an adversary can measure
 the process; use libsodium.
 
-That asymmetry is why the two paths multiply differently. ``verify`` uses a
-precomputed comb for ``s * G`` (see ``_mul_base``), which is about 6.7 times
-faster and is safe precisely because ``s`` comes out of the signature and is
-public. ``sign`` and ``public_key`` keep plain double-and-add: their scalars are
-secret, and indexing a table with a secret's digits would trade a
-secret-dependent branch for a secret-dependent memory access, which is a
-side channel this file has no business introducing for a speed-up nothing in
-Cohaera's path would use.
+That asymmetry is why the two paths multiply differently. ``verify`` splits into
+``s * G`` and ``k * A``, and has a faster routine for each: ``_mul_base`` reads
+a precomputed comb, because G is a constant, and ``_mul_var`` slides a window,
+because A arrives with the input and only the additions can be saved. Both
+scalars come out of the signature and the hash of it, so both are public and
+neither leaks anything by being read unevenly.
+
+``sign`` and ``public_key`` call neither. Their scalars are SECRET, and both
+routines are secret-dependent in a way plain double-and-add is not: one indexes
+a table with the scalar's digits, the other branches on runs of its bits. That
+is a cache-timing side channel, and there is no reason to introduce one on the
+secret path for a speed-up nothing in Cohaera's own path would use --
+``tests/test_evidence.py`` booby-traps both routines and checks that signing
+still reproduces the RFC vectors.
 
 WHAT IS CHECKED
 ---------------
@@ -198,6 +204,67 @@ def _mul_base(s: int) -> tuple[int, int, int, int]:
     return q
 
 
+# ---------------------------------------------------------------------------
+# Variable-base multiplication
+# ---------------------------------------------------------------------------
+#
+# The other half of a verification is ``k * A``, where A is the signer's public
+# key. No table can be precomputed for a point that arrives with the input, so
+# the doublings stay: what a sliding window removes is additions. Double-and-add
+# adds once per set bit -- about 127 times for a 254-bit scalar. Reading the
+# scalar in runs of up to five bits instead, against a table of the odd
+# multiples 1A, 3A .. 31A, brings that to about 50.
+#
+# THE RETURN IS SMALL AND THAT IS THE HONEST NUMBER: roughly 1.2x on this
+# multiplication, because the ~254 doublings it cannot avoid are most of the
+# work and are untouched. It is here because it is exact, self-contained and
+# costs nothing when unused -- not because it changes the shape of anything.
+#
+# Same division as the comb: this is for VERIFICATION only. ``_mul`` stays the
+# plain double-and-add that ``sign`` and ``public_key`` use on secret scalars,
+# and that these are tested against.
+_VAR_WINDOW = 5
+_VAR_TABLE = 1 << (_VAR_WINDOW - 1)      # 1A, 3A, 5A ... (2^w - 1)A
+
+
+def _odd_multiples(p: tuple[int, int, int, int]) -> list[tuple[int, int, int, int]]:
+    twice = _add(p, p)
+    table = [p]
+    for _ in range(_VAR_TABLE - 1):
+        table.append(_add(table[-1], twice))
+    return table
+
+
+def _mul_var(p: tuple[int, int, int, int], s: int) -> tuple[int, int, int, int]:
+    """``s * p`` for a point that is not known in advance, by sliding window.
+
+    Left to right, so the window is chosen from the bits still ahead rather than
+    from a recoding of the whole scalar. Every window is odd by construction --
+    it always starts on a set bit and is trimmed back to one -- which is why the
+    table holds only the odd multiples and is half the size it looks.
+    """
+    if s <= 0:                            # pragma: no cover - k is a reduced hash
+        return _mul(p, s)                 # identity, via the reference path
+    table = _odd_multiples(p)
+    q = _IDENTITY
+    i = s.bit_length() - 1
+    while i >= 0:
+        if not (s >> i) & 1:
+            q = _add(q, q)                # a zero bit is a doubling and nothing else
+            i -= 1
+            continue
+        low = max(i - _VAR_WINDOW + 1, 0)
+        while not (s >> low) & 1:         # trim: the window must end on a set bit
+            low += 1
+        width = i - low + 1
+        digit = (s >> low) & ((1 << width) - 1)
+        for _ in range(width):
+            q = _add(q, q)
+        q = _add(q, table[(digit - 1) // 2])
+        i = low - 1
+    return q
+
+
 def _equal(p: tuple[int, int, int, int], q: tuple[int, int, int, int]) -> bool:
     """Projective equality: cross-multiply rather than normalise both sides."""
     if (p[0] * q[2] - q[0] * p[2]) % P != 0:
@@ -259,7 +326,7 @@ def verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
         # would not uniquely identify the bytes that produced it.
         return False
     k = _sha512_int(r_bytes + public_key + message) % L
-    return _equal(_mul_base(s), _add(r_point, _mul(a_point, k)))
+    return _equal(_mul_base(s), _add(r_point, _mul_var(a_point, k)))
 
 
 # ---------------------------------------------------------------------------

@@ -383,12 +383,14 @@ byte for byte.
 Two deliberate limits on it:
 
 - **Signing keeps double-and-add.** `sign` and `public_key` multiply by a
-  *secret*, and indexing a table with a secret's digits swaps a
-  secret-dependent branch for a secret-dependent memory access — the textbook
-  cache-timing channel. Neither path is constant-time and the module says so,
-  but there is no reason to add a new class of leak to the secret path for a
-  saving nothing needs. A test asserts signing does not build the table, so that
-  decision is checkable rather than a comment.
+  *secret*, and both fast routines are secret-dependent in a way plain
+  double-and-add is not: one indexes a table with the scalar's digits, the other
+  branches on runs of its bits. That is the textbook cache-timing channel.
+  Neither path is constant-time and the module says so, but there is no reason
+  to add a new class of leak to the secret path for a saving nothing needs. Two
+  tests make that checkable rather than a comment: signing must not build the
+  comb, and signing must still reproduce the RFC vectors with both fast routines
+  booby-trapped to raise.
 - **The table is built on first use, not at import.** It costs about 7 ms,
   roughly five verifications' worth of the saving, so a `cohaera score` over
   telemetry with no `cohaera.integrity:1` sidecars — still the common case —
@@ -397,12 +399,40 @@ Two deliberate limits on it:
   `max_signature_verifications` bounds a producer-controlled quantity at
   100,000, and that worst case fell from about 400 s to 250 s.
 
-This is a change to a cryptographic primitive, so it is checked as one. The comb
-is compared against `_mul(_G, s)` on the digit boundaries (0, 1, 15, 16, 17,
-`L-1`, a full top digit, all digits at maximum) and on seeded random scalars,
-and the RFC 8032 vectors still run through `verify` unchanged. Dropping one
-table row, misindexing a digit by one, or letting `sign` use the table each
-fail the suite.
+The other half of a verification, `k · A`, cannot be precomputed — A arrives
+with the input. `ed25519._mul_var` slides a 5-bit window over the scalar against
+a table of the odd multiples `1A, 3A … 31A`, which cuts the additions from about
+127 to about 50 and leaves the ~254 doublings exactly where they were. That is
+**310 point additions instead of 379**, and it is the smaller of the two changes
+by some distance: 1.12× on a verification, about **6% on `run_eval.py`**.
+
+That 6% is an A/B figure — two runs with the window and two without, interleaved
+on the same machine in the same minutes — and it is quoted that way because the
+change is too small to see through measurement noise any other way. Every other
+figure on this page is wall clock from a single machine whose absolute timings
+drifted by about 30% across the sessions they were taken in, so treat them as
+the size of each step rather than as numbers that add up.
+
+Both are changes to a cryptographic primitive, so they are checked as ones. The
+comb is compared against `_mul(_G, s)` on the digit boundaries (0, 1, 15, 16, 17,
+`L-1`, a full top digit, all digits at maximum); the window is compared against
+`_mul(p, s)` on the cases that break a window implementation — a long run of
+ones, a single isolated bit, alternating bits that never let a window grow, and
+the boundaries either side of the largest table entry — plus seeded random
+points and scalars. The RFC 8032 vectors still run through `verify` unchanged.
+Six mutations were tried and five fail the suite: dropping a table row,
+misindexing a comb digit, dropping the window's odd-trim, widening the window
+past its table, shifting the odd-multiple index, and building even multiples
+instead of odd. The sixth turned out not to be a mutation at all — the window
+digit is always odd, so `d // 2` and `(d - 1) // 2` are the same expression.
+
+**Where the rest of it is, if anyone wants it.** `k · A` is still ~2.1 ms and is
+now the largest single cost in the evaluation. A deployment verifies thousands
+of records under a handful of collector keys, so A repeats: giving each public
+key its own comb, cached, measures **6.6× on that multiplication**, breaking
+even after 3.5 uses. It is not here because it is not free — roughly 300 KB per
+cached key, a bound to choose, and an eviction policy to get wrong — and none of
+that is worth adding to this file without someone deciding they want it.
 
 ## A CH02 property this surfaced
 

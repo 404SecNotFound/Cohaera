@@ -262,6 +262,65 @@ def test_a_scalar_wider_than_the_comb_is_still_multiplied_correctly():
                           ed25519._mul(ed25519._G, wide))
 
 
+_WINDOW_SCALARS = [
+    0, 1, 2, 3,                          # below and at the first window
+    31, 32, 33,                          # the largest odd table entry, and past it
+    (1 << 40) - 1,                       # a long run of ones: every window full
+    1 << 253,                            # a single set bit: one window, many zeros
+    0b101010101010101010101,             # alternating, so no window ever extends
+    ed25519.L - 1,
+]
+
+
+@pytest.mark.parametrize("scalar", _WINDOW_SCALARS)
+def test_the_sliding_window_agrees_with_double_and_add(scalar):
+    """Windows are chosen from the bits ahead and trimmed to end on a set bit, so
+    the cases that break an implementation are the boundaries of that trimming:
+    runs of ones, isolated bits, and alternating bits that never let a window
+    grow."""
+    point = ed25519._mul(ed25519._G, 0x1234_5678_9abc_def0)
+    assert ed25519._equal(ed25519._mul_var(point, scalar),
+                          ed25519._mul(point, scalar))
+
+
+def test_the_sliding_window_agrees_on_random_points_and_scalars():
+    rng = random.Random(20260809)
+    for _ in range(8):
+        point = ed25519._mul(ed25519._G, rng.randrange(1, ed25519.L))
+        scalar = rng.randrange(ed25519.L)
+        assert ed25519._equal(ed25519._mul_var(point, scalar),
+                              ed25519._mul(point, scalar)), (point, scalar)
+
+
+def test_the_sliding_window_handles_the_identity_as_a_base_point():
+    """Not reachable through ``verify`` -- a public key that decodes to the
+    identity is a broken key, not a valid one -- but the multiplication is a
+    multiplication and must not depend on that being true elsewhere."""
+    assert ed25519._equal(ed25519._mul_var(ed25519._IDENTITY, 12345),
+                          ed25519._IDENTITY)
+
+
+@pytest.mark.parametrize("sk,pk,msg,sig", RFC8032)
+def test_the_secret_path_uses_neither_fast_multiplication(sk, pk, msg, sig,
+                                                          monkeypatch):
+    """The security decision behind both tables, as an assertion.
+
+    ``_mul_base`` indexes a table with the scalar's digits and ``_mul_var``
+    branches on runs of its bits. Either is fine for a scalar out of a
+    signature, which is public. Neither belongs on a path handling a secret,
+    and the module docstring says so -- so make ``sign`` and ``public_key``
+    prove they still produce the RFC vectors with both of them booby-trapped.
+    """
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("a secret scalar reached a table-driven multiply")
+
+    monkeypatch.setattr(ed25519, "_mul_base", refuse)
+    monkeypatch.setattr(ed25519, "_mul_var", refuse)
+    sk, pk, msg, sig = (bytes.fromhex(x) for x in (sk, pk, msg, sig))
+    assert ed25519.public_key(sk) == pk
+    assert ed25519.sign(sk, msg) == sig
+
+
 def test_the_comb_is_not_built_until_something_verifies():
     """Two claims in one subprocess, because both are about module state that
     the rest of the suite will have already dirtied.
