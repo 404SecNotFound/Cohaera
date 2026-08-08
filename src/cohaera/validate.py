@@ -43,10 +43,12 @@ from .limits import (
     DEFECT_DATA_TYPE,
     DEFECT_EVENT_TYPE_TYPE,
     DEFECT_IDENTITY_TYPE,
+    DEFECT_INJECTION_MARKERS_TYPE,
     DEFECT_NUMERIC_NONFINITE,
     DEFECT_RESPONSE_TEXT_LENGTH,
     DEFECT_RESPONSE_TEXT_TYPE,
     DEFECT_REVERSIBLE_TYPE,
+    DEFECT_SCANNER_CLAIM_TYPE,
     DEFECT_SESSION_KEY_TYPE,
     DEFECT_SPAN_LENGTH,
     DEFECT_SPAN_TYPE,
@@ -155,6 +157,51 @@ def tri_state_bool(value: Any) -> tuple[bool | None, tuple[str, ...]]:
     return None, (DEFECT_REVERSIBLE_TYPE,)
 
 
+def scanner_claim(value: Any) -> tuple[bool | None, tuple[str, ...]]:
+    """``has_injection_patterns``: exactly a bool, or absent with a defect.
+
+    The same rule as :func:`tri_state_bool` and a separate function because the
+    defect means something different. ``reversible`` mis-typed makes a call
+    unclassifiable. This mis-typed makes CH03 report, at CRITICAL, that an agent
+    completed an action after reading attacker-controlled instructions -- on the
+    word of a field that said ``"false"``.
+
+    False is a real answer and is kept as one: a scanner that ran and found
+    nothing is evidence, and is what separates "no markers" from "no scanner".
+    """
+    if value is None:
+        return None, ()
+    if isinstance(value, bool):
+        return value, ()
+    return None, (DEFECT_SCANNER_CLAIM_TYPE,)
+
+
+def marker_list(value: Any) -> tuple[tuple[str, ...] | None, tuple[str, ...]]:
+    """``injection_patterns``: a list of non-empty strings, or absent.
+
+    ALL OR NOTHING, deliberately. The previous reader skipped elements it did
+    not like and kept the rest, so ``[{}, "INSTRUCTION_OVERRIDE"]`` was a
+    one-marker list from a scanner that had plainly emitted something Cohaera
+    did not understand. Half-understood evidence is the shape this project
+    refuses everywhere else -- see the P1 sidecar note in ``limits`` -- and a
+    partially-parsed marker list is no different.
+
+    A string is not a list. It used to be split on commas, which meant a
+    producer could choose between one marker and several by punctuation, and
+    nothing in the schema said which it meant.
+    """
+    if value is None:
+        return None, ()
+    if not isinstance(value, (list, tuple)) or isinstance(value, (str, bytes)):
+        return None, (DEFECT_INJECTION_MARKERS_TYPE,)
+    out = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            return None, (DEFECT_INJECTION_MARKERS_TYPE,)
+        out.append(item)
+    return tuple(out), ()
+
+
 # ---------------------------------------------------------------------------
 # Record-level validation
 # ---------------------------------------------------------------------------
@@ -240,6 +287,12 @@ def view(raw: dict[str, Any], limits: Limits = DEFAULT_LIMITS) -> RecordView:
         defects.extend(codes)
     if "reversible" in data:
         _, codes = tri_state_bool(data.get("reversible"))
+        defects.extend(codes)
+    if "has_injection_patterns" in data:
+        _, codes = scanner_claim(data.get("has_injection_patterns"))
+        defects.extend(codes)
+    if "injection_patterns" in data:
+        _, codes = marker_list(data.get("injection_patterns"))
         defects.extend(codes)
 
     # dict.fromkeys, not set(), so the order is the order they were found in.

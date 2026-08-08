@@ -83,8 +83,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from .limits import DEFAULT_LIMITS, Limits
@@ -206,13 +208,48 @@ class CapabilityManifest:
     producer: str = ""
     manifest_version: str = ""
     producer_schema_version: str = ""
-    tools: dict[str, Capability] = field(default_factory=dict)
-    policies: dict[str, PolicyDeclaration] = field(default_factory=dict)
+    tools: Mapping[str, Capability] = field(default_factory=dict)
+    policies: Mapping[str, PolicyDeclaration] = field(default_factory=dict)
     # See the module docstring. file_digest is the tamper signal and is empty
     # for a manifest built in memory; semantic_digest is defined for every
     # manifest, file-backed or not, because it is computed from the records.
     file_digest: str = ""
     semantic_digest: str = ""
+
+    def __post_init__(self) -> None:
+        """Seal the two mappings. COH-R05.
+
+        ``frozen=True`` froze the ATTRIBUTES and nothing they pointed at, so a
+        manifest was immutable in exactly the way that does not matter.
+        ``manifest.tools["send_email"] = harmless`` still worked, and both
+        digests -- the file digest an operator compares against their copy, and
+        the semantic digest that goes into every verdict's provenance -- went on
+        describing the manifest as it had been at load time. The record and the
+        engine's belief about the record could disagree indefinitely, with the
+        provenance chain asserting they agreed. That is C4-07 and C4-08 a third
+        time, at the one layer that decides which tools are consequential.
+
+        Copied first, then wrapped: a proxy over the caller's dict would still
+        change under us when the caller mutated theirs. ``Capability`` and
+        ``PolicyDeclaration`` are frozen and hold only frozensets, tuples and
+        scalars, so two levels is the whole depth -- there is nothing below them
+        left to seal.
+        """
+        object.__setattr__(self, "tools", MappingProxyType(dict(self.tools)))
+        object.__setattr__(self, "policies",
+                           MappingProxyType(dict(self.policies)))
+
+    # A mappingproxy cannot be pickled, and ``copy.deepcopy`` reaches for pickle
+    # when it meets a type it has no rule for -- so sealing the mappings broke
+    # ``deepcopy(manifest)`` and, through it, ``dataclasses.asdict`` on anything
+    # holding one. Copying an immutable value is the identity function, so say
+    # so rather than leave a TypeError waiting in a caller this repository does
+    # not contain.
+    def __copy__(self) -> CapabilityManifest:
+        return self
+
+    def __deepcopy__(self, memo: dict) -> CapabilityManifest:
+        return self
 
     @property
     def loaded(self) -> bool:

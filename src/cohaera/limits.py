@@ -67,6 +67,14 @@ DEFECT_IDENTITY_TYPE = "INVALID_IDENTITY_FIELD_TYPE"
 DEFECT_DATA_TYPE = "INVALID_DATA_BAG_TYPE"
 DEFECT_REVERSIBLE_TYPE = "INVALID_REVERSIBLE_TYPE"
 DEFECT_NUMERIC_NONFINITE = "NONFINITE_NUMERIC_FIELD"
+# The upstream scanner's claim about a record. CH03 is the only check that turns
+# somebody else's assertion into a critical finding, so it is the one place a
+# type error was worth a severity: `has_injection_patterns: "false"` is a
+# truthy string, and reading it as truth produced a critical
+# completed-action finding on a session where no scanner had found anything.
+# Exact types only, and a malformed claim is ABSENT rather than believed.
+DEFECT_SCANNER_CLAIM_TYPE = "INVALID_SCANNER_CLAIM"
+DEFECT_INJECTION_MARKERS_TYPE = "INVALID_INJECTION_MARKERS"
 
 # --- P1 evidence sidecars (docs/EVIDENCE-TRUST.md) -------------------------
 # A malformed evidence object is treated as ABSENT, never as a weaker version of
@@ -95,6 +103,7 @@ ALL_DEFECT_CODES = (
     DEFECT_IDENTITY_TYPE, DEFECT_DATA_TYPE, DEFECT_REVERSIBLE_TYPE,
     DEFECT_NUMERIC_NONFINITE, DEFECT_INTEGRITY_TYPE, DEFECT_RECEIPT_TYPE,
     DEFECT_APPROVAL_TYPE, DEFECT_ENFORCEMENT_TYPE,
+    DEFECT_SCANNER_CLAIM_TYPE, DEFECT_INJECTION_MARKERS_TYPE,
 )
 
 

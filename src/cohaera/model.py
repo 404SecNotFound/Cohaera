@@ -21,7 +21,7 @@ import hashlib
 import math
 import re
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from functools import cached_property
 from typing import Any, ClassVar
@@ -40,7 +40,46 @@ from .evidence import (
 from .identity import CorrelationKey, canonical, digest
 from .identity import verdict_id as _verdict_id
 from .limits import DEFAULT_LIMITS, DEFECT_RESPONSE_TEXT_TYPE, Limits
-from .validate import json_safe  # re-exported: part of the public API
+from .validate import (
+    json_safe,  # re-exported: part of the public API
+    marker_list,
+    scanner_claim,
+)
+
+
+def scanner_marked(data: Any) -> bool:
+    """Did a scanner say, in a well-formed way, that it FOUND markers here?
+
+    The one predicate CH03 is allowed to build a critical finding on, and it
+    lives here rather than in ``checks`` so that the answer cannot differ
+    between the check that fires and the coverage report that says whether the
+    check could run. A malformed claim is neither True nor False: it is a
+    defect, already recorded on the Event, and it counts as no claim at all.
+    """
+    if not isinstance(data, Mapping):
+        return False
+    claim, _ = scanner_claim(data.get("has_injection_patterns"))
+    if claim:
+        return True
+    markers, _ = marker_list(data.get("injection_patterns"))
+    return bool(markers)
+
+
+def scanner_reported(data: Any) -> bool:
+    """Did a scanner report at all -- finding markers or finding none?
+
+    ``has_injection_patterns: false`` and an empty ``injection_patterns`` list
+    are both real answers, and the difference between "no markers" and "no
+    scanner" is the whole reason coverage exists. A malformed claim is not an
+    answer, so a producer cannot buy CH03 coverage with a type error.
+    """
+    if not isinstance(data, Mapping):
+        return False
+    claim, codes = scanner_claim(data.get("has_injection_patterns"))
+    if claim is not None and not codes:
+        return True
+    markers, codes = marker_list(data.get("injection_patterns"))
+    return markers is not None and not codes
 
 # ---------------------------------------------------------------------------
 # Vocabulary lifted from observra's schema/cim_schema.toml so Cohaera stays
@@ -911,19 +950,13 @@ class Session:
             for e in self.events:
                 if len(out) >= cap:
                     break
-                pats = e.data.get("injection_patterns")
-                # tuple as well as list: a frozen Event's sequences are tuples.
-                if isinstance(pats, (list, tuple)):
-                    items = pats
-                elif isinstance(pats, str) and pats:
-                    items = [p.strip() for p in pats.split(",") if p.strip()]
-                else:
+                items, _ = marker_list(e.data.get("injection_patterns"))
+                if not items:
                     continue
                 for p in items:
                     if len(out) >= cap:
                         break
-                    if isinstance(p, str) and p:
-                        out.append(p[:self.limits.max_marker_chars])
+                    out.append(p[:self.limits.max_marker_chars])
             return out
         return self._cached("markers", build)
 

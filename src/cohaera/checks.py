@@ -74,7 +74,16 @@ from .evidence import (
 )
 from .identity import digest
 from .limits import DEFAULT_LIMITS, Limits
-from .model import POLICY_EVENTS, SOURCE_MANIFEST, Finding, Session, ToolCall, cap_list
+from .model import (
+    POLICY_EVENTS,
+    SOURCE_MANIFEST,
+    Finding,
+    Session,
+    ToolCall,
+    cap_list,
+    scanner_marked,
+    scanner_reported,
+)
 from .validate import sanitise_display
 
 # Re-exported so that every reason code an operator can see is importable from
@@ -679,10 +688,18 @@ def ch03_untrusted_to_consequential(session: Session,
     session where the only candidate call had errored. An attempt and an effect
     are different facts and an analyst acts on them differently.
     """
+    # COH-R03. This was `e.data.get("injection_patterns") or
+    # e.data.get("has_injection_patterns")` -- plain truthiness, on the one
+    # surface in this codebase where somebody else's assertion becomes a
+    # CRITICAL finding. `has_injection_patterns: "false"` is a truthy string,
+    # and it produced "the agent completed a consequential action after reading
+    # attacker-controlled instructions" from a scanner that had said the
+    # opposite. `scanner_marked` requires the exact types and treats anything
+    # else as no claim at all; the defect is recorded on the Event and charged
+    # to this check's coverage.
     marker_times = [
         e.timestamp for e in session.events
-        if (e.data.get("injection_patterns") or e.data.get("has_injection_patterns"))
-        and e.timestamp_valid
+        if scanner_marked(e.data) and e.timestamp_valid
     ]
     if not marker_times:
         return []
@@ -1520,15 +1537,18 @@ def _scanner_evidence(session: Session) -> bool:
 
     E09 and E13: CH03 orders markers against calls, so with no marker fields at
     all in the stream it cannot fire, and the old coverage counted it as a check
-    that ran and passed. The presence of the FIELD, at any value, is the
-    evidence that a scanner ran. Its absence is a blind spot, and a blind spot
-    reported as a clean result is a false negative wearing a green tick.
+    that ran and passed. A scanner that ran and found nothing IS evidence, which
+    is why ``has_injection_patterns: false`` counts here and an empty marker list
+    counts here. Absence is a blind spot, and a blind spot reported as a clean
+    result is a false negative wearing a green tick.
+
+    COH-R03. What no longer counts is the field being PRESENT at any value. A
+    malformed claim is not a scanner's answer, it is a producer emitting
+    something Cohaera cannot read -- and letting it buy coverage would mean a
+    type error could turn CH03's blind spot into a clean bill of health, which
+    is the same fail-open the schema firewall exists to prevent.
     """
-    for e in session.events:
-        d = e.data
-        if "has_injection_patterns" in d or "injection_patterns" in d:
-            return True
-    return False
+    return any(scanner_reported(e.data) for e in session.events)
 
 
 def coverage(session: Session, grammar: SequenceGrammar | None,
