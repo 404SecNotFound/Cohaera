@@ -90,6 +90,7 @@ from types import MappingProxyType
 from typing import Any
 
 from .limits import DEFAULT_LIMITS, Limits
+from .validate import strict_json_loads
 
 # Effects, in the vocabulary the review's F2 asks for.
 EFFECT_READ = "read"
@@ -112,6 +113,11 @@ _STATE_CHANGE = {EFFECT_WRITE, EFFECT_DELETE, EFFECT_EXECUTE}
 # ignores today, that field joins the semantics; bumping this tag makes every
 # digest visibly change rather than silently mean something new.
 SEMANTICS_SCHEMA = "cohaera.manifest.semantics:2"
+
+# There are five valid effects. Anything longer is duplicates or noise, and the
+# only thing a 10-million-element list can still achieve is an error message
+# expensive enough to be the attack.
+_MAX_EFFECTS_DECLARED = 32
 
 
 class ManifestError(ValueError):
@@ -324,11 +330,28 @@ class CapabilityManifest:
             if not isinstance(effects, list) or not effects:
                 raise ManifestError(f"tool {tool_id!r} must declare a non-empty "
                                     "'effects' list")
-            bad = [e for e in effects if e not in VALID_EFFECTS]
+            if len(effects) > _MAX_EFFECTS_DECLARED:
+                # There are five valid effects. A list longer than this is
+                # duplicates or noise, and the only thing it can still do is
+                # make the error below expensive to build.
+                raise ManifestError(
+                    f"tool {tool_id!r} declares {len(effects)} effects; there "
+                    f"are {len(VALID_EFFECTS)} valid ones")
+            # COH-R06. This was `[e for e in effects if e not in VALID_EFFECTS]`,
+            # and `in` against a frozenset HASHES its operand -- so `effects:
+            # [{}]` or `[["read"]]` raised `TypeError: unhashable type` out of a
+            # manifest loader, from a file the operator is being invited to
+            # hand-edit. Type first, membership second. Every malformed shape
+            # has to leave here as a ManifestError or the caller cannot tell
+            # "your manifest is wrong" from "Cohaera crashed".
+            bad = [e for e in effects
+                   if not isinstance(e, str) or isinstance(e, bool)
+                   or e not in VALID_EFFECTS]
             if bad:
                 raise ManifestError(
-                    f"tool {tool_id!r} declares unknown effect(s) {bad!r}; "
-                    f"valid effects are {sorted(VALID_EFFECTS)}")
+                    f"tool {tool_id!r} declares unknown effect(s) "
+                    f"{bad[:_MAX_EFFECTS_DECLARED]!r}; valid effects are "
+                    f"{sorted(VALID_EFFECTS)}")
             rev = spec.get("reversible")
             if rev is not None and not isinstance(rev, bool):
                 raise ManifestError(f"tool {tool_id!r} 'reversible' must be a boolean")
@@ -346,9 +369,18 @@ class CapabilityManifest:
                 raise ManifestError(
                     f"tool {tool_id!r} 'requires_approval' must be a boolean, got "
                     f"{type(approval).__name__} {approval!r}")
-            sensitive = spec.get("sensitive_args") or []
+            # COH-R06, the quiet half. This was `spec.get("sensitive_args") or
+            # []`, so every FALSEY non-list -- 0, "", False, {} -- became an
+            # empty list and the type check below never saw it. A producer that
+            # meant to declare sensitive arguments and mis-typed the field got a
+            # manifest that silently declared none, which is the direction that
+            # loses a control rather than the direction that raises.
+            sensitive = spec.get("sensitive_args")
+            if sensitive is None:
+                sensitive = []
             if not isinstance(sensitive, list) or any(
-                    not isinstance(s, str) for s in sensitive):
+                    not isinstance(s, str) or isinstance(s, bool)
+                    for s in sensitive):
                 raise ManifestError(
                     f"tool {tool_id!r} 'sensitive_args' must be a list of strings")
             if len(sensitive) > limits.max_manifest_sensitive_args:
@@ -384,7 +416,10 @@ class CapabilityManifest:
                 if not isinstance(spec, dict):
                     raise ManifestError(f"policy {policy_id!r} must map to an object")
                 enforcement = spec.get("enforcement")
-                if enforcement not in VALID_ENFORCEMENT:
+                # Type before membership, same as effects above: `in` against a
+                # frozenset hashes, and `enforcement: {}` raised TypeError here.
+                if (not isinstance(enforcement, str) or isinstance(enforcement, bool)
+                        or enforcement not in VALID_ENFORCEMENT):
                     # No default. A policy declared here with no usable
                     # enforcement is the operator saying something Cohaera
                     # cannot act on, and guessing which way they meant it is how
@@ -425,8 +460,8 @@ class CapabilityManifest:
                 f"{p}: manifest exceeds max_manifest_bytes="
                 f"{limits.max_manifest_bytes}")
         try:
-            obj = json.loads(blob.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            obj = strict_json_loads(blob.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
             raise ManifestError(f"{p}: not readable as UTF-8 JSON: {exc}") from exc
         except RecursionError as exc:                  # deeply nested manifest
             raise ManifestError(f"{p}: nesting too deep to parse") from exc

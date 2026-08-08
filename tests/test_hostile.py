@@ -51,6 +51,7 @@ from cohaera.cli import (
     _write_reject_log_atomic,
     main,
 )
+from cohaera.evidence import TrustStore, TrustStoreError
 from cohaera.identity import (
     KIND_ISOLATED_ANON,
     KIND_SCOPED_ANON,
@@ -80,7 +81,13 @@ from cohaera.model import (
     json_safe,
     to_cim_event,
 )
-from cohaera.validate import IngestReport, Reject, sanitise_display
+from cohaera.validate import (
+    IngestReport,
+    Reject,
+    StrictJSONError,
+    sanitise_display,
+    strict_json_loads,
+)
 
 BASE = 1_785_700_000.0
 
@@ -601,6 +608,200 @@ def test_manifest_outranks_the_producer_reversible_flag():
 def test_bad_manifest_is_refused_not_half_loaded(bad):
     with pytest.raises(ManifestError):
         CapabilityManifest.from_obj(bad)
+
+
+# -- COH-R06: every malformed shape must leave as a ManifestError -----------
+#
+# The list above is a list of shapes somebody thought of. This is the general
+# claim behind it, and it is the one the sixth review asked for: whatever a
+# manifest field contains, the loader raises ManifestError or it succeeds. It
+# does not raise anything else, and it does not quietly succeed with the field
+# dropped. Two defects were live when this was written:
+#
+#     effects: [{}]          -> TypeError: unhashable type: 'dict'
+#     sensitive_args: 0      -> loaded, with sensitive_args silently empty
+#
+# The first is `in` against a frozenset hashing its operand before anything
+# checked the type. The second is `spec.get(...) or []`, which turns every
+# falsey non-list into an empty one and skips the type check entirely.
+
+_HOSTILE_VALUES = (
+    None, True, False, 0, 1, -1, 0.5, float("inf"), "", "x", "read",
+    [], [[]], [{}], [None], [True], [0], ["read", 1], {}, {"a": 1},
+    [{"nested": ["deep"]}], ("read",), b"read", "read,write",
+)
+
+_TOOL_FIELDS = ("effects", "reversible", "destination", "requires_approval",
+                "sensitive_args")
+_POLICY_FIELDS = ("enforcement", "description")
+
+
+@pytest.mark.parametrize("field_name", _TOOL_FIELDS)
+def test_no_tool_field_value_escapes_as_anything_but_a_manifest_error(field_name):
+    """Exhaustive over one axis at a time, which is what makes a failure
+    readable: the parametrize id names the field and the assertion names the
+    value, so a regression says which field and which shape rather than
+    'the fuzzer found something'."""
+    for value in _HOSTILE_VALUES:
+        spec = {"effects": ["read"], field_name: value}
+        try:
+            manifest = CapabilityManifest.from_obj({"tools": {"t": spec}})
+        except ManifestError:
+            continue
+        except Exception as exc:          # anything else is the defect
+            raise AssertionError(
+                f"{field_name}={value!r} escaped as "
+                f"{type(exc).__name__}: {exc}") from exc
+        # Accepting it is allowed. Accepting it and then not meaning it is not:
+        # a value that loads must be represented, not dropped.
+        capability = manifest.get("t")
+        assert capability is not None, f"{field_name}={value!r} vanished"
+        if field_name == "sensitive_args" and value not in (None, []):
+            # `None` is absence and `[]` is an explicit declaration of none.
+            # Everything else that LOADS must be represented -- the defect was
+            # `0` and `False` arriving here as an empty tuple.
+            assert capability.sensitive_args, (
+                f"sensitive_args={value!r} loaded as empty; a mis-typed "
+                "declaration must raise, not silently declare nothing")
+
+
+@pytest.mark.parametrize("field_name", _POLICY_FIELDS)
+def test_no_policy_field_value_escapes_as_anything_but_a_manifest_error(field_name):
+    """The policies section has the same membership-before-type bug shape:
+    `enforcement not in VALID_ENFORCEMENT` hashes its operand too."""
+    for value in _HOSTILE_VALUES:
+        spec = {"enforcement": "advisory", field_name: value}
+        obj = {"tools": {"t": {"effects": ["read"]}}, "policies": {"p": spec}}
+        try:
+            CapabilityManifest.from_obj(obj)
+        except ManifestError:
+            continue
+        except Exception as exc:          # anything else is the defect
+            raise AssertionError(
+                f"policy {field_name}={value!r} escaped as "
+                f"{type(exc).__name__}: {exc}") from exc
+
+
+def test_no_tool_or_policy_key_shape_escapes_either():
+    """The keys, not just the values. A non-string tool id reaches a dict
+    lookup and a length check before anything else looks at it."""
+    for key in (None, True, 0, 1.5, "", "x" * 100_000):
+        for obj in ({"tools": {key: {"effects": ["read"]}}},
+                    {"tools": {"t": {"effects": ["read"]}},
+                     "policies": {key: {"enforcement": "advisory"}}}):
+            try:
+                CapabilityManifest.from_obj(obj)
+            except ManifestError:
+                continue
+            except Exception as exc:      # anything else is the defect
+                raise AssertionError(
+                    f"key {key!r} escaped as {type(exc).__name__}: {exc}") from exc
+
+
+# -- COH-R10: JSON that a decoder accepts and a trust boundary should not ----
+
+
+@pytest.mark.parametrize("text,why", [
+    ('{"a": 1, "a": 2}', "duplicate object key"),
+    ('{"d": {"k": 1, "k": 2}}', "duplicate nested key"),
+    ('[{"k": 1, "k": 2}]', "duplicate key inside an array"),
+    ('{"x": NaN}', "NaN"),
+    ('{"x": Infinity}', "Infinity"),
+    ('{"x": -Infinity}', "-Infinity"),
+    ('{"x": 1e400}', "a float that overflows to inf"),
+])
+def test_strict_json_refuses_what_the_default_decoder_allows(text, why):
+    """Each of these is a parser differential: Cohaera reads one value and the
+    next tool to read the same bytes reads another.
+
+    Duplicate keys are the sharp one. `{"reversible": false, "reversible": true}`
+    is last-wins in CPython and first-wins in several other decoders, so a
+    producer can have a call classified one way here and the other way in the
+    SIEM, with neither reader doing anything wrong.
+
+    ``1e400`` is here because it is the case a careless fix misses:
+    ``parse_constant`` is not consulted for it, so hooking only the three named
+    constants leaves an ordinary-looking number that becomes ``inf``.
+    """
+    json.loads(text)                       # the default decoder is happy
+    with pytest.raises(StrictJSONError):
+        strict_json_loads(text)
+
+
+def test_an_integer_too_long_to_print_is_refused_rather_than_raised():
+    """Not from the review -- it turned up while testing the rest, and it was
+    the worse bug of the two.
+
+    CPython 3.11 refuses int-to-str beyond 4300 digits, so a 5000-digit integer
+    raised a bare ValueError -- not a JSONDecodeError -- straight out of
+    ``json.loads``. Ingest happened to have a defensive catch-all that swallowed
+    it. The manifest and trust-store loaders caught only ``JSONDecodeError``, so
+    for them it escaped and ended the run.
+    """
+    payload = '{"x": ' + "9" * 5000 + "}"
+    with pytest.raises(StrictJSONError, match="digits"):
+        strict_json_loads(payload)
+
+
+def test_a_hostile_number_in_a_manifest_or_key_file_is_a_refusal(tmp_path):
+    """The two loaders where it escaped, asserted at their own boundary."""
+    manifest = tmp_path / "m.json"
+    manifest.write_text('{"tools": {"t": {"effects": ["read"], "x": '
+                        + "9" * 5000 + "}}}", encoding="utf-8")
+    with pytest.raises(ManifestError):
+        CapabilityManifest.from_file(manifest)
+    with pytest.raises(TrustStoreError):
+        TrustStore.from_file(manifest)
+
+    duplicated = tmp_path / "dup.json"
+    duplicated.write_text(
+        '{"tools": {"t": {"effects": ["read"], "reversible": false,'
+        ' "reversible": true}}}', encoding="utf-8")
+    with pytest.raises(ManifestError):
+        CapabilityManifest.from_file(duplicated)
+
+
+def test_a_hostile_number_in_telemetry_is_quarantined_not_fatal(tmp_path):
+    """The ingest path, where the record is rejected and the run continues.
+
+    A stream is producer-controlled, so one hostile record must cost one
+    record. The reject ledger has to say so rather than the process ending.
+    """
+    good = json.dumps({"event_type": "tool_start", "timestamp": BASE,
+                       "session_id": "s", "tool_name": "read_x"})
+    path = tmp_path / "hostile.jsonl"
+    path.write_text("\n".join([
+        good,
+        '{"event_type": "tool_end", "timestamp": 1e400, "session_id": "s"}',
+        '{"event_type": "tool_end", "session_id": "s", "session_id": "t"}',
+        '{"event_type": "tool_end", "timestamp": ' + "9" * 5000 + "}",
+        good,
+    ]) + "\n", encoding="utf-8")
+
+    report = IngestReport(source=str(path))
+    events = list(read_events(path, report=report, quiet=True))
+    assert len(events) == 2, "the healthy records must survive"
+    assert report.rejected == 3
+    assert report.reject_codes.get(REJECT_MALFORMED_JSON) == 3
+    assert not report.aborted
+
+
+def test_strict_json_still_accepts_ordinary_telemetry():
+    """A firewall that refuses real input is not a firewall, it is an outage."""
+    payload = {"event_type": "tool_end", "timestamp": 1_785_700_000.5,
+               "session_id": "s", "data": {"cost": 0.0031, "depth": 3,
+                                           "items": [1, 2, 3], "ok": True,
+                                           "none": None, "big": 10 ** 100}}
+    assert strict_json_loads(json.dumps(payload)) == payload
+
+
+def test_a_declared_effect_list_is_bounded():
+    """Five valid effects, so a million-element list is duplicates or noise --
+    and before the bound the error message was built by listing every one of
+    them back, which made the report the expensive part."""
+    with pytest.raises(ManifestError, match="effects"):
+        CapabilityManifest.from_obj(
+            {"tools": {"t": {"effects": ["read"] * 100_000}}})
 
 
 # =====================================================================

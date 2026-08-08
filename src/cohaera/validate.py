@@ -33,6 +33,7 @@ message) are truncated, and the truncation is itself recorded as a defect.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re
 from dataclasses import dataclass, field
@@ -59,6 +60,86 @@ from .limits import (
 )
 
 _NAN = float("nan")
+
+# ---------------------------------------------------------------------------
+# Strict JSON (COH-R10)
+# ---------------------------------------------------------------------------
+#
+# ``json.loads`` accepts three things a security decoder must not, and every one
+# of them is a difference between what Cohaera sees and what the next parser to
+# read the same bytes sees. That gap is a parser differential, and it is how a
+# field gets one value in the detector and another in the SIEM:
+#
+#   DUPLICATE KEYS. `{"reversible": false, "reversible": true}` is valid JSON
+#     and last-wins in CPython. Other decoders take the first. A producer that
+#     wants a call classified one way here and another way downstream writes it
+#     twice, and neither reader has done anything wrong.
+#   NON-FINITE NUMBERS. `NaN`, `Infinity` and `-Infinity` are not JSON at all --
+#     no other language's decoder is obliged to accept them -- and NaN compares
+#     false to everything, including itself, which is a fine way to make an
+#     ordering check silently decline.
+#   FLOAT OVERFLOW. `1e400` is ordinary-looking JSON that becomes `inf`, and
+#     ``parse_constant`` is NOT consulted for it. A fix that hooks only the
+#     three named constants leaves this one open, which is why the float hook
+#     is here as well.
+#
+# The integer bound is not from the review; it turned up while testing the rest.
+# CPython 3.11 refuses int-to-str conversion beyond 4300 digits, so a record
+# carrying a 5000-digit integer raised a bare ``ValueError`` -- not a
+# ``JSONDecodeError`` -- straight out of ``json.loads``, past an ingest handler
+# that catches decode errors, and out of the run. Bounded here so it is a
+# rejected record with a reason code instead.
+#
+# The bound is a module constant rather than a ``Limits`` field on purpose: it
+# says what JSON Cohaera will admit at all, which is not a per-run policy knob,
+# and threading a Limits through five call sites for a number nobody will tune
+# would cost more than it explains.
+MAX_JSON_INT_DIGITS = 1024
+
+
+class StrictJSONError(ValueError):
+    """JSON that a decoder accepts and a trust boundary should not."""
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise StrictJSONError(f"duplicate object key {key!r}")
+        out[key] = value
+    return out
+
+
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        raise StrictJSONError(f"non-finite number {text!r}")
+    return value
+
+
+def _bounded_int(text: str) -> int:
+    digits = len(text.lstrip("-+"))
+    if digits > MAX_JSON_INT_DIGITS:
+        raise StrictJSONError(
+            f"integer with {digits} digits exceeds "
+            f"MAX_JSON_INT_DIGITS={MAX_JSON_INT_DIGITS}")
+    return int(text)
+
+
+def _no_constants(name: str) -> Any:
+    raise StrictJSONError(f"{name} is not admissible JSON")
+
+
+def strict_json_loads(text: str | bytes) -> Any:
+    """``json.loads`` with the three permissive behaviours turned off.
+
+    Raises :class:`StrictJSONError` -- a ``ValueError``, like
+    ``json.JSONDecodeError``, so a caller that already refuses unparseable input
+    refuses this too without learning a new exception type.
+    """
+    return json.loads(text, object_pairs_hook=_no_duplicate_keys,
+                      parse_float=_finite_float, parse_int=_bounded_int,
+                      parse_constant=_no_constants)
 
 
 # ---------------------------------------------------------------------------

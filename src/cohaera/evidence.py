@@ -103,7 +103,7 @@ from .limits import (
     DEFECT_RECEIPT_TYPE,
     Limits,
 )
-from .validate import identity_text
+from .validate import identity_text, strict_json_loads
 
 INTEGRITY_SCHEMA = "cohaera.integrity:1"
 RECEIPT_SCHEMA = "cohaera.receipt:1"
@@ -756,8 +756,8 @@ class TrustStore:
             raise TrustStoreError(
                 f"{p}: key file exceeds max_keyfile_bytes={limits.max_keyfile_bytes}")
         try:
-            obj = json.loads(blob.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            obj = strict_json_loads(blob.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
             raise TrustStoreError(f"{p}: not readable as UTF-8 JSON: {exc}") from exc
         return cls.from_obj(obj, file_digest=hashlib.sha256(blob).hexdigest()[:16],
                             limits=limits)
@@ -1038,8 +1038,8 @@ class PolicySignature:
                 f"{p}: signature file exceeds "
                 f"max_keyfile_bytes={limits.max_keyfile_bytes}")
         try:
-            obj = json.loads(blob.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            obj = strict_json_loads(blob.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
             raise PolicySignatureError(
                 f"{p}: not readable as UTF-8 JSON: {exc}") from exc
         return cls.from_obj(obj, limits=limits)
@@ -1605,8 +1605,8 @@ class StreamLedger:
             raise LedgerError(
                 f"{p}: ledger exceeds max_ledger_bytes={limits.max_ledger_bytes}")
         try:
-            obj = json.loads(blob.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            obj = strict_json_loads(blob.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
             raise LedgerError(f"{p}: not readable as UTF-8 JSON: {exc}") from exc
         if not isinstance(obj, dict) or obj.get("scheme") != LEDGER_SCHEMA:
             raise LedgerError(f"{p}: must declare scheme {LEDGER_SCHEMA!r}")

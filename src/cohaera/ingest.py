@@ -23,7 +23,6 @@ built to break it rather than input that was merely malformed by accident:
 from __future__ import annotations
 
 import hashlib
-import json
 import sys
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
@@ -58,7 +57,13 @@ from .limits import (
     json_depth_exceeds,
 )
 from .model import Event, Session
-from .validate import IngestReport, Reject, digest_bytes, sanitise_display
+from .validate import (
+    IngestReport,
+    Reject,
+    digest_bytes,
+    sanitise_display,
+    strict_json_loads,
+)
 
 __all__ = ["ANON_WINDOW_S", "RawLine", "assemble", "load", "read_events"]
 
@@ -329,19 +334,23 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
             continue
 
         try:
-            obj = json.loads(line)
-        except json.JSONDecodeError as exc:
-            _reject(lineno, REJECT_MALFORMED_JSON, str(exc), payload)
-            continue
+            obj = strict_json_loads(line)
         except RecursionError:
             # Belt and braces. The depth pre-scan should make this unreachable,
             # but the guarantee must not depend on sys.getrecursionlimit().
             _reject(lineno, REJECT_NESTING_TOO_DEEP,
                     "decoder recursion limit reached", payload)
             continue
-        except (ValueError, MemoryError) as exc:      # pragma: no cover - defensive
+        except (ValueError, MemoryError) as exc:
+            # ValueError rather than JSONDecodeError, and it is load-bearing in
+            # three ways now: the decoder's own error, COH-R10's
+            # StrictJSONError, and the bare ValueError CPython raises for an
+            # integer too long to convert to a string. This clause was marked
+            # defensive and unreachable; the last of those made it reachable,
+            # and the manifest and trust-store loaders -- which caught only
+            # JSONDecodeError -- were crashing on the same input.
             _reject(lineno, REJECT_MALFORMED_JSON, f"{type(exc).__name__}: {exc}",
-                    record)
+                    payload)
             continue
 
         if not isinstance(obj, dict):
