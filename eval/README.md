@@ -426,13 +426,39 @@ past its table, shifting the odd-multiple index, and building even multiples
 instead of odd. The sixth turned out not to be a mutation at all — the window
 digit is always odd, so `d // 2` and `(d - 1) // 2` are the same expression.
 
-**Where the rest of it is, if anyone wants it.** `k · A` is still ~2.1 ms and is
-now the largest single cost in the evaluation. A deployment verifies thousands
-of records under a handful of collector keys, so A repeats: giving each public
-key its own comb, cached, measures **6.6× on that multiplication**, breaking
-even after 3.5 uses. It is not here because it is not free — roughly 300 KB per
-cached key, a bound to choose, and an eviction policy to get wrong — and none of
-that is worth adding to this file without someone deciding they want it.
+## And then A turned out to repeat as well
+
+A public key is not a constant, but it is not new on every record either: a
+collector signs a whole stream with one key, so a run verifying thousands of
+records is verifying them under a handful of keys. `_key_comb` gives a key its
+own comb once it has been seen enough times to pay for one, which takes `k · A`
+from ~2.1 ms to ~0.35 ms and the whole verification to **1.29 ms — 3.76× against
+where this started** (4.84 ms), around 15–18% on `run_eval.py` in an interleaved
+A/B.
+
+The thing worth reading in that code is not the table, it is the two bounds
+around it, both of which exist because *how many keys a run sees is decided
+outside this file*:
+
+- **No eviction, ever.** An LRU here would be a performance bug with a
+  producer-controlled trigger: a stream alternating between more hot keys than
+  the cache holds would rebuild a 7 ms table on every verification and end up
+  far slower than never having cached at all. Instead there is a fixed ceiling
+  of eight tables, given to the first keys that earn one, and every other key
+  keeps using `_mul_var` — exactly what it would have used anyway. The worst
+  case this can cost is therefore a fixed 8 × 7 ms once per process, and the
+  fallback is never worse than the status quo.
+- **A key earns its table by repeating**, at eight verifications against a
+  break-even of about four. A trust store full of keys that each sign one record
+  must not buy a table apiece.
+
+Memory is 302 KB per table, measured, so the ceiling is 2.4 MB. The use counter
+is capped as well; keys reaching `verify` have already been found in the
+operator's trust store, so the population is bounded by `max_collector_keys`
+rather than by anything an attacker writes, and the cap is there for the day
+that stops being true. Four mutations were tried and all four fail the suite:
+removing either bound, building a table on first sight, and building it from the
+wrong point.
 
 ## A CH02 property this surfaced
 

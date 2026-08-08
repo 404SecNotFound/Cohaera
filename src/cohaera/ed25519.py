@@ -132,19 +132,24 @@ def _mul(p: tuple[int, int, int, int], s: int) -> tuple[int, int, int, int]:
 
 
 # ---------------------------------------------------------------------------
-# Fixed-base multiplication
+# Comb multiplication, for points that repeat
 # ---------------------------------------------------------------------------
 #
-# Half of every verification is ``s * G``, and G is a constant. Double-and-add
-# does not know that: it spends about 380 point additions rediscovering the
-# multiples of a point that never changes. A comb precomputes them once --
-# (d+1) * 2^(4i) * G, for every 4-bit digit d at every digit position i -- after
-# which the multiplication is a lookup and an add per nonzero digit, and there
-# are at most 64 of those.
+# Double-and-add spends about 380 point additions rediscovering the multiples of
+# a point. When the point is the same one every time, that is waste: a comb
+# precomputes them -- (d+1) * 2^(4i) * P, for every 4-bit digit d at every digit
+# position i -- after which a multiplication is a lookup and an add per nonzero
+# digit, at most 64 of them. About 6.7 times faster, for 960 points and 302 KB.
 #
-# WHAT THIS IS NOT. It is not a different algorithm and not a different result:
-# the table is built by the same ``_add`` from the same ``_G``, and
-# ``tests/test_evidence.py`` checks it against ``_mul(_G, s)`` directly, on the
+# TWO POINTS REPEAT, FOR DIFFERENT REASONS. G repeats because it is a constant.
+# A signer's public key repeats because a collector signs a whole stream with one
+# key, so a scoring run verifying thousands of records is verifying them under a
+# handful of keys. Both get combs; the difference is only in what bounds them,
+# below.
+#
+# WHAT THIS IS NOT. Not a different algorithm and not a different result: tables
+# are built by the same ``_add`` from the same points, and
+# ``tests/test_evidence.py`` checks them against ``_mul`` directly, on the digit
 # boundaries as well as at random. The RFC 8032 vectors still run through
 # ``verify`` unchanged.
 #
@@ -161,14 +166,12 @@ _COMB_MASK = (1 << _COMB_WINDOW) - 1
 _COMB_BITS = 256                         # every scalar this is asked for is < L
 _COMB_ROWS = _COMB_BITS // _COMB_WINDOW
 
+_Comb = tuple
 
-@functools.lru_cache(maxsize=1)
-def _comb() -> tuple[tuple[tuple[int, int, int, int], ...], ...]:
-    """The table, built once on first use. ``_comb.cache_info().currsize`` says
-    whether it exists yet, which is how the tests check it was not built at
-    import and is not built by signing."""
+
+def _build_comb(p: tuple[int, int, int, int]) -> tuple:
     rows = []
-    base = _G
+    base = p
     for _ in range(_COMB_ROWS):
         row = [base]
         for _ in range(_COMB_MASK - 1):
@@ -179,22 +182,9 @@ def _comb() -> tuple[tuple[tuple[int, int, int, int], ...], ...]:
     return tuple(rows)
 
 
-def _mul_base(s: int) -> tuple[int, int, int, int]:
-    """``s * G``, by table lookup rather than double-and-add.
-
-    BUILT ON FIRST USE, NOT AT IMPORT. The table costs about 7 ms and 960 points
-    to build, which is roughly five verifications' worth of the saving -- so a
-    process that verifies nothing (every ``cohaera score`` over telemetry with
-    no ``cohaera.integrity:1`` sidecars, which is still the common case) must not
-    pay for it, and one that verifies four signatures comes out slightly behind.
-    The case worth optimising is the other one: ``max_signature_verifications``
-    bounds a producer-controlled quantity at 100,000, and that worst case is
-    where this earns its keep.
-    """
-    if s < 0 or s >= 1 << _COMB_BITS:     # pragma: no cover - unreachable for s < L
-        return _mul(_G, s)                # wider than the table: be right, not fast
+def _comb_mul(table: tuple, s: int) -> tuple[int, int, int, int]:
     q = _IDENTITY
-    for row in _comb():
+    for row in table:
         if not s:
             break
         digit = s & _COMB_MASK
@@ -202,6 +192,86 @@ def _mul_base(s: int) -> tuple[int, int, int, int]:
             q = _add(q, row[digit - 1])
         s >>= _COMB_WINDOW
     return q
+
+
+@functools.lru_cache(maxsize=1)
+def _comb() -> tuple:
+    """G's table, built once on first use. ``_comb.cache_info().currsize`` says
+    whether it exists yet, which is how the tests check it was not built at
+    import and is not built by signing."""
+    return _build_comb(_G)
+
+
+def _mul_base(s: int) -> tuple[int, int, int, int]:
+    """``s * G``, by table lookup rather than double-and-add.
+
+    BUILT ON FIRST USE, NOT AT IMPORT. The table costs about 7 ms to build,
+    roughly five verifications' worth of the saving -- so a process that verifies
+    nothing (every ``cohaera score`` over telemetry with no
+    ``cohaera.integrity:1`` sidecars, which is still the common case) must not
+    pay for it, and one that verifies four signatures comes out slightly behind.
+    The case worth optimising is the other one: ``max_signature_verifications``
+    bounds a producer-controlled quantity at 100,000.
+    """
+    if s < 0 or s >= 1 << _COMB_BITS:     # pragma: no cover - unreachable for s < L
+        return _mul(_G, s)                # wider than the table: be right, not fast
+    return _comb_mul(_comb(), s)
+
+
+# ---------------------------------------------------------------------------
+# Combs for signers' keys
+# ---------------------------------------------------------------------------
+#
+# G's table is one table for the life of the process. A key's table is not, and
+# the difference is the whole design here: how many keys a run sees is decided
+# outside this file, so an unbounded cache would be a memory bug and an evicting
+# one would be a performance bug -- a stream alternating between more hot keys
+# than the cache holds would rebuild a 7 ms table per verification and come out
+# far slower than plain double-and-add. Neither is acceptable in code reachable
+# from a producer-controlled record count.
+#
+# So: no eviction, ever. A fixed number of tables, given to the first keys that
+# prove they are worth one, and every other key keeps using ``_mul_var``, which
+# is what it would have used anyway. That makes the WORST case this can cost a
+# fixed 8 x 7 ms once per process, and the best case a 6.7x on half of every
+# verification for the streams that actually repeat a key -- which is all of the
+# ones with a collector behind them.
+#
+# The counter is bounded for the same reason. Keys reaching here have already
+# been found in the operator's trust store, so the population is bounded by
+# ``limits.max_collector_keys`` rather than by anything an attacker writes; the
+# cap is belt and braces against that stopping being true.
+_MAX_KEY_COMBS = 8                       # 8 x 302 KB, hard ceiling
+_MAX_TRACKED_KEYS = 64
+_KEY_COMB_USES = 8                       # break-even is ~3.5; wait for a margin
+
+_KEY_COMBS: dict[bytes, tuple] = {}
+_KEY_USES: dict[bytes, int] = {}
+
+
+def _key_comb(public_key: bytes, point: tuple[int, int, int, int]) -> tuple | None:
+    """The table for a key that keeps coming back, or None to use ``_mul_var``.
+
+    ``public_key`` is the compressed encoding and ``point`` its decompression;
+    the encoding is the cache key because it is 32 bytes and already hashable,
+    and because two encodings that decode to the same point cannot both reach
+    here -- ``_recover_x`` rejects the non-canonical one.
+    """
+    table = _KEY_COMBS.get(public_key)
+    if table is not None:
+        return table
+    if len(_KEY_COMBS) >= _MAX_KEY_COMBS:
+        return None                      # full. Everyone else keeps the window.
+    uses = _KEY_USES.get(public_key)
+    if uses is None and len(_KEY_USES) >= _MAX_TRACKED_KEYS:
+        return None
+    uses = (uses or 0) + 1
+    _KEY_USES[public_key] = uses
+    if uses < _KEY_COMB_USES:
+        return None
+    table = _build_comb(point)
+    _KEY_COMBS[public_key] = table
+    return table
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +396,9 @@ def verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
         # would not uniquely identify the bytes that produced it.
         return False
     k = _sha512_int(r_bytes + public_key + message) % L
-    return _equal(_mul_base(s), _add(r_point, _mul_var(a_point, k)))
+    table = _key_comb(public_key, a_point)
+    ka = _comb_mul(table, k) if table is not None else _mul_var(a_point, k)
+    return _equal(_mul_base(s), _add(r_point, ka))
 
 
 # ---------------------------------------------------------------------------

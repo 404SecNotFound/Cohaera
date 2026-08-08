@@ -301,24 +301,123 @@ def test_the_sliding_window_handles_the_identity_as_a_base_point():
 
 
 @pytest.mark.parametrize("sk,pk,msg,sig", RFC8032)
-def test_the_secret_path_uses_neither_fast_multiplication(sk, pk, msg, sig,
-                                                          monkeypatch):
-    """The security decision behind both tables, as an assertion.
+def test_the_secret_path_uses_no_fast_multiplication(sk, pk, msg, sig,
+                                                     monkeypatch):
+    """The security decision behind every table here, as an assertion.
 
-    ``_mul_base`` indexes a table with the scalar's digits and ``_mul_var``
+    The comb routines index a table with the scalar's digits and ``_mul_var``
     branches on runs of its bits. Either is fine for a scalar out of a
     signature, which is public. Neither belongs on a path handling a secret,
     and the module docstring says so -- so make ``sign`` and ``public_key``
-    prove they still produce the RFC vectors with both of them booby-trapped.
+    prove they still produce the RFC vectors with all of them booby-trapped.
     """
     def refuse(*_args, **_kwargs):
         raise AssertionError("a secret scalar reached a table-driven multiply")
 
-    monkeypatch.setattr(ed25519, "_mul_base", refuse)
-    monkeypatch.setattr(ed25519, "_mul_var", refuse)
+    for name in ("_mul_base", "_mul_var", "_comb_mul", "_key_comb"):
+        monkeypatch.setattr(ed25519, name, refuse)
     sk, pk, msg, sig = (bytes.fromhex(x) for x in (sk, pk, msg, sig))
     assert ed25519.public_key(sk) == pk
     assert ed25519.sign(sk, msg) == sig
+
+
+# -- combs for signers' keys -------------------------------------------------
+#
+# These are the only tests in the file that care about module state surviving
+# between calls, so they are the only ones that have to clean up after
+# themselves. Without the fixture they would pass or fail depending on what ran
+# before them, which under `pytest-randomly` means depending on the day.
+
+
+@pytest.fixture
+def fresh_key_combs():
+    combs, uses = dict(ed25519._KEY_COMBS), dict(ed25519._KEY_USES)
+    ed25519._KEY_COMBS.clear()
+    ed25519._KEY_USES.clear()
+    yield
+    ed25519._KEY_COMBS.clear()
+    ed25519._KEY_COMBS.update(combs)
+    ed25519._KEY_USES.clear()
+    ed25519._KEY_USES.update(uses)
+
+
+def _signed(index: int) -> tuple[bytes, bytes, bytes]:
+    secret = bytes([index + 1]) + bytes(31)
+    return ed25519.public_key(secret), b"payload", ed25519.sign(secret, b"payload")
+
+
+def test_a_key_earns_a_comb_by_repeating_and_a_one_off_key_does_not(
+        fresh_key_combs):
+    """A table costs 7 ms and pays back after about four uses, so a key that
+    turns up once must not get one -- a stream of single-record sessions from
+    many collectors would otherwise be slower than doing nothing."""
+    hot, msg, sig = _signed(0)
+    cold, cold_msg, cold_sig = _signed(1)
+
+    for _ in range(ed25519._KEY_COMB_USES - 1):
+        assert ed25519.verify(hot, msg, sig)
+    assert hot not in ed25519._KEY_COMBS, "a table was built before it paid off"
+
+    assert ed25519.verify(hot, msg, sig)
+    assert hot in ed25519._KEY_COMBS
+
+    assert ed25519.verify(cold, cold_msg, cold_sig)
+    assert cold not in ed25519._KEY_COMBS
+
+
+def test_the_verdict_is_the_same_either_side_of_the_table(fresh_key_combs):
+    """The table changes how ``k * A`` is computed and nothing else. A good
+    signature must verify and a bad one must not, both before the key has earned
+    a table and after."""
+    pub, msg, sig = _signed(2)
+    forged = sig[:32] + bytes(a ^ 1 for a in sig[32:])
+
+    assert ed25519.verify(pub, msg, sig)
+    assert not ed25519.verify(pub, msg, forged)
+    assert pub not in ed25519._KEY_COMBS
+
+    for _ in range(ed25519._KEY_COMB_USES):
+        ed25519.verify(pub, msg, sig)
+    assert pub in ed25519._KEY_COMBS
+
+    assert ed25519.verify(pub, msg, sig)
+    assert not ed25519.verify(pub, msg, forged)
+    assert not ed25519.verify(pub, b"different", sig)
+
+
+def test_the_tables_never_outgrow_their_cap(fresh_key_combs):
+    """302 KB each, and how many keys a run sees is decided outside this file.
+
+    There is no eviction on purpose: a cache that evicted would let a stream
+    alternating between more hot keys than it holds rebuild a table per
+    verification, which is far slower than never having cached at all. Keys
+    past the cap keep the sliding window, which is what they would have used
+    anyway -- so the cap costs correctness nothing and bounds the memory
+    absolutely.
+    """
+    keys = [_signed(i) for i in range(ed25519._MAX_KEY_COMBS + 4)]
+    for _ in range(ed25519._KEY_COMB_USES + 1):
+        for pub, msg, sig in keys:
+            assert ed25519.verify(pub, msg, sig)
+            assert not ed25519.verify(pub, b"tampered", sig)
+
+    assert len(ed25519._KEY_COMBS) == ed25519._MAX_KEY_COMBS
+    assert len(ed25519._KEY_USES) <= ed25519._MAX_TRACKED_KEYS
+
+
+def test_the_use_counter_is_bounded_too(fresh_key_combs):
+    """The smaller half of the same argument. Keys reaching ``verify`` have
+    already been found in the operator's trust store, so the population is
+    bounded by ``max_collector_keys`` -- this is what makes that a belt rather
+    than the only thing holding the trousers up."""
+    ed25519._KEY_USES.update({bytes([i]) * 32: 1
+                              for i in range(ed25519._MAX_TRACKED_KEYS)})
+    pub, msg, sig = _signed(3)
+    for _ in range(ed25519._KEY_COMB_USES + 2):
+        assert ed25519.verify(pub, msg, sig)
+    assert len(ed25519._KEY_USES) == ed25519._MAX_TRACKED_KEYS
+    assert pub not in ed25519._KEY_COMBS, (
+        "a key got a table without ever being counted")
 
 
 def test_the_comb_is_not_built_until_something_verifies():
