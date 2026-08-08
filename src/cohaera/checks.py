@@ -50,13 +50,21 @@ from .evidence import (
     ENFORCEMENT_BLOCKING,
     ENFORCEMENT_UNDECLARED,
     R_CHAIN_BROKEN,
+    R_FRESHNESS_UNVERIFIABLE,
+    R_KEY_EXPIRED,
+    R_KEY_NOT_YET_VALID,
+    R_KEY_REVOKED,
     R_KEY_UNKNOWN,
+    R_KEY_WINDOW_UNCHECKED,
+    R_KEY_WRONG_ROLE,
     R_NO_COLLECTOR_KEYS,
+    R_NO_FRESHNESS_BOUND,
     R_NO_INTEGRITY,
     R_PARTIAL_INTEGRITY,
     R_SEQUENCE_GAP,
     R_SEQUENCE_REPLAY,
     R_SIGNATURE_INVALID,
+    R_STALE,
     R_UNSIGNED,
     SessionIntegrity,
 )
@@ -68,9 +76,12 @@ from .validate import sanitise_display
 # Re-exported so that every reason code an operator can see is importable from
 # one module, even though the integrity ones are produced in ``evidence``.
 __all__ = [
-    "R_CHAIN_BROKEN", "R_KEY_UNKNOWN", "R_NO_COLLECTOR_KEYS", "R_NO_INTEGRITY",
-    "R_PARTIAL_INTEGRITY", "R_SEQUENCE_GAP", "R_SEQUENCE_REPLAY",
-    "R_SIGNATURE_INVALID", "R_UNSIGNED",
+    "R_CHAIN_BROKEN", "R_FRESHNESS_UNVERIFIABLE", "R_KEY_EXPIRED",
+    "R_KEY_NOT_YET_VALID", "R_KEY_REVOKED", "R_KEY_UNKNOWN",
+    "R_KEY_WINDOW_UNCHECKED", "R_KEY_WRONG_ROLE", "R_NO_COLLECTOR_KEYS",
+    "R_NO_FRESHNESS_BOUND", "R_NO_INTEGRITY", "R_PARTIAL_INTEGRITY",
+    "R_SEQUENCE_GAP", "R_SEQUENCE_REPLAY", "R_SIGNATURE_INVALID", "R_STALE",
+    "R_UNSIGNED",
 ]
 
 # ---------------------------------------------------------------------------
@@ -1196,6 +1207,25 @@ def ch06_evidence_integrity(session: Session,
     if R_PARTIAL_INTEGRITY in codes:
         parts.append(f"{audit.without_integrity} of {audit.records} record(s) "
                      f"carry no integrity evidence at all while the rest do")
+    if R_KEY_REVOKED in codes:
+        parts.append("the signing key is marked REVOKED in the trust store, so "
+                     "its signatures establish nothing about who wrote these "
+                     "records")
+    if R_KEY_EXPIRED in codes:
+        parts.append("records were signed by a key after its validity window "
+                     "closed: a retired key is still signing this stream")
+    if R_KEY_NOT_YET_VALID in codes:
+        parts.append("records were signed by a key before its validity window "
+                     "opened")
+    if R_KEY_WRONG_ROLE in codes:
+        parts.append("the signing key is not authorised for the 'collector' "
+                     "role, so it was never trusted to attest telemetry")
+    if R_STALE in codes:
+        age = (f"{audit.oldest_signed_age_s:.0f}s"
+               if audit.oldest_signed_age_s is not None else "an unstated age")
+        parts.append(f"{audit.codes[R_STALE]} verified record(s) are older than "
+                     f"the freshness bound, the oldest by {age}, which is what "
+                     f"re-feeding an archived stream looks like")
 
     return [Finding(
         check=CH06_INTEGRITY,
@@ -1742,12 +1772,19 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
             missing_surfaces=required, reasons=[R_NO_INTEGRITY],
             remedies=["Run a collector that adds cohaera.integrity:1 to each "
                       "record before it leaves the host, and supply its public "
-                      "key with --collector-keys."],
+                      "key with --trust-store."],
             assumptions=["No integrity evidence means tampering was not ruled "
                          "out, not that it was ruled out."]))
     else:
         int_reasons = sorted(audit.codes)
         int_remedies: list[str] = []
+        int_assumptions = [
+            "Verification is against a key the OPERATOR supplied. It says these "
+            "records are the ones that collector wrote; it does not say the "
+            "collector was truthful.",
+            "A collector running in the agent's own process is inside the blast "
+            "radius, and this check gains nothing in that deployment.",
+        ]
         conf = 1.0
         if audit.without_integrity:
             conf *= 0.5
@@ -1757,9 +1794,31 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
             # record can rewrite the chain over it.
             conf *= 0.6
             int_remedies.append(
-                "Supply the collector's public key with --collector-keys. An "
+                "Supply the collector's public key with --trust-store. An "
                 "unsigned chain proves the stream is self-consistent, which an "
                 "attacker who rewrote the whole stream can also arrange.")
+        # Replay is the one attack every other check here is blind to by
+        # construction, because a replayed stream is a genuine stream. Whether
+        # it was even considered is a property of how the run was invoked, so it
+        # belongs in the contract rather than in a finding.
+        if audit.freshness_checked:
+            int_assumptions.append(
+                "Freshness is judged from the timestamp the collector signed. A "
+                "replayer can re-send those bytes and cannot re-date them, but a "
+                "stream replayed INSIDE the bound is indistinguishable from a "
+                "fresh one; comparing stream_summary across runs is what catches "
+                "that.")
+        else:
+            conf *= 0.8
+            int_reasons.append(R_NO_FRESHNESS_BOUND)
+            int_remedies.append(
+                "Set --evidence-max-age so that re-feeding an archived stream is "
+                "detectable. Without it, a captured stream replayed months later "
+                "passes every check in this module, because it really was "
+                "written by that collector.")
+            int_assumptions.append(
+                "No freshness bound was in force, so this session was not "
+                "checked for stream replay at all.")
         if audit.inadmissible:
             conf = 0.0
         contracts.append(CheckContract(
@@ -1767,13 +1826,8 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
             status=(STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED),
             confidence=conf, required_surfaces=required,
             present_surfaces=required, missing_surfaces=[],
-            reasons=int_reasons, remedies=int_remedies,
-            assumptions=["Verification is against a key the OPERATOR supplied. "
-                         "It says these records are the ones that collector "
-                         "wrote; it does not say the collector was truthful.",
-                         "A collector running in the agent's own process is "
-                         "inside the blast radius, and this check gains nothing "
-                         "in that deployment."]))
+            reasons=sorted(set(int_reasons)), remedies=int_remedies,
+            assumptions=int_assumptions))
 
     # ---- CH07 -----------------------------------------------------------
     required = [SURFACE_EFFECT_RECEIPT, SURFACE_TOOL_CLASS]

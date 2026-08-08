@@ -567,16 +567,42 @@ the single biggest lever on coverage confidence. See
 outranks the same declaration on the event — the operator chose the file, the
 agent wrote the event ([EVASION.md](EVASION.md) E20).
 
-`--collector-keys` supplies the public keys that `cohaera.integrity:1`
-signatures verify against, loaded out of band exactly as the manifest is.
-Without it, signed records are parsed and **not** verified, and the verdict says
-so with `NO_COLLECTOR_KEYS` rather than treating a signature it never checked as
-if it had passed. A stream carrying no integrity evidence at all reports
+`--trust-store` supplies the public keys that `cohaera.integrity:1` signatures
+verify against, loaded out of band exactly as the manifest is. Without it, signed
+records are parsed and **not** verified, and the verdict says so with
+`NO_COLLECTOR_KEYS` rather than treating a signature it never checked as if it
+had passed. A stream carrying no integrity evidence at all reports
 `NO_INTEGRITY_EVIDENCE` and stamps every finding `evidence_status: unattested`,
 which is the state every deployment starts in.
 [`tools/collector_sign.py`](tools/collector_sign.py) is the reference producer —
 a format with no reference implementation is a specification nobody can build
 against.
+
+A key in the store carries what it is authorised to attest (`collector` for
+telemetry, `policy` for the operator's own files), a validity window, and whether
+it has been revoked. Rotation is `not_after` on the outgoing key and `not_before`
+on its replacement; revocation is a separate field because it means something
+different, and Cohaera treats it differently — a window is judged against the
+timestamp the collector signed, a revocation is judged against nothing, because
+believing a compromised key's clock is how a revoked key keeps working.
+[EVIDENCE-TRUST §2a](docs/EVIDENCE-TRUST.md) is the argument, §9 is the list of
+what the store is still not, and `--collector-keys` still accepts the older flat
+`cohaera.collector_keys:1` file.
+
+`--tool-manifest-sig` and `--baseline-sig` verify a detached
+`cohaera.policy_signature:1` over those two files. They are the files that decide
+how every record is *read* — the manifest says which tools are consequential, the
+baseline teaches CH01 what normal looks like — and until they were signed both
+were trusted for being on disk. A supplied signature that fails is a **refusal to
+score**; `--require-signed-policy` makes a missing one a refusal too.
+[`tools/policy_sign.py`](tools/policy_sign.py) is the reference producer. This
+closes half of [E03](EVASION.md): editing the baseline is now detectable, and
+influencing what goes into it before it is signed is not.
+
+`--evidence-max-age` is the one bound that sees a replayed stream. Every other
+check passes on a captured stream re-fed months later — contiguous sequence,
+intact chain, valid signatures — because it really was written by that collector.
+Off by default, and coverage says `NO_FRESHNESS_BOUND` when it is off.
 
 Human summary goes to **stderr**, escaped: a producer that puts a newline and an
 ANSI sequence in a `session_id` could otherwise forge a convincing `0 finding(s)`
@@ -892,9 +918,9 @@ prevention claim collapses.
 - [x] Sigma content pack, 13 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 422 passing across unit, hostile-input and content conformance
+- [x] Tests, 485 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
-- [x] Adversarial self-test, 22 evasions ([EVASION.md](EVASION.md))
+- [x] Adversarial self-test, 23 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger
 - [x] Typed capability manifests per producer, replacing name heuristics
 - [x] Stable verdict, run and config identity for replay and dedup
@@ -1007,7 +1033,7 @@ tests/
                       resource amplification, correlation forgery, exit codes
   test_content.py     asserts every field the Sigma pack names exists in a real
                       record. Sigma validation cannot check this.
-  test_evasion.py     22 adversarial tests that PASS when an evasion works
+  test_evasion.py     23 adversarial tests that PASS when an evasion works
   test_evidence.py    the P1 mechanisms, attacked: RFC 8032 vectors, forged
                       signatures, deletion, modification, replay, reorder,
                       approval substitution and receipt copying

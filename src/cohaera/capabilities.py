@@ -22,11 +22,30 @@ band, from the same path an attacker would control to hide an action (SEC-03).
 The manifest is loaded out of band from a file the operator chose, so it is the
 stronger of the two claims about the same tool.
 
-The manifest is not signed here. Signing needs a key distribution story that
-does not exist yet, and shipping a signature field that nothing verifies would
-be worse than shipping none. What is here is the digest, recorded in every
+SIGNING THE MANIFEST LIVES OUTSIDE THIS MODULE, AND NOW EXISTS
+    This file used to say the manifest was unsigned because signing needed a key
+    distribution story that did not exist. That story is now
+    ``cohaera.trust_store:1`` (see :mod:`cohaera.evidence`), so the manifest can
+    be attested with a detached ``cohaera.policy_signature:1`` over its exact
+    bytes, verified against a key the operator gave the ``policy`` role.
+
+    The signature is deliberately NOT a field in this file, and it is not parsed
+    here. Two reasons, and both are the same reason in different clothes. A
+    signature embedded in the document it signs has to be excised before hashing,
+    which is a canonicalisation problem and canonicalisation problems are where
+    signature bugs live. And a manifest parser that verified its own signature
+    would be checking a claim against a key chosen by the same call that supplied
+    the claim; the check belongs to the caller, which is why ``cli`` does it and
+    refuses to score when it fails.
+
+    Signing is OPTIONAL and its absence is REPORTED. Every verdict carries a
+    ``policy_attestations`` entry saying ``POLICY_SIGNATURE_ABSENT`` when nothing
+    was supplied, because an unsigned manifest that says so is a different
+    artifact from one that passes in silence.
+
+The digests below are unchanged and still do their own job: recorded in every
 verdict, so that two runs disagreeing about what a tool does are distinguishable
-after the fact.
+after the fact whether or not anybody signed anything.
 
 TWO DIGESTS, NOT ONE (C4-10)
     The recorded digest used to be a hash of the file's bytes alone, so

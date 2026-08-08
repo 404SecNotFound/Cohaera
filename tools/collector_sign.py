@@ -49,9 +49,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from cohaera import ed25519
 from cohaera.evidence import (
-    COLLECTOR_KEYS_SCHEMA,
     INTEGRITY_FIELD,
     INTEGRITY_SCHEMA,
+    ROLE_COLLECTOR,
+    TRUST_STORE_SCHEMA,
     body_digest,
     chain_seed,
     chain_step,
@@ -96,9 +97,31 @@ def key_id_for(public: bytes) -> str:
     return "ed25519:" + public.hex()[:16]
 
 
-def keys_document(public: bytes, key_id: str) -> dict:
-    return {"scheme": COLLECTOR_KEYS_SCHEMA,
-            "keys": {key_id: base64.b64encode(public).decode("ascii")}}
+def keys_document(public: bytes, key_id: str, not_before: float | None = None,
+                  not_after: float | None = None,
+                  replaces: str | None = None) -> dict:
+    """A ``cohaera.trust_store:1`` document naming this key as a COLLECTOR key.
+
+    Deliberately not the ``policy`` role. This key lives on the collector host,
+    and a collector that could also sign the capability manifest could rewrite
+    the document that says which of its own tools are consequential. Use
+    ``tools/policy_sign.py``, with a different key, for that.
+
+    The window fields are optional and unset by default, which produces a key
+    that never expires -- honest for a first deployment, and the thing to fix
+    second. Set ``--not-after`` on the outgoing key and ``--not-before`` on its
+    replacement and the rotation exists in the verifier rather than only in
+    somebody's runbook.
+    """
+    entry: dict[str, object] = {
+        "key": base64.b64encode(public).decode("ascii"),
+        "roles": [ROLE_COLLECTOR],
+    }
+    for name, value in (("not_before", not_before), ("not_after", not_after),
+                        ("replaces", replaces)):
+        if value is not None:
+            entry[name] = value
+    return {"scheme": TRUST_STORE_SCHEMA, "keys": {key_id: entry}}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -113,6 +136,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--sign-every", type=int, default=1,
                     help="sign every Nth record (default 1). The chain makes "
                          "one signature cover everything before it.")
+    ap.add_argument("--not-before", type=float,
+                    help="epoch seconds this key becomes valid, written into "
+                         "--keys-out")
+    ap.add_argument("--not-after", type=float,
+                    help="epoch seconds this key stops being valid. Set it on "
+                         "the outgoing key when you rotate, or the retired key "
+                         "signs valid records forever.")
+    ap.add_argument("--replaces", metavar="KEY_ID",
+                    help="the key id this one supersedes, recorded so an auditor "
+                         "can reconstruct the rotation")
     args = ap.parse_args(argv)
 
     if args.gen_key:
@@ -133,7 +166,9 @@ def main(argv: list[str] | None = None) -> int:
         encoding="utf-8")
     if args.keys_out:
         Path(args.keys_out).write_text(
-            json.dumps(keys_document(public, key_id), indent=2) + "\n",
+            json.dumps(keys_document(public, key_id, args.not_before,
+                                     args.not_after, args.replaces),
+                       indent=2) + "\n",
             encoding="utf-8")
     print(f"signed {len(signed)} record(s) as stream {args.stream_id!r} "
           f"under {key_id}")

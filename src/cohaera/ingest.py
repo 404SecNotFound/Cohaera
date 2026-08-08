@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest
-from .evidence import EMPTY_KEYS, CollectorKeys, StreamVerifier
+from .evidence import EMPTY_STORE, NO_FRESHNESS, Freshness, StreamVerifier, TrustStore
 from .identity import ANON_WINDOW_S, Correlator
 from .limits import (
     DEFAULT_LIMITS,
@@ -364,7 +364,8 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
              manifest: CapabilityManifest = EMPTY_MANIFEST,
              report: IngestReport | None = None,
              quiet: bool = False,
-             keys: CollectorKeys = EMPTY_KEYS) -> list[Session]:
+             keys: TrustStore = EMPTY_STORE,
+             freshness: Freshness = NO_FRESHNESS) -> list[Session]:
     """Group a flat event stream into Sessions.
 
     Keyed on session_id, then trace_id, then a scoped anonymous key, then
@@ -419,12 +420,13 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
     # A dropped event still occupies a position in its collector stream, so it
     # is observed for sequence continuity and attributed to no session. Omitting
     # it would manufacture a gap out of Cohaera's own budget.
-    verifier = StreamVerifier(keys=keys, limits=limits)
+    verifier = StreamVerifier(keys=keys, limits=limits, freshness=freshness)
     for e in incoming:
         verifier.observe(e.raw, e.integrity, session_of.get(id(e), ""))
     verifier.finalise()
     for key_value, s in buckets.items():
         s.integrity = verifier.for_session(key_value)
+    rep.integrity = verifier.summary()
 
     if dropped_sessions:
         rep.aborted = True
@@ -457,9 +459,11 @@ def load(path: str | Path, limits: Limits = DEFAULT_LIMITS,
          manifest: CapabilityManifest = EMPTY_MANIFEST,
          report: IngestReport | None = None,
          quiet: bool = False,
-         keys: CollectorKeys = EMPTY_KEYS) -> list[Session]:
+         keys: TrustStore = EMPTY_STORE,
+         freshness: Freshness = NO_FRESHNESS) -> list[Session]:
     """Read and group one telemetry file. The report is filled in as a side effect."""
     rep = report if report is not None else IngestReport()
     events = list(read_events(path, limits=limits, report=rep, quiet=quiet))
     return assemble(events, limits=limits, correlator=correlator,
-                    manifest=manifest, report=rep, quiet=quiet, keys=keys)
+                    manifest=manifest, report=rep, quiet=quiet, keys=keys,
+                    freshness=freshness)

@@ -16,12 +16,19 @@ are **closed** — and closing E02 opened two narrower ones, E18 and E19, while
 the P1 evidence-trust work opened E20. All three are in the table, because a fix
 that quietly relocates a weakness is worse than no fix.
 
-Three more — E11, E13 and E16 — have had half of their impact removed. For E13
-that half is now substantial rather than cosmetic: on a stream carrying
+Four more — E03, E11, E13 and E16 — have had half of their impact removed. For
+E13 that half is now substantial rather than cosmetic: on a stream carrying
 `cohaera.integrity:1`, deleting or modifying a record is **detected and
 localised** instead of noticed by accident. The attack is not closed, because
 what it now requires is the collector's signing key rather than the agent's
 cooperation, and in an in-process deployment those are the same thing.
+
+E03 is the newest of the four and the split is worth stating precisely, because
+it is easy to overclaim. A detached signature over the baseline closes the lazy
+half — wait until the file is on disk and append to it. It does nothing at all
+about the half that gives the evasion its name: an attacker who influences which
+sessions are *collected as benign* defines normal, and a signature over the
+resulting file says only that nobody edited it afterwards.
 
 The count goes up when a weakness is found, not only when one is fixed. Eighteen
 working evasions is a worse-looking number than sixteen and a more honest one.
@@ -40,7 +47,8 @@ of this file under [Defects found by external review](#defects-found-by-external
 |---|---|---|---|---|
 | E01 | CH01 | Use only known tools in known order | Free | No, bigram ceiling |
 | E02 | CH01 | Dilute below the 0.25 rate threshold | 8 benign calls | **CLOSED** |
-| E03 | CH01 | Poison the benign baseline | Access to corpus | Process control only |
+| E03 | CH01 | Poison the benign baseline | Access to corpus | Half closed, a signed baseline cannot be edited on disk |
+| E03b | — | Editing the signed baseline **is** refused | — | *the remedy, exercised* |
 | E04 | CH02 | Honest paraphrase causes a FALSE POSITIVE | n/a, precision bug | Measured; needs producer-declared disclosure |
 | E05 | CH02 | Name the tool, lie about the outcome | Free | Yes |
 | E06 | CH02 | Emit no final response | Free | Partial, coverage sees it |
@@ -783,8 +791,8 @@ regression tests.
 | CH05 | Orphan terminal events were constructed with `result="success"` and never flagged. | An irreversible action appearing from nowhere was invisible | **Fixed.** `orphan_end` state, reported by CH05. |
 
 The review's C-05 finding, no executable test suite, was accurate at revision
-`45d3bf8`. There are now 422 tests: unit, hostile-input, content conformance and
-22 evasion characterizations, plus a seeded fuzz smoke test in CI.
+`45d3bf8`. There are now 485 tests: unit, hostile-input, content conformance and
+23 evasion characterizations, plus a seeded fuzz smoke test in CI.
 
 ### What is still open from the third review
 
@@ -795,9 +803,9 @@ verdict and run identity, per-check coverage contracts, resource bounds, and CI.
 
 | Item | Why it is not closed here |
 |---|---|
-| Independent effect receipts (F4) | Needs a message ID, HTTP status, inode hash or cloud audit event from *outside* the agent. Nothing at this layer can distinguish a logged success from a real one. This is the substance of E13. **Now designed** — wire format, binding rules and the one new detection it buys are in [docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md) §3. Not implemented. |
-| Collector-side signing and hash chaining (F6) | Needs a key the agent process does not hold. A digest Cohaera computes proves Cohaera saw the input, not that the input was true. **Now designed** — chain construction, verification and the six coverage codes are in [docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md) §2. Key distribution is the unsolved half and the reason it is design rather than code. |
-| Approval and policy binding (F5) | Needs the producer to emit an approval hash. Related: CH04 reports `POLICY_SEMANTICS_UNDECLARED` on every session with a policy event, because nothing declares whether a control is advisory or blocking. **Now designed** — [docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md) §4, and it is the cheapest of the three with the largest measured effect on false positives, so it should be built first. |
+| Independent effect receipts (F4) | Needs a message ID, HTTP status, inode hash or cloud audit event from *outside* the agent. Nothing at this layer can distinguish a logged success from a real one. This is the substance of E13. **Now built** — wire format, binding rules and the one new detection it buys (CH07) are in [docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md) §3, and reference adapters for real provider evidence are in `tools/receipt_adapters.py`. What stays open is the slow half: every tool integration, one at a time. |
+| Collector-side signing and hash chaining (F6) | Needs a key the agent process does not hold. A digest Cohaera computes proves Cohaera saw the input, not that the input was true. **Now built** — chain construction, verification and the coverage codes are in [docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md) §2, and key distribution, which was the unsolved half, is now `cohaera.trust_store:1` (§2a). §9 lists what that store is still not: no online revocation, no transparency, no quorum, no trusted clock. |
+| Approval and policy binding (F5) | Needs the producer to emit an approval hash. Related: CH04 reports `POLICY_SEMANTICS_UNDECLARED` on every session with a policy event, because nothing declares whether a control is advisory or blocking. **Now built** — [docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md) §4. It was the cheapest of the three and had the largest measured effect on false positives, which is what building it first was a bet on. |
 | Streaming correlation service (F7) | Cache invalidation (BUG-05) is fixed, which unblocks it, but watermarks, TTL and bounded active state are a service, not a flag. |
 | Typed evidence graph, argument provenance (F3) | The largest item. Not started. |
 | Deployable Exabeam parser | The field map is documentation. It is now *tested* documentation — `tests/test_content.py` asserts every field it names exists in a real record — but a parser needs a live platform to validate against. |

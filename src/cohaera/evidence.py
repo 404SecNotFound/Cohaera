@@ -42,6 +42,25 @@ THREE SCHEMAS, THREE DIFFERENT KINDS OF CLAIM
     effect, because ``benign_hard_advisory_threshold`` is the corpus's single
     largest source of false positives and the fix for it is a declared field.
 
+AND TWO MORE, WHICH ARE ABOUT THE OPERATOR RATHER THAN THE PRODUCER
+------------------------------------------------------------------
+``cohaera.trust_store:1``
+    Which keys are trusted, for WHAT, from when until when, and which have been
+    declared compromised. P1.1 shipped a flat map of key ids to bytes and said
+    in three places that rotation, revocation and multi-collector fleets need
+    more than that. This is the more than that, and :class:`TrustStore`
+    enumerates what it is still not, because the gap between a key file and a
+    trust store somebody runs a fleet on is exactly the sort of thing a green
+    tick hides.
+
+``cohaera.policy_signature:1``
+    A detached signature over the capability manifest or the baseline. Those two
+    files decide how every record is read -- one says which tools are
+    consequential, the other teaches CH01 what normal looks like -- and until
+    now both were trusted because they were on disk. Signing them is what
+    ``capabilities.py`` said was blocked on a key distribution story; the trust
+    store is that story.
+
 PARSING DOCTRINE: ABSENT, NEVER WEAKER
 --------------------------------------
 Same rule as :mod:`cohaera.validate`, and it matters more here. A malformed
@@ -67,7 +86,7 @@ import binascii
 import hashlib
 import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -86,7 +105,33 @@ from .validate import identity_text
 INTEGRITY_SCHEMA = "cohaera.integrity:1"
 RECEIPT_SCHEMA = "cohaera.receipt:1"
 APPROVAL_SCHEMA = "cohaera.approval:1"
+TRUST_STORE_SCHEMA = "cohaera.trust_store:1"
+POLICY_SIGNATURE_SCHEMA = "cohaera.policy_signature:1"
+# Superseded by the trust store and still loaded, because a deployment that
+# adopted P1.1 wrote one of these and should not be broken by a file format that
+# gained fields it does not use.
 COLLECTOR_KEYS_SCHEMA = "cohaera.collector_keys:1"
+
+# Tagged into the trust store's semantic digest so the digest commits to the SET
+# OF FIELDS it covers, exactly as SEMANTICS_SCHEMA does for the manifest. When a
+# later version starts reading a field it ignores today, bumping this makes every
+# digest visibly change rather than quietly mean something new.
+TRUST_STORE_SEMANTICS = "cohaera.trust_store.semantics:1"
+
+# What a key is allowed to attest. The separation is the point: a collector's key
+# signs telemetry, an operator's key signs the policy that decides how telemetry
+# is read, and a deployment where one key does both has handed the thing being
+# watched authority over the rules it is watched by.
+ROLE_COLLECTOR = "collector"          # cohaera.integrity:1 on the wire
+ROLE_POLICY = "policy"                # cohaera.policy_signature:1 over a file
+VALID_ROLES = frozenset({ROLE_COLLECTOR, ROLE_POLICY})
+
+# What is wrong with the STORE ITSELF, as opposed to with anything verified
+# under it. See TrustStore.warnings.
+W_LEGACY_SCHEMA = "TRUST_STORE_LEGACY_SCHEMA"
+W_SUPERSEDED_OPEN = "TRUST_STORE_SUPERSEDED_KEY_STILL_OPEN"
+W_ROTATION_CYCLE = "TRUST_STORE_ROTATION_CYCLE"
+W_ALL_KEYS_REVOKED = "TRUST_STORE_ALL_KEYS_REVOKED"
 
 # Where the sidecars live on a record.
 INTEGRITY_FIELD = "integrity"          # top level, beside session_id
@@ -462,104 +507,655 @@ def enforcement_of(data: dict[str, Any]) -> tuple[str, tuple[str, ...]]:
 
 
 # ---------------------------------------------------------------------------
-# Collector keys, loaded out of band exactly as the capability manifest is
+# The trust store, loaded out of band exactly as the capability manifest is
 # ---------------------------------------------------------------------------
 
 
-class CollectorKeyError(ValueError):
+class TrustStoreError(ValueError):
     """The key file is not a key file. Refuse it; do not half-load it."""
 
 
 @dataclass(frozen=True)
-class CollectorKeys:
-    """Public keys the operator supplied, and the digests of the file they came
+class TrustedKey:
+    """One public key, and the four things an operator can say about it.
+
+    ``cohaera.collector_keys:1`` said one thing -- here are some bytes, trust
+    them forever, for everything. Three properties were missing and each of them
+    is a real deployment, not a hypothetical:
+
+        roles       A collector's key attests TELEMETRY. An operator's key
+                    attests POLICY -- the capability manifest and the baseline.
+                    One key doing both means a compromised collector can rewrite
+                    the manifest that decides which of its own tools are
+                    consequential, which is a privilege escalation dressed as a
+                    convenience.
+        window      Rotation. ``not_after`` on the outgoing key and
+                    ``not_before`` on the incoming one is what a rotation IS,
+                    and without them a retired key signs valid records forever.
+        revoked_at  Compromise, which is a different fact from rotation and is
+                    treated differently below.
+        replaces    Succession, so an auditor reading the store can reconstruct
+                    the rotation rather than infer it from timestamps.
+
+    WINDOWS ARE JUDGED AGAINST THE RECORD'S OWN CLOCK. REVOCATION IS NOT.
+        This is the one part of the design worth arguing with, so here is the
+        argument. A window check needs a time to check against, and the only
+        time available offline is the one written on the record -- which is
+        producer-controlled, and this codebase treats producer-controlled fields
+        as claims rather than facts everywhere else.
+
+        It is sound here, and only here, because of what else is true at the
+        point the check runs. The chain covers the record including its
+        timestamp, the signature covers the chain, and the window is evaluated
+        ONLY after that signature has verified. So the key vouches for the
+        timestamp, and a key that is not compromised does not lie about when it
+        signed. ``StreamVerifier._check_signature`` enforces that ordering, and
+        the ordering is the whole reason the check is admissible.
+
+        Revocation breaks precisely that premise. Revoking a key is the operator
+        stating that somebody else holds it, and a signature made by an attacker
+        proves nothing about the timestamp underneath it -- they would simply
+        write a date inside the window. So revocation is NOT evaluated against
+        any clock: a key with ``revoked_at`` set is refused outright, for every
+        record, whatever the record claims about when it was written.
+
+        The cost of that is real and is not hidden: an archive legitimately
+        signed last month by a key revoked yesterday can no longer be verified,
+        because distinguishing it from a forgery needs a trusted timestamp and
+        Cohaera has no clock it trusts. An operator who wants "this key was good
+        until Tuesday" is describing rotation, and should write it as
+        ``not_after``, which IS evaluated against the record.
+    """
+
+    key_id: str
+    public: bytes
+    roles: frozenset[str]
+    not_before: float | None = None
+    not_after: float | None = None
+    revoked_at: float | None = None
+    replaces: str | None = None
+
+    @property
+    def revoked(self) -> bool:
+        """Presence, not comparison. See the class docstring."""
+        return self.revoked_at is not None
+
+    @property
+    def windowed(self) -> bool:
+        return self.not_before is not None or self.not_after is not None
+
+    @property
+    def open_ended(self) -> bool:
+        """Nothing will ever stop this key signing."""
+        return not self.windowed and not self.revoked
+
+    def authorises(self, role: str) -> bool:
+        return role in self.roles
+
+    def covers_clock(self, when: float | None) -> bool | None:
+        """Was ``when`` inside this key's validity window?
+
+        None means the question could not be answered -- an unusable timestamp
+        on a key that declares a window. Callers must check :attr:`windowed`
+        first, because "this key has no window" and "this key has a window and
+        the record has no clock" are different states and reporting the first as
+        the second would invent a coverage gap on every well-formed store.
+        """
+        if when is None or not isinstance(when, (int, float)) or not math.isfinite(when):
+            return None
+        if self.not_before is not None and when < self.not_before:
+            return False
+        if self.not_after is not None and when > self.not_after:
+            return False
+        return True
+
+    def semantics(self) -> dict[str, Any]:
+        return {"public": base64.b64encode(self.public).decode("ascii"),
+                "roles": sorted(self.roles), "not_before": self.not_before,
+                "not_after": self.not_after, "revoked_at": self.revoked_at,
+                "replaces": self.replaces}
+
+    def brief(self) -> dict[str, Any]:
+        """What travels into the verdict. The public key itself does not."""
+        return {"key_id": self.key_id, "roles": sorted(self.roles),
+                "not_before": self.not_before, "not_after": self.not_after,
+                "revoked_at": self.revoked_at, "replaces": self.replaces}
+
+
+@dataclass(frozen=True)
+class TrustStore:
+    """The keys the operator supplied, and the digests of the file they came
     from.
 
     Loaded from a path the operator names, which is the same trust model the
     capability manifest has and is honest about it. This says *these signatures
-    verify under a key you supplied*. It does not say *this telemetry is
-    genuine*, and rotation, revocation and multi-collector fleets need more than
-    a file. ``docs/EVIDENCE-TRUST.md`` section 2 states that gap; it is the
-    reason P1.1 shipped as a verifier rather than as a trust store.
+    verify under a key you supplied, which you said was allowed to sign this
+    kind of thing, and which you had not marked compromised*. It does not say
+    *this telemetry is genuine*.
+
+    WHAT THIS STILL IS NOT, WRITTEN DOWN RATHER THAN IMPLIED
+        No online status check. There is no OCSP, no CRL fetch, no directory
+        lookup, because Cohaera is offline by construction. A key revoked five
+        minutes ago is revoked here only after somebody edits this file and
+        re-runs.
+
+        No key transparency. Nothing proves the store you loaded is the store
+        your organisation published; two hosts can hold different files and both
+        produce confident verdicts. The pair of digests recorded in provenance
+        makes that DETECTABLE after the fact by comparing verdicts. It does not
+        prevent it.
+
+        No quorum and no threshold. One key's signature is the whole decision,
+        so one compromised key is a full compromise of whatever it was
+        authorised for.
+
+        No hardware binding. Nothing here establishes that a private key lives
+        in an HSM rather than in a file next to the collector, and where the
+        collector runs in-process with the agent the agent can read it -- which
+        is the case ``docs/EVIDENCE-TRUST.md`` section 2 says gains nothing from
+        any of this.
+
+        No automatic rotation. ``not_after`` and ``replaces`` let an operator
+        DESCRIBE a rotation they performed. Nothing performs one.
+
+    That list is the honest boundary between this and a trust store somebody
+    would run a fleet on, and it is here rather than in a roadmap because the
+    gap between the two is exactly the sort of thing a green tick hides.
     """
 
-    keys: dict[str, bytes] = field(default_factory=dict)
+    keys: dict[str, TrustedKey] = field(default_factory=dict)
     file_digest: str = ""
     semantic_digest: str = ""
+    schema: str = ""
+    # Problems with the STORE, as opposed to with anything it was used on.
+    # Non-fatal by design: refusing to run over an operator's own bookkeeping
+    # slip would be a denial of service against the person trying to tighten
+    # their configuration. Surfaced on stderr and in provenance instead.
+    warnings: tuple[str, ...] = ()
 
     @property
     def loaded(self) -> bool:
         return bool(self.keys)
 
-    def get(self, key_id: Any) -> bytes | None:
+    def get(self, key_id: Any) -> TrustedKey | None:
         if not isinstance(key_id, str) or not key_id:
             return None
         return self.keys.get(key_id)
 
-    def as_dict(self) -> dict[str, Any]:
-        return {"key_count": len(self.keys), "file_digest": self.file_digest,
-                "semantic_digest": self.semantic_digest,
-                "key_ids": sorted(self.keys)[:20]}
+    def for_role(self, role: str) -> dict[str, TrustedKey]:
+        return {k: v for k, v in self.keys.items() if v.authorises(role)}
+
+    def has_role(self, role: str) -> bool:
+        return any(v.authorises(role) for v in self.keys.values())
+
+    def as_dict(self, cap: int = 20) -> dict[str, Any]:
+        return {
+            "schema": self.schema,
+            "key_count": len(self.keys),
+            "file_digest": self.file_digest,
+            "semantic_digest": self.semantic_digest,
+            "key_ids": sorted(self.keys)[:cap],
+            "collector_key_count": len(self.for_role(ROLE_COLLECTOR)),
+            "policy_key_count": len(self.for_role(ROLE_POLICY)),
+            "revoked_key_ids": sorted(k for k, v in self.keys.items()
+                                      if v.revoked)[:cap],
+            "keys": [self.keys[k].brief() for k in sorted(self.keys)[:cap]],
+            "warnings": list(self.warnings),
+        }
+
+    # ---- loading --------------------------------------------------------
 
     @classmethod
     def from_obj(cls, obj: Any, file_digest: str = "",
-                 limits: Limits = DEFAULT_LIMITS) -> CollectorKeys:
+                 limits: Limits = DEFAULT_LIMITS) -> TrustStore:
         if not isinstance(obj, dict):
-            raise CollectorKeyError("key file root must be a JSON object")
-        if obj.get("scheme") != COLLECTOR_KEYS_SCHEMA:
-            raise CollectorKeyError(
-                f"key file must declare scheme {COLLECTOR_KEYS_SCHEMA!r}")
+            raise TrustStoreError("key file root must be a JSON object")
+        schema = obj.get("scheme")
+        if schema not in (TRUST_STORE_SCHEMA, COLLECTOR_KEYS_SCHEMA):
+            raise TrustStoreError(
+                f"key file must declare scheme {TRUST_STORE_SCHEMA!r} "
+                f"(or the superseded {COLLECTOR_KEYS_SCHEMA!r})")
+        legacy = schema == COLLECTOR_KEYS_SCHEMA
         raw = obj.get("keys")
         if not isinstance(raw, dict) or not raw:
-            raise CollectorKeyError("key file must carry a non-empty 'keys' object")
+            raise TrustStoreError("key file must carry a non-empty 'keys' object")
         if len(raw) > limits.max_collector_keys:
-            raise CollectorKeyError(
+            raise TrustStoreError(
                 f"key file declares {len(raw)} keys, exceeding "
                 f"max_collector_keys={limits.max_collector_keys}")
-        keys: dict[str, bytes] = {}
+
+        keys: dict[str, TrustedKey] = {}
         for key_id, value in raw.items():
             if not isinstance(key_id, str) or not key_id:
-                raise CollectorKeyError(f"key id must be a non-empty string: {key_id!r}")
+                raise TrustStoreError(f"key id must be a non-empty string: {key_id!r}")
             if len(key_id) > limits.max_identity_chars:
-                raise CollectorKeyError(f"key id {key_id[:32]!r} is too long")
-            if not isinstance(value, str) or isinstance(value, bool):
-                raise CollectorKeyError(f"key {key_id!r} must be a base64 string")
-            try:
-                blob = base64.b64decode(value, validate=True)
-            except (binascii.Error, ValueError) as exc:
-                raise CollectorKeyError(
-                    f"key {key_id!r} is not valid base64: {exc}") from exc
-            if len(blob) != ed25519.KEY_BYTES:
-                raise CollectorKeyError(
-                    f"key {key_id!r} is {len(blob)} bytes, expected "
-                    f"{ed25519.KEY_BYTES}")
-            keys[key_id] = blob
-        payload = json.dumps({"scheme": COLLECTOR_KEYS_SCHEMA,
-                              "keys": {k: base64.b64encode(v).decode("ascii")
-                                       for k, v in sorted(keys.items())}},
-                             sort_keys=True, separators=(",", ":"))
-        return cls(keys=keys, file_digest=file_digest,
+                raise TrustStoreError(f"key id {key_id[:32]!r} is too long")
+            keys[key_id] = (_legacy_key(key_id, value) if legacy
+                            else _trusted_key(key_id, value, limits))
+
+        warnings = _store_warnings(keys, legacy)
+        payload = json.dumps(
+            {"schema": TRUST_STORE_SEMANTICS,
+             "keys": {k: keys[k].semantics() for k in sorted(keys)}},
+            sort_keys=True, separators=(",", ":"))
+        return cls(keys=keys, file_digest=file_digest, schema=str(schema),
+                   warnings=warnings,
                    semantic_digest=hashlib.sha256(
                        payload.encode("utf-8")).hexdigest()[:16])
 
     @classmethod
     def from_file(cls, path: str | Path,
-                  limits: Limits = DEFAULT_LIMITS) -> CollectorKeys:
+                  limits: Limits = DEFAULT_LIMITS) -> TrustStore:
         p = Path(path)
         with p.open("rb") as fh:
             blob = fh.read(limits.max_keyfile_bytes + 1)
         if len(blob) > limits.max_keyfile_bytes:
-            raise CollectorKeyError(
+            raise TrustStoreError(
                 f"{p}: key file exceeds max_keyfile_bytes={limits.max_keyfile_bytes}")
         try:
             obj = json.loads(blob.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise CollectorKeyError(f"{p}: not readable as UTF-8 JSON: {exc}") from exc
+            raise TrustStoreError(f"{p}: not readable as UTF-8 JSON: {exc}") from exc
         return cls.from_obj(obj, file_digest=hashlib.sha256(blob).hexdigest()[:16],
                             limits=limits)
 
 
-EMPTY_KEYS = CollectorKeys()
+def _public_bytes(key_id: str, value: Any) -> bytes:
+    if not isinstance(value, str) or isinstance(value, bool):
+        raise TrustStoreError(f"key {key_id!r} must be a base64 string")
+    try:
+        blob = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise TrustStoreError(f"key {key_id!r} is not valid base64: {exc}") from exc
+    if len(blob) != ed25519.KEY_BYTES:
+        raise TrustStoreError(
+            f"key {key_id!r} is {len(blob)} bytes, expected {ed25519.KEY_BYTES}")
+    return blob
+
+
+def _legacy_key(key_id: str, value: Any) -> TrustedKey:
+    """A ``cohaera.collector_keys:1`` entry: bare base64, collector role only.
+
+    The role is not a guess. That schema's NAME is the declaration -- a file
+    called a collector key file contains collector keys -- so reading it as one
+    is faithful rather than lenient. What it cannot do is authorise policy
+    signing, and an operator who wants that has to say so in a store that has
+    somewhere to say it.
+    """
+    return TrustedKey(key_id=key_id, public=_public_bytes(key_id, value),
+                      roles=frozenset({ROLE_COLLECTOR}))
+
+
+def _clock_field(key_id: str, spec: dict[str, Any], name: str) -> float | None:
+    value = spec.get(name)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TrustStoreError(
+            f"key {key_id!r} {name!r} must be a number of seconds since the "
+            f"epoch, got {type(value).__name__}")
+    out = float(value)
+    if not math.isfinite(out):
+        raise TrustStoreError(f"key {key_id!r} {name!r} is not a finite number")
+    return out
+
+
+def _trusted_key(key_id: str, spec: Any, limits: Limits) -> TrustedKey:
+    """A ``cohaera.trust_store:1`` entry. Every field checked, nothing defaulted.
+
+    ``roles`` is required and has no default. A key with no declared role is an
+    operator who has not decided what the key is for, and picking for them is
+    how a collector key ends up able to sign the manifest that says which of the
+    collector's own tools are consequential.
+    """
+    if not isinstance(spec, dict):
+        raise TrustStoreError(
+            f"key {key_id!r} must map to an object in {TRUST_STORE_SCHEMA}; a "
+            f"bare base64 string is {COLLECTOR_KEYS_SCHEMA} syntax")
+    public = _public_bytes(key_id, spec.get("key"))
+
+    roles_raw = spec.get("roles")
+    if not isinstance(roles_raw, list) or not roles_raw:
+        raise TrustStoreError(
+            f"key {key_id!r} must declare a non-empty 'roles' list; valid roles "
+            f"are {sorted(VALID_ROLES)}")
+    bad = [r for r in roles_raw if r not in VALID_ROLES]
+    if bad:
+        raise TrustStoreError(
+            f"key {key_id!r} declares unknown role(s) {bad!r}; valid roles are "
+            f"{sorted(VALID_ROLES)}")
+
+    not_before = _clock_field(key_id, spec, "not_before")
+    not_after = _clock_field(key_id, spec, "not_after")
+    if (not_before is not None and not_after is not None
+            and not_before > not_after):
+        # A window that closes before it opens is a window nothing can be inside,
+        # so every record signed by this key would be reported as out of window
+        # and the operator would read it as tampering. Refuse the file instead.
+        raise TrustStoreError(
+            f"key {key_id!r} has not_before={not_before} after "
+            f"not_after={not_after}: no record can ever be inside that window")
+    revoked_at = _clock_field(key_id, spec, "revoked_at")
+
+    replaces = spec.get("replaces")
+    if replaces is not None:
+        if not isinstance(replaces, str) or isinstance(replaces, bool) or not replaces:
+            raise TrustStoreError(
+                f"key {key_id!r} 'replaces' must be a non-empty key id string")
+        if len(replaces) > limits.max_identity_chars:
+            raise TrustStoreError(f"key {key_id!r} 'replaces' id is too long")
+        if replaces == key_id:
+            raise TrustStoreError(f"key {key_id!r} declares that it replaces itself")
+
+    return TrustedKey(key_id=key_id, public=public, roles=frozenset(roles_raw),
+                      not_before=not_before, not_after=not_after,
+                      revoked_at=revoked_at, replaces=replaces)
+
+
+def _store_warnings(keys: dict[str, TrustedKey], legacy: bool) -> tuple[str, ...]:
+    """Problems with the operator's own file, found once at load.
+
+    A trust store is a document somebody maintains by hand under time pressure,
+    and the failure that matters is not a syntax error -- it is a rotation that
+    was announced and never enforced. A key superseded by a live one, with no
+    ``not_after`` and no ``revoked_at``, keeps signing valid records forever, so
+    the rotation exists in the file and not in the verifier. That is invisible
+    unless something looks for it.
+    """
+    found: list[str] = []
+    if legacy:
+        found.append(W_LEGACY_SCHEMA)
+
+    superseded = {k.replaces for k in keys.values() if k.replaces}
+    if any(pid in keys and keys[pid].open_ended for pid in superseded):
+        found.append(W_SUPERSEDED_OPEN)
+
+    # A cycle in `replaces` is not a rotation, it is a loop, and reporting it
+    # beats following it. Bounded by construction: each step moves to a distinct
+    # key or stops.
+    for start in sorted(keys):
+        seen = {start}
+        cur = keys[start].replaces
+        while cur in keys:
+            if cur in seen:
+                found.append(W_ROTATION_CYCLE)
+                break
+            seen.add(cur)
+            cur = keys[cur].replaces
+        if W_ROTATION_CYCLE in found:
+            break
+
+    if all(k.revoked for k in keys.values()):
+        found.append(W_ALL_KEYS_REVOKED)
+    return tuple(found)
+
+
+EMPTY_STORE = TrustStore()
+
+
+# ---------------------------------------------------------------------------
+# cohaera.policy_signature:1 -- the operator's inputs, attested
+# ---------------------------------------------------------------------------
+#
+# WHY THE POLICY FILES NEEDED THIS AND THE TELEMETRY GOT IT FIRST
+#     P1.1 signed the stream and left the two files that decide how the stream
+#     is READ unsigned, which is the wrong way round for at least one of them.
+#     The capability manifest says which tools are consequential -- edit it and
+#     an egress tool becomes read_only, and CH02, CH03 and CH04 all stop firing
+#     on it without a single telemetry record changing. The baseline is worse
+#     still: CH01 is the only detector here that LEARNS, so an attacker who can
+#     add sessions to the benign baseline teaches it that the attack is normal,
+#     and every subsequent verdict is quietly wrong in the attacker's favour.
+#     That is EVASION.md E03 and it was mitigated by "keep the file somewhere
+#     safe", which is not a mitigation, it is a hope.
+#
+#     ``capabilities.py`` said signing was blocked on a key distribution story
+#     that did not exist. The trust store above is that story -- not a good one,
+#     and its limits are enumerated on TrustStore -- so this is no longer
+#     blocked on anything.
+#
+# DETACHED, OVER THE EXACT BYTES
+#     The signature is a separate file and it covers ``sha256(file bytes)``,
+#     not a canonicalisation of the parsed content. That is deliberate and it is
+#     the same argument capabilities.py makes for keeping BOTH digests: a
+#     signature over parsed semantics would verify happily after an edit that
+#     adds a field this version does not read, and "did this file change at all"
+#     is precisely the question a tamper signal must answer strictly. Detached
+#     also means the artifact itself is untouched, so a manifest stays a plain
+#     JSON document that any other tool can read.
+#
+# DOMAIN SEPARATED TWICE
+#     The signing input is prefixed with this scheme, so a policy signature can
+#     never be presented as a ``cohaera.integrity:1`` signature or the reverse;
+#     and it names the artifact KIND, so a signature over a baseline cannot be
+#     presented as a signature over a manifest. Both are free to add and both
+#     close a cross-protocol substitution that is tedious to notice later.
+
+POLICY_ARTIFACT_MANIFEST = "capability_manifest"
+POLICY_ARTIFACT_BASELINE = "baseline"
+VALID_POLICY_ARTIFACTS = frozenset({POLICY_ARTIFACT_MANIFEST,
+                                    POLICY_ARTIFACT_BASELINE})
+
+P_VERIFIED = "POLICY_SIGNATURE_VERIFIED"
+P_ABSENT = "POLICY_SIGNATURE_ABSENT"
+P_INVALID = "POLICY_SIGNATURE_INVALID"
+P_DIGEST_MISMATCH = "POLICY_SIGNATURE_DIGEST_MISMATCH"
+P_ARTIFACT_MISMATCH = "POLICY_SIGNATURE_ARTIFACT_MISMATCH"
+P_KEY_UNKNOWN = "POLICY_SIGNATURE_KEY_UNKNOWN"
+P_KEY_WRONG_ROLE = "POLICY_SIGNATURE_KEY_ROLE_NOT_AUTHORISED"
+P_KEY_REVOKED = "POLICY_SIGNATURE_KEY_REVOKED"
+P_KEY_EXPIRED = "POLICY_SIGNATURE_KEY_EXPIRED"
+P_KEY_NOT_YET_VALID = "POLICY_SIGNATURE_KEY_NOT_YET_VALID"
+P_NO_KEYS = "POLICY_SIGNATURE_NO_POLICY_KEYS"
+
+
+class PolicySignatureError(ValueError):
+    """The signature file is not a signature file. Refuse it."""
+
+
+def policy_signing_input(artifact: str, file_sha256: str, signed_at: int) -> bytes:
+    """``scheme || artifact || sha256(file) || signed_at``.
+
+    ``signed_at`` is inside the signature rather than beside it so that the key
+    validity window has something attested to judge against, exactly as a
+    record's timestamp is judged for ``cohaera.integrity:1``. It is an integer
+    number of seconds, and integer rather than float because a signing input
+    must have exactly one byte encoding: ``1785700000.0`` and ``1785700000``
+    are the same instant and would otherwise be two different messages.
+    """
+    return b"\x1f".join((POLICY_SIGNATURE_SCHEMA.encode("utf-8"),
+                         artifact.encode("utf-8"),
+                         file_sha256.encode("utf-8"),
+                         str(signed_at).encode("ascii")))
+
+
+@dataclass(frozen=True)
+class PolicySignature:
+    """A detached signature over one operator-supplied file."""
+
+    artifact: str
+    file_sha256: str
+    signed_at: int
+    key_id: str
+    sig: bytes
+
+    @classmethod
+    def from_obj(cls, obj: Any, limits: Limits = DEFAULT_LIMITS) -> PolicySignature:
+        if not isinstance(obj, dict):
+            raise PolicySignatureError("signature file root must be a JSON object")
+        if obj.get("scheme") != POLICY_SIGNATURE_SCHEMA:
+            raise PolicySignatureError(
+                f"signature file must declare scheme {POLICY_SIGNATURE_SCHEMA!r}")
+        artifact = obj.get("artifact")
+        if artifact not in VALID_POLICY_ARTIFACTS:
+            raise PolicySignatureError(
+                f"signature declares artifact {artifact!r}; valid artifacts are "
+                f"{sorted(VALID_POLICY_ARTIFACTS)}")
+        digest = obj.get("file_sha256")
+        if (not isinstance(digest, str) or isinstance(digest, bool)
+                or len(digest) != 64):
+            raise PolicySignatureError(
+                "signature 'file_sha256' must be a 64-character hex digest")
+        try:
+            int(digest, 16)
+        except ValueError:
+            raise PolicySignatureError(
+                "signature 'file_sha256' is not hexadecimal") from None
+        signed_at = obj.get("signed_at")
+        if isinstance(signed_at, bool) or not isinstance(signed_at, int):
+            raise PolicySignatureError(
+                "signature 'signed_at' must be an integer number of seconds "
+                "since the epoch")
+        key_id = obj.get("key_id")
+        if (not isinstance(key_id, str) or isinstance(key_id, bool) or not key_id
+                or len(key_id) > limits.max_identity_chars):
+            raise PolicySignatureError("signature 'key_id' must be a key id string")
+        raw = obj.get("sig")
+        if not isinstance(raw, str) or isinstance(raw, bool):
+            raise PolicySignatureError("signature 'sig' must be a base64 string")
+        try:
+            blob = base64.b64decode(raw, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise PolicySignatureError(f"signature 'sig' is not valid base64: "
+                                       f"{exc}") from exc
+        if len(blob) != ed25519.SIG_BYTES:
+            raise PolicySignatureError(
+                f"signature is {len(blob)} bytes, expected {ed25519.SIG_BYTES}")
+        return cls(artifact=artifact, file_sha256=digest.lower(),
+                   signed_at=signed_at, key_id=key_id, sig=blob)
+
+    @classmethod
+    def from_file(cls, path: str | Path,
+                  limits: Limits = DEFAULT_LIMITS) -> PolicySignature:
+        p = Path(path)
+        with p.open("rb") as fh:
+            blob = fh.read(limits.max_keyfile_bytes + 1)
+        if len(blob) > limits.max_keyfile_bytes:
+            raise PolicySignatureError(
+                f"{p}: signature file exceeds "
+                f"max_keyfile_bytes={limits.max_keyfile_bytes}")
+        try:
+            obj = json.loads(blob.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PolicySignatureError(
+                f"{p}: not readable as UTF-8 JSON: {exc}") from exc
+        return cls.from_obj(obj, limits=limits)
+
+
+@dataclass(frozen=True)
+class PolicyAttestation:
+    """What Cohaera established about one operator-supplied file.
+
+    ``P_ABSENT`` is the value nearly every deployment will carry and it is the
+    important one. It does not mean the manifest was checked and found genuine;
+    it means nothing was ever in a position to check it. Reporting an unsigned
+    manifest as anything other than unsigned is the same fault as a check that
+    cannot run reporting itself as clean.
+    """
+
+    artifact: str
+    status: str = P_ABSENT
+    key_id: str = ""
+    file_sha256: str = ""
+    signed_at: int | None = None
+    detail: str = ""
+
+    @property
+    def verified(self) -> bool:
+        return self.status == P_VERIFIED
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"artifact": self.artifact, "status": self.status,
+                "verified": self.verified, "key_id": self.key_id,
+                "file_sha256": self.file_sha256, "signed_at": self.signed_at,
+                "detail": self.detail}
+
+
+def file_sha256(path: str | Path, max_bytes: int) -> str:
+    """Hash a file the signature claims to cover, in bounded memory.
+
+    Chunked rather than ``read_bytes()``: the baseline is telemetry and may be
+    gigabytes, and reading an operator-named file whole in order to hash it is
+    the same resource fault C4-02 fixed on the ingest path -- work bounded by
+    the size of somebody else's file rather than by any number here.
+
+    ``max_bytes`` is the caller's existing bound for that artifact, so a file
+    too large to score is also too large to attest, rather than being attested
+    and then refused.
+    """
+    h = hashlib.sha256()
+    read = 0
+    with Path(path).open("rb") as fh:
+        while True:
+            chunk = fh.read(1 << 20)
+            if not chunk:
+                break
+            read += len(chunk)
+            if read > max_bytes:
+                raise PolicySignatureError(
+                    f"{path}: exceeds {max_bytes} bytes, so the signature over "
+                    f"it cannot be checked")
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def verify_policy_signature(signature: PolicySignature, digest: str,
+                            artifact: str, store: TrustStore) -> PolicyAttestation:
+    """Check one detached signature against the bytes it claims to cover.
+
+    Same ordering, and for the same reason, as
+    ``StreamVerifier._check_signature``: everything decidable from the store
+    alone is decided before any scalar multiplication, and the key's validity
+    window is judged last, against a ``signed_at`` the signature has by then
+    established. See :class:`TrustedKey`.
+    """
+    out = PolicyAttestation(artifact=artifact, key_id=signature.key_id,
+                            file_sha256=signature.file_sha256,
+                            signed_at=signature.signed_at)
+
+    def fail(status: str, detail: str) -> PolicyAttestation:
+        return replace(out, status=status, detail=detail)
+
+    if signature.artifact != artifact:
+        # A real signature over a real file, presented as covering a different
+        # kind of file. Without this the artifact tag in the signing input would
+        # be decoration: the bytes would still verify, and only this comparison
+        # turns that into a refusal.
+        return fail(P_ARTIFACT_MISMATCH,
+                    f"signature covers {signature.artifact!r}, not {artifact!r}")
+    if digest != signature.file_sha256:
+        return fail(P_DIGEST_MISMATCH,
+                    f"file hashes to {digest[:16]}..., signature covers "
+                    f"{signature.file_sha256[:16]}...")
+    if not store.has_role(ROLE_POLICY):
+        return fail(P_NO_KEYS,
+                    "no key in the trust store is authorised for the 'policy' "
+                    "role, so nothing here could verify this signature")
+    key = store.get(signature.key_id)
+    if key is None:
+        return fail(P_KEY_UNKNOWN,
+                    f"key {signature.key_id!r} is not in the trust store")
+    if not key.authorises(ROLE_POLICY):
+        return fail(P_KEY_WRONG_ROLE,
+                    f"key {signature.key_id!r} is trusted for "
+                    f"{sorted(key.roles)}, not for signing policy")
+    if key.revoked:
+        return fail(P_KEY_REVOKED,
+                    f"key {signature.key_id!r} is marked revoked at "
+                    f"{key.revoked_at}")
+    message = policy_signing_input(signature.artifact, signature.file_sha256,
+                                   signature.signed_at)
+    if not ed25519.verify(key.public, message, signature.sig):
+        return fail(P_INVALID, "the signature did not verify under that key")
+    if key.windowed:
+        inside = key.covers_clock(float(signature.signed_at))
+        if inside is False:
+            expired = (key.not_before is None
+                       or float(signature.signed_at) >= key.not_before)
+            return fail(P_KEY_EXPIRED if expired else P_KEY_NOT_YET_VALID,
+                        f"signed at {signature.signed_at}, outside the key's "
+                        f"window [{key.not_before}, {key.not_after}]")
+    return replace(out, status=P_VERIFIED)
 
 
 # ---------------------------------------------------------------------------
@@ -585,11 +1181,108 @@ R_REORDER_BUDGET = "INTEGRITY_REORDER_BUDGET_EXHAUSTED"
 R_STREAM_BUDGET = "INTEGRITY_STREAM_BUDGET_EXHAUSTED"
 R_SIGNATURE_BUDGET = "INTEGRITY_SIGNATURE_BUDGET_EXHAUSTED"
 
+# Trust store outcomes. These are statements about the KEY rather than about the
+# bytes: a signature can verify perfectly under a key the operator has retired,
+# revoked, or never authorised to attest telemetry at all, and reporting that as
+# a good signature is how a rotation that never happened looks like one that did.
+R_KEY_REVOKED = "INTEGRITY_KEY_REVOKED"
+R_KEY_EXPIRED = "INTEGRITY_KEY_EXPIRED"
+R_KEY_NOT_YET_VALID = "INTEGRITY_KEY_NOT_YET_VALID"
+R_KEY_WRONG_ROLE = "INTEGRITY_KEY_ROLE_NOT_AUTHORISED"
+R_KEY_WINDOW_UNCHECKED = "INTEGRITY_KEY_WINDOW_UNCHECKED"
+
+# Freshness. A whole stream can be re-fed from an archive, and every check above
+# passes on it, because an old stream is internally perfect -- that is what makes
+# replay a different attack from tampering.
+R_STALE = "INTEGRITY_EVIDENCE_STALE"
+R_FRESHNESS_UNVERIFIABLE = "INTEGRITY_FRESHNESS_UNVERIFIABLE"
+R_NO_FRESHNESS_BOUND = "NO_FRESHNESS_BOUND"
+
 # The codes that say the evidence is not admissible, as opposed to merely
 # incomplete. A session carrying any of these has findings that rest on a stream
 # somebody could have edited, and CH06 says so at critical.
+#
+# R_KEY_WINDOW_UNCHECKED and R_FRESHNESS_UNVERIFIABLE are deliberately NOT here.
+# Both mean a question could not be answered, and answering "could not check"
+# with a critical finding is the false-positive engine this project exists to
+# argue against -- the same reason NO_INTEGRITY_EVIDENCE is a coverage code and
+# not a finding.
 INADMISSIBLE = frozenset({R_SEQUENCE_GAP, R_CHAIN_BROKEN, R_SIGNATURE_INVALID,
-                          R_KEY_UNKNOWN, R_SEQUENCE_REPLAY, R_PARTIAL_INTEGRITY})
+                          R_KEY_UNKNOWN, R_SEQUENCE_REPLAY, R_PARTIAL_INTEGRITY,
+                          R_KEY_REVOKED, R_KEY_EXPIRED, R_KEY_NOT_YET_VALID,
+                          R_KEY_WRONG_ROLE, R_STALE})
+
+
+@dataclass(frozen=True)
+class Freshness:
+    """The bound that makes replaying a whole archived stream detectable.
+
+    ``INTEGRITY_SEQUENCE_REPLAY`` catches a record replayed inside one run,
+    because its sequence position is already filled. It says nothing at all
+    about the other replay: capture a signed stream, keep it, and re-feed the
+    whole thing next month. Every check in this module passes on that input --
+    the sequence is contiguous, the chain holds, the signatures verify -- and
+    they pass because the stream really was written by the collector. It is just
+    not this month's stream.
+
+    The only anchor available offline is the timestamp on the record, and it
+    works here for the reason it works for key windows: it is covered by the
+    chain, the chain is covered by the signature, and a replayer holds neither
+    key. They can re-send the bytes, and they cannot re-date them. So a
+    freshness bound is evaluated ONLY over records whose signature verified, and
+    a session with none is reported as ``INTEGRITY_FRESHNESS_UNVERIFIABLE``
+    rather than as fresh.
+
+    OFF BY DEFAULT, AND SAYING SO
+        ``max_age_s`` unset means no bound, and coverage reports
+        ``NO_FRESHNESS_BOUND`` rather than leaving an operator to assume replay
+        was considered. It is off by default because the honest default is
+        unknowable: an hour is right for a live tail and wrong for a nightly
+        batch, and a bound guessed wrong turns every scheduled run into a
+        critical finding.
+
+    WHAT IT STILL DOES NOT CLOSE
+        Replaying a stream that is still inside the window. Detecting that needs
+        memory of which streams have already been scored, which is a ledger that
+        survives between runs, and Cohaera keeps no state between runs at all.
+        What it does instead is record each stream's identity and extent in the
+        verdict -- ``stream_summary`` -- so two runs that scored the same stream
+        twice are distinguishable by comparing their verdicts. That is evidence
+        after the fact, not prevention, and the difference is the same one this
+        whole document keeps drawing.
+    """
+
+    max_age_s: float | None = None
+    as_of: float | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return (self.max_age_s is not None and self.as_of is not None
+                and math.isfinite(self.max_age_s) and math.isfinite(self.as_of))
+
+    def age_of(self, when: float | None) -> float | None:
+        if not self.enabled or when is None or not math.isfinite(when):
+            return None
+        return float(self.as_of) - float(when)
+
+    def stale(self, when: float | None) -> bool | None:
+        """None when the question cannot be answered. Future-dated is not stale.
+
+        A record dated after ``as_of`` is not old, it is wrong, and calling it
+        stale would report clock skew as an archive replay. Skew is somebody
+        else's finding.
+        """
+        age = self.age_of(when)
+        if age is None:
+            return None
+        return age > float(self.max_age_s)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"max_age_s": self.max_age_s, "as_of": self.as_of,
+                "enabled": self.enabled}
+
+
+NO_FRESHNESS = Freshness()
 
 
 @dataclass
@@ -614,6 +1307,13 @@ class SessionIntegrity:
     unknown_key_ids: set[str] = field(default_factory=set)
     signatures_verified: int = 0
     reordered: int = 0
+    # Keys that actually attested this session's records, and how the store
+    # judged them. Carried into the verdict because "which key vouched for this"
+    # is the first question asked when a key turns out to be compromised, and
+    # answering it from a verdict beats re-scoring the archive.
+    signing_key_ids: set[str] = field(default_factory=set)
+    freshness_checked: int = 0
+    oldest_signed_age_s: float | None = None
 
     @property
     def records(self) -> int:
@@ -645,6 +1345,9 @@ class SessionIntegrity:
             "unknown_key_ids": sorted(self.unknown_key_ids)[:cap],
             "signatures_verified": self.signatures_verified,
             "records_reordered": self.reordered,
+            "signing_key_ids": sorted(self.signing_key_ids)[:cap],
+            "freshness_checked": self.freshness_checked,
+            "oldest_signed_age_s": self.oldest_signed_age_s,
             "attested": self.attested,
         }
 
@@ -662,8 +1365,16 @@ class _Stream:
     # happened to write next -- a false positive on B and a false negative on A,
     # which is precisely backwards.
     last_session: str = ""
-    # seq -> (body_digest, Integrity, session_key). Bounded; see the verifier.
-    pending: dict[int, tuple[str, Integrity, str]] = field(default_factory=dict)
+    # seq -> (body_digest, Integrity, session_key, record timestamp). Bounded;
+    # see the verifier. The timestamp travels with the held record because key
+    # windows and freshness are judged against the record's OWN clock, and by
+    # the time a held record is finally consumed the raw record is long gone.
+    pending: dict[int, tuple[str, Integrity, str, float | None]] = field(
+        default_factory=dict)
+    # Stream identity as scored, for the verdict. See Freshness: cross-run
+    # replay is not preventable here, and this is what makes it auditable.
+    first_seq: int | None = None
+    last_seq: int | None = None
 
 
 class StreamVerifier:
@@ -695,10 +1406,12 @@ class StreamVerifier:
         first, it is a gap. Both outcomes say which conclusion was reached.
     """
 
-    def __init__(self, keys: CollectorKeys = EMPTY_KEYS,
-                 limits: Limits = DEFAULT_LIMITS) -> None:
+    def __init__(self, keys: TrustStore = EMPTY_STORE,
+                 limits: Limits = DEFAULT_LIMITS,
+                 freshness: Freshness = NO_FRESHNESS) -> None:
         self.keys = keys
         self.limits = limits
+        self.freshness = freshness
         self.streams: dict[str, _Stream] = {}
         self.sessions: dict[str, SessionIntegrity] = {}
         self.signatures_verified = 0
@@ -735,8 +1448,12 @@ class StreamVerifier:
             self._begin(stream, integrity, state)
 
         body = body_digest(record)
+        # Read once, here, from the record as it arrived. Not from the assembled
+        # Event: the same field is what the chain covers, and the chain is what
+        # makes it worth reading at all.
+        when = _finite(record.get("timestamp"))
         if integrity.seq == stream.expected:
-            self._consume(stream, integrity.seq, body, integrity, session_key)
+            self._consume(stream, integrity.seq, body, integrity, session_key, when)
             # A hole was just FILLED, so anything already waiting arrived early
             # and was genuinely reordered.
             self._drain(stream, reordered=True)
@@ -745,7 +1462,8 @@ class StreamVerifier:
             # a record whose position in the chain is taken.
             state.note(R_SEQUENCE_REPLAY)
         else:
-            self._hold(stream, integrity.seq, body, integrity, session_key, state)
+            self._hold(stream, integrity.seq, body, integrity, session_key, state,
+                       when)
 
     def finalise(self) -> None:
         """Resolve every stream at end of input. Anything still held is a gap."""
@@ -762,6 +1480,13 @@ class StreamVerifier:
         for state in self.sessions.values():
             if state.with_integrity and state.without_integrity:
                 state.note(R_PARTIAL_INTEGRITY)
+            # A freshness bound the operator set and this session could not be
+            # measured against. Said once per session rather than per record:
+            # the fact is about the session, and a per-record count would read
+            # as a hundred problems where there is one.
+            if (self.freshness.enabled and state.with_integrity
+                    and not state.freshness_checked):
+                state.note(R_FRESHNESS_UNVERIFIABLE)
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -777,7 +1502,25 @@ class StreamVerifier:
             "any_signature_present": self._saw_any_signature,
             "signature_budget_exhausted": self.signature_budget_exhausted,
             "stream_budget_exhausted": self.stream_budget_exhausted,
+            "freshness": self.freshness.as_dict(),
+            "stream_summary": self.stream_summary(),
         }
+
+    def stream_summary(self) -> list[dict[str, Any]]:
+        """Each stream's identity and extent, for the verdict.
+
+        This is the auditable half of replay. Cohaera cannot remember that it
+        scored ``eval-collector-0`` from seq 0 to seq 812 yesterday, because it
+        remembers nothing between runs. Writing that down means two verdicts can
+        be compared and the repeat seen -- by a human, or by a SIEM rule over
+        the field, which is a place state DOES survive.
+        """
+        cap = self.limits.max_evidence_items
+        return [{"stream_id": s.stream_id, "first_seq": s.first_seq,
+                 "last_seq": s.last_seq, "head": s.head,
+                 "joined_midstream": s.joined_midstream}
+                for s in sorted(self.streams.values(),
+                                key=lambda s: s.stream_id)[:cap]]
 
     def for_session(self, session_key: str) -> SessionIntegrity:
         return self.sessions.get(session_key) or SessionIntegrity()
@@ -806,9 +1549,13 @@ class StreamVerifier:
         return state
 
     def _consume(self, stream: _Stream, seq: int, body: str,
-                 integrity: Integrity, session_key: str) -> None:
+                 integrity: Integrity, session_key: str,
+                 when: float | None = None) -> None:
         """Chain- and signature-check one in-order record."""
         state = self._session(session_key)
+        if stream.first_seq is None:
+            stream.first_seq = seq
+        stream.last_seq = seq
         expected_chain = chain_step(stream.head, body) if stream.head else None
 
         if expected_chain is not None and integrity.chain is not None:
@@ -831,19 +1578,54 @@ class StreamVerifier:
         stream.last_session = session_key
 
         if integrity.signed:
-            self._check_signature(stream, seq, integrity, state)
+            self._check_signature(stream, seq, integrity, state, when)
         elif self.keys.loaded:
             state.note(R_UNSIGNED)
 
     def _check_signature(self, stream: _Stream, seq: int, integrity: Integrity,
-                         state: SessionIntegrity) -> None:
+                         state: SessionIntegrity, when: float | None) -> None:
+        """Verify one record's signature, then judge the key that made it.
+
+        THE ORDER IS THE ARGUMENT, so it is spelled out rather than left to be
+        inferred from the control flow:
+
+        1. Unknown key, wrong role, or revoked key -- decided from the store
+           alone, before any scalar multiplication. All three are conclusions a
+           valid signature cannot overturn: a signature made by a key the
+           operator retired, or never authorised to attest telemetry, or
+           declared compromised, is a correctly-made signature that means
+           nothing. Deciding them first also refuses to spend the most expensive
+           operation in this codebase on a key that was never going to count,
+           which matters because how many signatures arrive is the producer's
+           choice.
+
+        2. The signature itself.
+
+        3. ONLY THEN the record's clock -- validity window and freshness. Both
+           read the timestamp the record carries, and that timestamp is worth
+           reading only once the signature has established that the collector
+           wrote it. Evaluating either before step 2 would be trusting a number
+           the producer chose, which is the fault this whole module exists to
+           remove rather than relocate. See TrustedKey and Freshness.
+        """
         if not self.keys.loaded:
             state.note(R_NO_COLLECTOR_KEYS)
             return
-        public = self.keys.get(integrity.key_id)
-        if public is None:
+        key = self.keys.get(integrity.key_id)
+        if key is None:
             state.note(R_KEY_UNKNOWN)
             state.unknown_key_ids.add(str(integrity.key_id))
+            return
+        state.signing_key_ids.add(key.key_id)
+        if not key.authorises(ROLE_COLLECTOR):
+            # A policy key signing telemetry. Either the operator wired the
+            # wrong key into the collector, or somebody is attesting the stream
+            # with a key that was trusted for something else entirely -- and the
+            # second is why the roles exist.
+            state.note(R_KEY_WRONG_ROLE)
+            return
+        if key.revoked:
+            state.note(R_KEY_REVOKED)
             return
         if self.signatures_verified >= self.limits.max_signature_verifications:
             self.signature_budget_exhausted = True
@@ -852,13 +1634,39 @@ class StreamVerifier:
         self.signatures_verified += 1
         state.signatures_verified += 1
         message = signing_input(stream.stream_id, seq, integrity.chain or "")
-        if not ed25519.verify(public, message, integrity.sig or b""):
+        if not ed25519.verify(key.public, message, integrity.sig or b""):
             state.note(R_SIGNATURE_INVALID)
             if len(state.bad_signatures) < self.limits.max_evidence_items:
                 state.bad_signatures.append(seq)
+            return
+
+        if key.windowed:
+            inside = key.covers_clock(when)
+            if inside is None:
+                state.note(R_KEY_WINDOW_UNCHECKED)
+            elif not inside:
+                state.note(R_KEY_NOT_YET_VALID
+                           if key.not_before is not None and when is not None
+                           and when < key.not_before else R_KEY_EXPIRED)
+        self._check_freshness(state, when)
+
+    def _check_freshness(self, state: SessionIntegrity,
+                         when: float | None) -> None:
+        """Age one signature-verified record against the operator's bound."""
+        if not self.freshness.enabled:
+            return
+        age = self.freshness.age_of(when)
+        if age is None:
+            return
+        state.freshness_checked += 1
+        if state.oldest_signed_age_s is None or age > state.oldest_signed_age_s:
+            state.oldest_signed_age_s = age
+        if self.freshness.stale(when):
+            state.note(R_STALE)
 
     def _hold(self, stream: _Stream, seq: int, body: str, integrity: Integrity,
-              session_key: str, state: SessionIntegrity) -> None:
+              session_key: str, state: SessionIntegrity,
+              when: float | None = None) -> None:
         if seq in stream.pending:
             state.note(R_SEQUENCE_REPLAY)
             return
@@ -870,10 +1678,10 @@ class StreamVerifier:
             self._force(stream)
             self._drain(stream, reordered=False)
             if seq == stream.expected:
-                self._consume(stream, seq, body, integrity, session_key)
+                self._consume(stream, seq, body, integrity, session_key, when)
                 self._drain(stream, reordered=True)
                 return
-        stream.pending[seq] = (body, integrity, session_key)
+        stream.pending[seq] = (body, integrity, session_key, when)
         self._pending_total += 1
 
     def _drain(self, stream: _Stream, reordered: bool) -> None:
@@ -889,13 +1697,13 @@ class StreamVerifier:
         """
         while stream.expected in stream.pending:
             seq = stream.expected
-            body, integrity, session_key = stream.pending.pop(seq)
+            body, integrity, session_key, when = stream.pending.pop(seq)
             self._pending_total -= 1
             if reordered:
                 state = self._session(session_key)
                 state.reordered += 1
                 state.note(R_REORDERED)
-            self._consume(stream, seq, body, integrity, session_key)
+            self._consume(stream, seq, body, integrity, session_key, when)
 
     def _force(self, stream: _Stream) -> None:
         """Declare the records between ``expected`` and the next held one gone."""
@@ -903,7 +1711,7 @@ class StreamVerifier:
             return
         nxt = min(stream.pending)
         if nxt > stream.expected:
-            _body, integrity, session_key = stream.pending[nxt]
+            _body, integrity, session_key, _when = stream.pending[nxt]
             gap = {"missing_from": stream.expected, "missing_to": nxt - 1,
                    "missing_count": nxt - stream.expected}
             # Both sides. The records that vanished sat between the last record

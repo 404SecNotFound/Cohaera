@@ -310,6 +310,12 @@ class IngestReport:
     defect_codes: dict[str, int] = field(default_factory=dict)
     aborted: bool = False
     abort_reason: str = ""
+    # What the collector-stream verifier concluded across the whole input, as
+    # opposed to per session. Filled in by ``ingest.assemble``. It carries the
+    # per-stream extent that makes a cross-run replay visible by comparing two
+    # verdicts, which is the only form of replay detection available to a
+    # process that keeps no state between runs. See evidence.Freshness.
+    integrity: dict[str, Any] = field(default_factory=dict)
 
     def note_bytes(self, blob: bytes, tag: bytes = b"") -> None:
         """Fold one raw record into the content digest, accepted or rejected."""

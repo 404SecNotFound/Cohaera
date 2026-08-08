@@ -37,13 +37,27 @@ import math
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
 from . import __version__
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest, ManifestError
 from .checks import SequenceGrammar, run_all
-from .evidence import EMPTY_KEYS, CollectorKeyError, CollectorKeys
+from .evidence import (
+    EMPTY_STORE,
+    P_ABSENT,
+    POLICY_ARTIFACT_BASELINE,
+    POLICY_ARTIFACT_MANIFEST,
+    Freshness,
+    PolicyAttestation,
+    PolicySignature,
+    PolicySignatureError,
+    TrustStore,
+    TrustStoreError,
+    file_sha256,
+    verify_policy_signature,
+)
 from .identity import Correlator, run_id
 from .ingest import load
 from .limits import DEFAULT_LIMITS, Limits, LimitsError
@@ -95,6 +109,18 @@ def non_negative_int(text: str) -> int:
     return value
 
 
+def positive_float(text: str) -> float:
+    """A duration that must actually elapse. Zero would make everything stale."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+    if not math.isfinite(value) or value <= 0.0:
+        raise argparse.ArgumentTypeError(
+            f"must be a finite number of seconds greater than 0, got {value}")
+    return value
+
+
 def unit_ratio(text: str) -> float:
     """A fraction in 0.0..1.0. ``--max-reject-ratio 2.0`` can never trip."""
     try:
@@ -132,14 +158,44 @@ def _load_manifest(path: str | None,
 
 
 def _load_keys(path: str | None,
-               limits: Limits = DEFAULT_LIMITS) -> CollectorKeys:
+               limits: Limits = DEFAULT_LIMITS) -> TrustStore:
     if not path:
-        return EMPTY_KEYS
-    keys = CollectorKeys.from_file(path, limits=limits)
-    _err(f"[cohaera] collector keys {sanitise_display(path, 160)}: "
-         f"{len(keys.keys)} key(s), file digest {keys.file_digest}, "
-         f"semantic digest {keys.semantic_digest}")
-    return keys
+        return EMPTY_STORE
+    store = TrustStore.from_file(path, limits=limits)
+    _err(f"[cohaera] trust store {sanitise_display(path, 160)}: "
+         f"{len(store.keys)} key(s) "
+         f"({len(store.for_role('collector'))} collector, "
+         f"{len(store.for_role('policy'))} policy), file digest "
+         f"{store.file_digest}, semantic digest {store.semantic_digest}")
+    for warning in store.warnings:
+        # Not fatal. These are problems with the operator's own bookkeeping, and
+        # refusing to run over one would be a denial of service against the
+        # person trying to tighten their configuration. Said out loud instead,
+        # because a rotation that exists in the file and not in the verifier is
+        # invisible otherwise.
+        _err(f"[cohaera] WARNING: trust store {warning}")
+    return store
+
+
+def _attest_policy(path: str | None, sig_path: str | None, artifact: str,
+                   store: TrustStore, max_bytes: int,
+                   limits: Limits = DEFAULT_LIMITS) -> PolicyAttestation:
+    """Verify a detached signature over one operator-supplied file.
+
+    Returns an attestation in every case, including the case where nothing was
+    supplied, because ``POLICY_SIGNATURE_ABSENT`` in the verdict is the point:
+    an unsigned manifest that says so is a different artifact from one that
+    passes silently, and the second is what this codebase keeps arguing against.
+
+    Raises rather than degrading when a signature WAS supplied and did not hold.
+    An operator who passed --tool-manifest-sig asked for the file to be checked,
+    and scoring on it anyway would answer a question they did not ask.
+    """
+    if not path or not sig_path:
+        return PolicyAttestation(artifact=artifact, status=P_ABSENT)
+    signature = PolicySignature.from_file(sig_path, limits=limits)
+    digest = file_sha256(path, max_bytes)
+    return verify_policy_signature(signature, digest, artifact, store)
 
 
 def _correlator(args: argparse.Namespace, limits: Limits) -> Correlator:
@@ -177,15 +233,66 @@ def cmd_score(args: argparse.Namespace) -> int:
         _err(f"[cohaera] capability manifest rejected: {sanitise_display(str(exc), 300)}")
         return EXIT_ERROR
     try:
-        keys = _load_keys(args.collector_keys, limits)
-    except (CollectorKeyError, OSError) as exc:
-        # Refused, not degraded. An operator who passed --collector-keys asked
+        keys = _load_keys(args.trust_store or args.collector_keys, limits)
+    except (TrustStoreError, OSError) as exc:
+        # Refused, not degraded. An operator who passed --trust-store asked
         # for signatures to be verified; carrying on without them would report
         # an unverified stream as merely unsigned, which is the wrong answer to
         # the question they asked.
-        _err(f"[cohaera] collector key file rejected: "
+        _err(f"[cohaera] trust store rejected: "
              f"{sanitise_display(str(exc), 300)}")
         return EXIT_ERROR
+
+    # The two operator-supplied files that decide how every record is READ. The
+    # manifest says which tools are consequential; the baseline teaches CH01 what
+    # normal looks like. Editing either changes every verdict without touching a
+    # single telemetry record, which is why they are attested before they are
+    # used rather than after.
+    try:
+        attestations = [
+            _attest_policy(args.tool_manifest, args.tool_manifest_sig,
+                           POLICY_ARTIFACT_MANIFEST, keys,
+                           limits.max_manifest_bytes, limits),
+            _attest_policy(args.baseline, args.baseline_sig,
+                           POLICY_ARTIFACT_BASELINE, keys,
+                           limits.max_input_bytes, limits),
+        ]
+    except (PolicySignatureError, OSError) as exc:
+        _err(f"[cohaera] policy signature rejected: "
+             f"{sanitise_display(str(exc), 300)}")
+        return EXIT_ERROR
+    for att in attestations:
+        if att.status == P_ABSENT:
+            continue
+        if not att.verified:
+            _err(f"[cohaera] REFUSING to score: the {att.artifact} signature did "
+                 f"not hold ({att.status}: {sanitise_display(att.detail, 200)}). "
+                 "A signature that is checked and fails is the one case where "
+                 "carrying on would be worse than not having asked.")
+            return EXIT_ERROR
+        _err(f"[cohaera] {att.artifact} signature VERIFIED under "
+             f"{sanitise_display(att.key_id, 80)} "
+             f"(file sha256 {att.file_sha256[:16]}...)")
+
+    if args.require_signed_policy:
+        supplied = {POLICY_ARTIFACT_MANIFEST: args.tool_manifest,
+                    POLICY_ARTIFACT_BASELINE: args.baseline}
+        unsigned = [a.artifact for a in attestations
+                    if supplied.get(a.artifact) and not a.verified]
+        if unsigned:
+            _err(f"[cohaera] --require-signed-policy: {', '.join(unsigned)} "
+                 "was supplied without a verified signature. Sign it with "
+                 "tools/policy_sign.py and pass the detached signature, or drop "
+                 "the flag and accept that the file is trusted because it is on "
+                 "disk.")
+            return EXIT_ERROR
+
+    freshness = Freshness(max_age_s=args.evidence_max_age,
+                          as_of=(args.evidence_as_of if args.evidence_as_of
+                                 is not None else time.time()))
+    if freshness.enabled:
+        _err(f"[cohaera] freshness bound: signed records older than "
+             f"{args.evidence_max_age:g}s as of {freshness.as_of:.0f} are stale")
 
     if args.reject_log:
         try:
@@ -241,7 +348,8 @@ def cmd_score(args: argparse.Namespace) -> int:
                  "--allow-partial-baseline was given.")
 
     sessions = load(args.telemetry, limits=limits, correlator=correlator,
-                    manifest=manifest, report=report, keys=keys)
+                    manifest=manifest, report=report, keys=keys,
+                    freshness=freshness)
     _err(f"[cohaera] {sanitise_display(str(args.telemetry), 160)}: "
          f"{sum(len(s.events) for s in sessions)} events in {len(sessions)} sessions, "
          f"{report.rejected} record(s) quarantined\n")
@@ -266,7 +374,19 @@ def cmd_score(args: argparse.Namespace) -> int:
         "baseline_ingest": baseline_ingest,
         "baseline_partial_allowed": bool(args.allow_partial_baseline),
         "capability_manifest": manifest.as_dict(),
-        "collector_keys": keys.as_dict(),
+        "trust_store": keys.as_dict(limits.max_evidence_items),
+        # What Cohaera established about the two files that decide how every
+        # record is read. POLICY_SIGNATURE_ABSENT is the value nearly every
+        # deployment will carry, and recording it is the point: an unsigned
+        # manifest that says so is a different artifact from one that passes
+        # silently.
+        "policy_attestations": [a.as_dict() for a in attestations],
+        "evidence_freshness": freshness.as_dict(),
+        # Stream identity and extent, so that two runs which scored the same
+        # collector stream twice are distinguishable after the fact. Cohaera
+        # keeps no state between runs, so this is the only form replay detection
+        # can take here. See evidence.Freshness.
+        "collector_streams": report.integrity.get("stream_summary", []),
         "correlation_key_version": correlator.key_version,
         "correlation_keyed": correlator.keyed,
         "ingest": report.summary(),
@@ -398,11 +518,40 @@ def _add_common(p: argparse._ActionsContainer) -> None:
                    help="JSON capability manifest keyed on exact tool ID. Declared "
                         "capabilities outrank the name heuristic and the producer's "
                         "reversible flag.")
+    p.add_argument("--trust-store", metavar="PATH",
+                   help="JSON trust store (cohaera.trust_store:1): public keys, what "
+                        "each is authorised to attest, its validity window, and "
+                        "whether it has been revoked. Used to verify "
+                        "cohaera.integrity:1 signatures on telemetry and "
+                        "cohaera.policy_signature:1 signatures on the manifest and "
+                        "baseline. Without it, signed records are parsed and NOT "
+                        "verified, and the verdict says so with NO_COLLECTOR_KEYS.")
     p.add_argument("--collector-keys", metavar="PATH",
-                   help="JSON file of collector public keys (cohaera.collector_keys:1) "
-                        "used to verify cohaera.integrity:1 signatures. Without it, "
-                        "signed records are parsed and NOT verified, and the verdict "
-                        "says so with NO_COLLECTOR_KEYS.")
+                   help="Superseded name for --trust-store, kept because deployments "
+                        "wrote cohaera.collector_keys:1 files. Either flag accepts "
+                        "either schema; a legacy file's keys are collector-role only "
+                        "and cannot attest policy.")
+    p.add_argument("--tool-manifest-sig", metavar="PATH",
+                   help="Detached cohaera.policy_signature:1 over the capability "
+                        "manifest, verified against a policy-role key. Supplying it "
+                        "and having it fail is a refusal to score, not a warning.")
+    p.add_argument("--require-signed-policy", action="store_true",
+                   help="Refuse to run unless every supplied policy file (manifest, "
+                        "baseline) carries a signature that verified. Off by default "
+                        "because it would break every existing deployment; on, it is "
+                        "what turns the signature from an option into a control.")
+    p.add_argument("--evidence-max-age", type=positive_float, metavar="SECONDS",
+                   help="Report signed records older than this as stale "
+                        "(INTEGRITY_EVIDENCE_STALE). This is the bound that makes "
+                        "re-feeding a captured stream detectable: every other check "
+                        "passes on a replayed stream, because it really was written "
+                        "by that collector. Off by default, and coverage says "
+                        "NO_FRESHNESS_BOUND when it is off.")
+    p.add_argument("--evidence-as-of", type=float, metavar="EPOCH",
+                   help="The instant --evidence-max-age is measured from, in seconds "
+                        "since the epoch. Defaults to the wall clock at run start; "
+                        "set it to make a run reproducible, or to score an archive "
+                        "as of the day it was captured.")
     p.add_argument("--correlation-secret-env", metavar="NAME", default=SECRET_ENV,
                    help=f"Environment variable holding the HMAC key for anonymous "
                         f"correlation keys (default {SECRET_ENV}).")
@@ -443,6 +592,12 @@ def main(argv: list[str] | None = None) -> int:
     sc = sub.add_parser("score", help="score observra telemetry")
     sc.add_argument("telemetry", help="observra JSONL file")
     sc.add_argument("--baseline", help="benign JSONL to fit the sequence grammar")
+    sc.add_argument("--baseline-sig", metavar="PATH",
+                    help="Detached cohaera.policy_signature:1 over the baseline. "
+                         "CH01 is the only detector here that LEARNS, so an "
+                         "attacker who can add sessions to the baseline teaches it "
+                         "that the attack is normal -- EVASION.md E03. This is what "
+                         "makes editing the file detectable.")
     _add_common(sc)
     sc.set_defaults(func=cmd_score)
 

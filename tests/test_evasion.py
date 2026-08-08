@@ -22,12 +22,16 @@ Run:  PYTHONPATH=src python3 tests/test_evasion.py
 
 from __future__ import annotations
 
+import base64
+import json
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from cohaera import ed25519
 from cohaera.capabilities import CapabilityManifest
 from cohaera.checks import (
     SequenceGrammar,
@@ -39,6 +43,15 @@ from cohaera.checks import (
     ch05_unpaired_calls,
     coverage,
     run_all,
+)
+from cohaera.cli import main as cli_main
+from cohaera.evidence import (
+    POLICY_ARTIFACT_BASELINE,
+    POLICY_SIGNATURE_SCHEMA,
+    ROLE_POLICY,
+    TRUST_STORE_SCHEMA,
+    file_sha256,
+    policy_signing_input,
 )
 from cohaera.ingest import assemble
 from cohaera.model import Event, Session
@@ -757,6 +770,64 @@ def test_evasion_20b_the_manifest_takes_the_declaration_back():
     findings = ch04_guardrail_overrun(session)
     assert [f.check for f in findings] == ["CH04_blocking_control_bypassed"]
     assert findings[0].evidence["policy_enforcement_source"] == "manifest"
+
+
+def test_evasion_03b_editing_a_signed_baseline_is_detected():
+    """The half of E03 that is closed, exercised rather than described.
+
+    E03 above still passes, and it should: an attacker who influences what goes
+    INTO the benign corpus defines normal, and no signature helps with that.
+    What used to be free as well was the easier version — wait until the
+    baseline is on disk and append to the file. CH01 is the only detector here
+    that learns, so a file nobody attests is a training set anybody can edit.
+
+    A detached cohaera.policy_signature:1 over the baseline's bytes makes that
+    edit a refusal to score rather than a quieter verdict. Note what it does NOT
+    make true: the signature says the file is the one the operator signed, and
+    says nothing at all about what the operator put in it.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        baseline = d / "benign.jsonl"
+        baseline.write_text("".join(
+            json.dumps({"event_type": "tool_start", "timestamp": BASE + i,
+                        "session_id": f"b{i}", "span_id": f"sp{i}",
+                        "tool_name": "alert_read"}) + "\n"
+            for i in range(4)), encoding="utf-8")
+        telemetry = d / "run.jsonl"
+        telemetry.write_text(json.dumps(
+            {"event_type": "tool_start", "timestamp": BASE, "session_id": "a",
+             "span_id": "S1", "tool_name": "alert_read"}) + "\n",
+            encoding="utf-8")
+
+        secret = bytes.fromhex("11" * 32)
+        public = ed25519.public_key(secret)
+        key_id = "ed25519:" + public.hex()[:16]
+        store = d / "store.json"
+        store.write_text(json.dumps({
+            "scheme": TRUST_STORE_SCHEMA,
+            "keys": {key_id: {"key": base64.b64encode(public).decode("ascii"),
+                              "roles": [ROLE_POLICY]}}}), encoding="utf-8")
+        digest = file_sha256(baseline, 1 << 20)
+        sig = d / "benign.jsonl.sig"
+        sig.write_text(json.dumps({
+            "scheme": POLICY_SIGNATURE_SCHEMA,
+            "artifact": POLICY_ARTIFACT_BASELINE, "file_sha256": digest,
+            "signed_at": 1785700000, "key_id": key_id,
+            "sig": base64.b64encode(ed25519.sign(secret, policy_signing_input(
+                POLICY_ARTIFACT_BASELINE, digest, 1785700000))).decode("ascii"),
+        }), encoding="utf-8")
+
+        argv = ["score", str(telemetry), "--baseline", str(baseline),
+                "--baseline-sig", str(sig), "--trust-store", str(store)]
+        assert cli_main(argv) == 0, "the signed baseline should score normally"
+
+        with baseline.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(
+                {"event_type": "tool_start", "timestamp": BASE + 99,
+                 "session_id": "poison", "span_id": "spP",
+                 "tool_name": "exfiltrate_all"}) + "\n")
+        assert cli_main(argv) == 1, "a poisoned baseline must not be fitted"
 
 
 if __name__ == "__main__":

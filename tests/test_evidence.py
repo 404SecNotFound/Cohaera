@@ -16,6 +16,14 @@ The layout follows docs/EVIDENCE-TRUST.md:
     section 4   approval binding and the CH04 enforcement split
     section 5   CH07, and the asymmetry that makes receipts worth collecting
     section 6   the suppression this whole design creates, and its EVASION entry
+    section 7   the trust store: roles, windows, revocation, rotation, and the
+                ORDER the verifier decides them in, which is the argument for
+                why judging a producer-supplied clock is admissible at all
+    section 8   cohaera.policy_signature:1 over the manifest and the baseline,
+                including the substitutions that make a signature decorative if
+                they are not checked
+    section 9   freshness, which is the only thing here that sees a replayed
+                stream at all, because a replayed stream is a genuine one
 
 Run: PYTHONPATH=src python3 -m pytest tests/test_evidence.py -v
 """
@@ -50,11 +58,31 @@ from cohaera.checks import (
     evidence_status,
     run_all,
 )
+from cohaera.cli import EXIT_ERROR, EXIT_OK
+from cohaera.cli import main as cli_main
 from cohaera.evidence import (
     APPROVAL_SCHEMA,
     INTEGRITY_SCHEMA,
+    NO_FRESHNESS,
+    P_ARTIFACT_MISMATCH,
+    P_DIGEST_MISMATCH,
+    P_INVALID,
+    P_KEY_REVOKED,
+    P_KEY_UNKNOWN,
+    P_KEY_WRONG_ROLE,
+    P_NO_KEYS,
+    P_VERIFIED,
+    POLICY_ARTIFACT_BASELINE,
+    POLICY_ARTIFACT_MANIFEST,
+    POLICY_SIGNATURE_SCHEMA,
     R_CHAIN_BROKEN,
+    R_FRESHNESS_UNVERIFIABLE,
+    R_KEY_EXPIRED,
+    R_KEY_NOT_YET_VALID,
+    R_KEY_REVOKED,
     R_KEY_UNKNOWN,
+    R_KEY_WINDOW_UNCHECKED,
+    R_KEY_WRONG_ROLE,
     R_NO_COLLECTOR_KEYS,
     R_PARTIAL_INTEGRITY,
     R_REORDER_BUDGET,
@@ -62,14 +90,28 @@ from cohaera.evidence import (
     R_SEQUENCE_GAP,
     R_SEQUENCE_REPLAY,
     R_SIGNATURE_INVALID,
+    R_STALE,
     RECEIPT_SCHEMA,
+    ROLE_COLLECTOR,
+    ROLE_POLICY,
+    TRUST_STORE_SCHEMA,
+    W_ALL_KEYS_REVOKED,
+    W_LEGACY_SCHEMA,
+    W_ROTATION_CYCLE,
+    W_SUPERSEDED_OPEN,
     Approval,
-    CollectorKeyError,
-    CollectorKeys,
     EffectReceipt,
+    Freshness,
     Integrity,
+    PolicySignature,
+    PolicySignatureError,
     StreamVerifier,
+    TrustStore,
+    TrustStoreError,
     arg_digest,
+    file_sha256,
+    policy_signing_input,
+    verify_policy_signature,
 )
 from cohaera.ingest import assemble
 from cohaera.limits import (
@@ -80,6 +122,11 @@ from cohaera.limits import (
 )
 from cohaera.model import Event, Session
 from tools.collector_sign import key_id_for, keys_document, sign_stream
+from tools.receipt_adapters import (
+    ReceiptAdapterError,
+    adapt,
+    binding_for,
+)
 
 # ---------------------------------------------------------------------------
 # 1. The crypto
@@ -262,8 +309,8 @@ def test_collector_key_file_is_refused_rather_than_half_loaded():
         {"scheme": "cohaera.collector_keys:1",
          "keys": {"k": base64.b64encode(b"tooshort").decode()}},
     ):
-        with pytest.raises(CollectorKeyError):
-            CollectorKeys.from_obj(bad)
+        with pytest.raises(TrustStoreError):
+            TrustStore.from_obj(bad)
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +321,7 @@ SECRET = bytes.fromhex(
     "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb")
 PUBLIC = ed25519.public_key(SECRET)
 KEY_ID = key_id_for(PUBLIC)
-KEYS = CollectorKeys.from_obj(keys_document(PUBLIC, KEY_ID))
+KEYS = TrustStore.from_obj(keys_document(PUBLIC, KEY_ID))
 
 
 def _records(n: int = 6, sid: str = "sess-1") -> list[dict]:
@@ -285,8 +332,9 @@ def _records(n: int = 6, sid: str = "sess-1") -> list[dict]:
 
 
 def _run(records: list[dict], keys=KEYS, limits=DEFAULT_LIMITS,
-         order: list[int] | None = None) -> StreamVerifier:
-    v = StreamVerifier(keys=keys, limits=limits)
+         order: list[int] | None = None,
+         freshness=NO_FRESHNESS) -> StreamVerifier:
+    v = StreamVerifier(keys=keys, limits=limits, freshness=freshness)
     seq = order if order is not None else range(len(records))
     for i in seq:
         raw = records[i]
@@ -388,7 +436,7 @@ def test_a_forged_signature_does_not_verify():
 def test_a_key_the_operator_did_not_supply_is_not_trusted():
     other = ed25519.public_key(bytes.fromhex("11" * 32))
     signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
-    state = _run(signed, keys=CollectorKeys.from_obj(
+    state = _run(signed, keys=TrustStore.from_obj(
         keys_document(other, "ed25519:someone-else"))).for_session("sess-1")
     assert R_KEY_UNKNOWN in state.codes
     assert state.signatures_verified == 0
@@ -397,7 +445,7 @@ def test_a_key_the_operator_did_not_supply_is_not_trusted():
 def test_without_keys_signatures_are_parsed_and_not_verified():
     """And that state is NAMED, rather than looking like a pass."""
     signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
-    state = _run(signed, keys=CollectorKeys()).for_session("sess-1")
+    state = _run(signed, keys=TrustStore()).for_session("sess-1")
     assert R_NO_COLLECTOR_KEYS in state.codes
     assert state.signatures_verified == 0
     assert not state.inadmissible, "unverified is not the same as failed"
@@ -760,9 +808,732 @@ def test_the_reference_signer_round_trips_through_the_cli(tmp_path):
     keys_path.write_text(json.dumps(keys_document(PUBLIC, KEY_ID)),
                          encoding="utf-8")
 
-    loaded = CollectorKeys.from_file(keys_path)
+    loaded = TrustStore.from_file(keys_path)
     events = [Event(raw=json.loads(line))
               for line in out.read_text(encoding="utf-8").splitlines()]
     sessions = assemble(events, keys=loaded)
     assert sessions[0].integrity.signatures_verified == 4
     assert not sessions[0].integrity.inadmissible
+
+
+# ---------------------------------------------------------------------------
+# 7. The trust store
+# ---------------------------------------------------------------------------
+
+OTHER_SECRET = bytes.fromhex(
+    "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7")
+OTHER_PUBLIC = ed25519.public_key(OTHER_SECRET)
+OTHER_KEY_ID = key_id_for(OTHER_PUBLIC)
+
+B64 = base64.b64encode(PUBLIC).decode("ascii")
+B64_OTHER = base64.b64encode(OTHER_PUBLIC).decode("ascii")
+
+
+def _store(**entry) -> TrustStore:
+    """A one-key trust store for KEY_ID, with whatever the test wants said."""
+    spec = {"key": B64, "roles": [ROLE_COLLECTOR]}
+    spec.update(entry)
+    return TrustStore.from_obj({"scheme": TRUST_STORE_SCHEMA,
+                                "keys": {KEY_ID: spec}})
+
+
+def test_a_legacy_key_file_still_loads_and_is_collector_only():
+    """Deployments that adopted P1.1 wrote one of these; do not break them.
+
+    The role is not a guess. That schema's NAME is the declaration, so reading
+    it as collector-only is faithful rather than lenient -- and it deliberately
+    cannot authorise policy signing, because there is nowhere in that format to
+    say so.
+    """
+    store = TrustStore.from_obj({"scheme": "cohaera.collector_keys:1",
+                                 "keys": {KEY_ID: B64}})
+    assert store.get(KEY_ID).roles == frozenset({ROLE_COLLECTOR})
+    assert not store.has_role(ROLE_POLICY)
+    assert W_LEGACY_SCHEMA in store.warnings
+
+
+def test_a_key_with_no_declared_role_is_refused():
+    """No default. See _trusted_key.
+
+    Picking a role for an operator who did not state one is how a collector key
+    ends up able to sign the manifest that says which of the collector's own
+    tools are consequential.
+    """
+    for roles in (None, [], "collector", ["collector", "root"]):
+        spec = {"key": B64}
+        if roles is not None:
+            spec["roles"] = roles
+        with pytest.raises(TrustStoreError):
+            TrustStore.from_obj({"scheme": TRUST_STORE_SCHEMA,
+                                 "keys": {KEY_ID: spec}})
+
+
+def test_trust_store_refuses_the_legacy_bare_string_form():
+    """Mixing the two schemas silently would make `roles` optional in practice."""
+    with pytest.raises(TrustStoreError):
+        TrustStore.from_obj({"scheme": TRUST_STORE_SCHEMA,
+                             "keys": {KEY_ID: B64}})
+
+
+def test_a_window_that_closes_before_it_opens_is_refused():
+    """Nothing can be inside it, so every record would read as tampering.
+
+    Refusing the file is the only outcome that does not manufacture a critical
+    finding out of a typo.
+    """
+    with pytest.raises(TrustStoreError):
+        _store(not_before=200.0, not_after=100.0)
+
+
+def test_clock_fields_must_be_finite_numbers():
+    for field in ("not_before", "not_after", "revoked_at"):
+        for bad in ("2026-01-01", True, float("nan"), float("inf"), {}):
+            with pytest.raises(TrustStoreError):
+                _store(**{field: bad})
+
+
+def test_a_key_cannot_replace_itself():
+    with pytest.raises(TrustStoreError):
+        _store(replaces=KEY_ID)
+
+
+def test_a_rotation_announced_but_never_enforced_is_reported():
+    """The failure that actually happens: the new key is added, the old one is
+    left open, and the rotation exists in the file rather than in the verifier.
+
+    A stolen copy of the retired key keeps producing perfectly valid records
+    forever, and nothing says so unless something looks.
+    """
+    store = TrustStore.from_obj({"scheme": TRUST_STORE_SCHEMA, "keys": {
+        KEY_ID: {"key": B64, "roles": [ROLE_COLLECTOR]},
+        OTHER_KEY_ID: {"key": B64_OTHER, "roles": [ROLE_COLLECTOR],
+                       "replaces": KEY_ID},
+    }})
+    assert W_SUPERSEDED_OPEN in store.warnings
+
+    closed = TrustStore.from_obj({"scheme": TRUST_STORE_SCHEMA, "keys": {
+        KEY_ID: {"key": B64, "roles": [ROLE_COLLECTOR], "not_after": 5000.0},
+        OTHER_KEY_ID: {"key": B64_OTHER, "roles": [ROLE_COLLECTOR],
+                       "not_before": 5000.0, "replaces": KEY_ID},
+    }})
+    assert W_SUPERSEDED_OPEN not in closed.warnings
+
+
+def test_a_rotation_cycle_is_reported_rather_than_followed():
+    store = TrustStore.from_obj({"scheme": TRUST_STORE_SCHEMA, "keys": {
+        KEY_ID: {"key": B64, "roles": [ROLE_COLLECTOR], "replaces": OTHER_KEY_ID},
+        OTHER_KEY_ID: {"key": B64_OTHER, "roles": [ROLE_COLLECTOR],
+                       "replaces": KEY_ID},
+    }})
+    assert W_ROTATION_CYCLE in store.warnings
+
+
+def test_a_store_where_everything_is_revoked_says_so():
+    assert W_ALL_KEYS_REVOKED in _store(revoked_at=1.0).warnings
+
+
+def test_the_semantic_digest_moves_when_the_meaning_moves():
+    """A byte digest alone would not distinguish a reformat from a revocation."""
+    base = _store()
+    assert _store().semantic_digest == base.semantic_digest
+    assert _store(revoked_at=1.0).semantic_digest != base.semantic_digest
+    assert _store(not_after=1.0).semantic_digest != base.semantic_digest
+    assert _store(roles=[ROLE_COLLECTOR, ROLE_POLICY]).semantic_digest \
+        != base.semantic_digest
+
+
+def test_a_revoked_key_makes_the_evidence_inadmissible():
+    """And spends no scalar multiplication doing it.
+
+    Revocation is the operator saying somebody else holds this key. A signature
+    made by that somebody is a correctly-made signature that means nothing, so
+    there is nothing to learn from checking it.
+    """
+    signed = sign_stream(_records(4), "stream-a", SECRET, KEY_ID)
+    state = _run(signed, keys=_store(revoked_at=999.0)).for_session("sess-1")
+    assert R_KEY_REVOKED in state.codes
+    assert R_KEY_REVOKED in state.inadmissible
+    assert state.signatures_verified == 0
+
+
+def test_revocation_ignores_the_records_own_clock():
+    """The whole reason revocation is absolute. See TrustedKey.
+
+    Every record here is dated long BEFORE the revocation, which is exactly what
+    an attacker holding the compromised key would arrange. Believing that date
+    means believing a timestamp signed by the person you just declared
+    compromised.
+    """
+    signed = sign_stream(_records(4), "stream-a", SECRET, KEY_ID)
+    assert all(r["timestamp"] < 5000.0 for r in signed)
+    state = _run(signed, keys=_store(revoked_at=5000.0)).for_session("sess-1")
+    assert R_KEY_REVOKED in state.codes
+
+
+def test_a_policy_key_cannot_attest_telemetry():
+    signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
+    state = _run(signed, keys=_store(roles=[ROLE_POLICY])).for_session("sess-1")
+    assert R_KEY_WRONG_ROLE in state.codes
+    assert R_KEY_WRONG_ROLE in state.inadmissible
+    assert state.signatures_verified == 0
+
+
+def test_a_retired_key_still_signing_is_detected():
+    """Rotation, expressed as a window and enforced against the record."""
+    signed = sign_stream(_records(4), "stream-a", SECRET, KEY_ID)
+    state = _run(signed, keys=_store(not_after=1002.0)).for_session("sess-1")
+    assert R_KEY_EXPIRED in state.codes
+    assert R_KEY_EXPIRED in state.inadmissible
+    # The records inside the window are fine; only the ones after it are not.
+    assert state.codes[R_KEY_EXPIRED] == 1
+    assert state.signatures_verified == 4
+
+
+def test_a_key_used_before_its_window_opens_is_a_different_code():
+    signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
+    state = _run(signed, keys=_store(not_before=5000.0)).for_session("sess-1")
+    assert R_KEY_NOT_YET_VALID in state.codes
+    assert R_KEY_EXPIRED not in state.codes
+
+
+def test_a_key_with_no_window_produces_no_window_code_at_all():
+    """"This key has no window" is not a coverage gap.
+
+    Reporting it as one would put INTEGRITY_KEY_WINDOW_UNCHECKED on every
+    well-formed store in existence, which is noise that teaches operators to
+    ignore the code for the case that matters.
+    """
+    signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
+    state = _run(signed, keys=_store()).for_session("sess-1")
+    assert R_KEY_WINDOW_UNCHECKED not in state.codes
+
+
+def test_a_windowed_key_with_an_unusable_record_clock_says_it_could_not_check():
+    records = _records(3)
+    for r in records:
+        r["timestamp"] = "yesterday"
+    signed = sign_stream(records, "stream-a", SECRET, KEY_ID)
+    state = _run(signed, keys=_store(not_after=1002.0)).for_session("sess-1")
+    assert R_KEY_WINDOW_UNCHECKED in state.codes
+    assert R_KEY_WINDOW_UNCHECKED not in state.inadmissible, \
+        "could not check is not the same as failed"
+
+
+def test_the_window_is_judged_only_after_the_signature_holds():
+    """The ordering IS the argument, so it is asserted rather than assumed.
+
+    A window check reads the timestamp on the record, and that timestamp is
+    worth reading only once the signature has established the collector wrote
+    it. Here the signature is broken AND the record is outside the window: the
+    verifier must report the signature, because the clock underneath a bad
+    signature is a number the producer chose.
+    """
+    signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
+    bad = bytearray(base64.b64decode(signed[2]["integrity"]["sig"]))
+    bad[0] ^= 0x01
+    signed[2]["integrity"]["sig"] = base64.b64encode(bytes(bad)).decode("ascii")
+    state = _run(signed, keys=_store(not_after=1000.0)).for_session("sess-1")
+    assert R_SIGNATURE_INVALID in state.codes
+    assert state.codes[R_SIGNATURE_INVALID] == 1
+    # Records 0 and 1 verified and ARE outside the window, so the code is
+    # present -- but not for record 2, which never got that far.
+    assert state.codes.get(R_KEY_EXPIRED) == 1
+
+
+def test_the_verdict_records_which_key_vouched_for_a_session():
+    """The first question asked when a key turns out to be compromised."""
+    signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
+    state = _run(signed).for_session("sess-1")
+    assert state.as_dict()["signing_key_ids"] == [KEY_ID]
+
+
+# ---------------------------------------------------------------------------
+# 8. cohaera.policy_signature:1
+# ---------------------------------------------------------------------------
+
+POLICY_SECRET = bytes.fromhex(
+    "833fe62409237b9d62ec77587520911e9a759cec1d19755b7da901b96dca3d42")
+POLICY_PUBLIC = ed25519.public_key(POLICY_SECRET)
+POLICY_KEY_ID = key_id_for(POLICY_PUBLIC)
+SIGNED_AT = 1785700000
+
+
+def _policy_store(**entry) -> TrustStore:
+    spec = {"key": base64.b64encode(POLICY_PUBLIC).decode("ascii"),
+            "roles": [ROLE_POLICY]}
+    spec.update(entry)
+    return TrustStore.from_obj({"scheme": TRUST_STORE_SCHEMA,
+                               "keys": {POLICY_KEY_ID: spec}})
+
+
+def _sign_policy(artifact: str, digest: str, signed_at: int = SIGNED_AT,
+                 secret: bytes = POLICY_SECRET,
+                 key_id: str = POLICY_KEY_ID) -> PolicySignature:
+    sig = ed25519.sign(secret, policy_signing_input(artifact, digest, signed_at))
+    return PolicySignature.from_obj({
+        "scheme": POLICY_SIGNATURE_SCHEMA, "artifact": artifact,
+        "file_sha256": digest, "signed_at": signed_at, "key_id": key_id,
+        "sig": base64.b64encode(sig).decode("ascii")})
+
+
+def _artifact(tmp_path, name: str, body: str) -> tuple[Path, str]:
+    p = tmp_path / name
+    p.write_text(body, encoding="utf-8")
+    return p, file_sha256(p, 1 << 20)
+
+
+def test_a_signed_manifest_verifies(tmp_path):
+    _p, digest = _artifact(tmp_path, "manifest.json", '{"tools":{}}')
+    att = verify_policy_signature(
+        _sign_policy(POLICY_ARTIFACT_MANIFEST, digest), digest,
+        POLICY_ARTIFACT_MANIFEST, _policy_store())
+    assert att.status == P_VERIFIED
+    assert att.verified and att.key_id == POLICY_KEY_ID
+
+
+def test_editing_the_manifest_after_signing_is_detected(tmp_path):
+    """The whole point. A manifest that says an egress tool is read_only turns
+    CH02, CH03 and CH04 off for that tool without one telemetry record changing.
+    """
+    p, digest = _artifact(tmp_path, "manifest.json",
+                          '{"tools":{"send":{"effects":["egress"]}}}')
+    signature = _sign_policy(POLICY_ARTIFACT_MANIFEST, digest)
+    p.write_text('{"tools":{"send":{"effects":["read"]}}}', encoding="utf-8")
+    att = verify_policy_signature(signature, file_sha256(p, 1 << 20),
+                                  POLICY_ARTIFACT_MANIFEST, _policy_store())
+    assert att.status == P_DIGEST_MISMATCH
+    assert not att.verified
+
+
+def test_a_baseline_signature_cannot_be_presented_as_a_manifest_signature(tmp_path):
+    """Domain separation, checked rather than assumed.
+
+    Both files are signed by the same operator with the same key, so without the
+    artifact tag in the signing input AND this comparison, a real signature over
+    a baseline would verify perfectly as cover for a swapped manifest.
+    """
+    _p, digest = _artifact(tmp_path, "shared.bin", "same bytes either way")
+    signature = _sign_policy(POLICY_ARTIFACT_BASELINE, digest)
+    att = verify_policy_signature(signature, digest, POLICY_ARTIFACT_MANIFEST,
+                                  _policy_store())
+    assert att.status == P_ARTIFACT_MISMATCH
+
+
+def test_the_artifact_tag_is_inside_the_signature_not_only_beside_it(tmp_path):
+    """Rewriting the tag in the .sig file must break the signature itself.
+
+    If the tag lived only in the JSON, an attacker would edit it and the
+    comparison above would pass.
+    """
+    _p, digest = _artifact(tmp_path, "shared.bin", "same bytes either way")
+    baseline_sig = _sign_policy(POLICY_ARTIFACT_BASELINE, digest)
+    relabelled = PolicySignature.from_obj({
+        "scheme": POLICY_SIGNATURE_SCHEMA,
+        "artifact": POLICY_ARTIFACT_MANIFEST, "file_sha256": digest,
+        "signed_at": SIGNED_AT, "key_id": POLICY_KEY_ID,
+        "sig": base64.b64encode(baseline_sig.sig).decode("ascii")})
+    att = verify_policy_signature(relabelled, digest, POLICY_ARTIFACT_MANIFEST,
+                                  _policy_store())
+    assert att.status == P_INVALID
+
+
+def test_a_policy_signature_is_not_an_integrity_signature(tmp_path):
+    """Cross-protocol separation. The two signing inputs share a key type and
+    must never share a message space."""
+    _p, digest = _artifact(tmp_path, "manifest.json", "{}")
+    assert not policy_signing_input(
+        POLICY_ARTIFACT_MANIFEST, digest, SIGNED_AT).startswith(
+        INTEGRITY_SCHEMA.encode("utf-8"))
+
+
+def test_a_collector_key_cannot_sign_policy(tmp_path):
+    """The role separation, exercised.
+
+    A collector that could sign the manifest could rewrite the document saying
+    which of its own tools are consequential.
+
+    The store here HAS a policy key, so this is the security case rather than
+    the configuration one: a real signature by a key the operator trusted for
+    something else. A store with no policy key at all is a different mistake and
+    gets a different code -- see the test below.
+    """
+    _p, digest = _artifact(tmp_path, "manifest.json", "{}")
+    store = TrustStore.from_obj({"scheme": TRUST_STORE_SCHEMA, "keys": {
+        POLICY_KEY_ID: {"key": base64.b64encode(POLICY_PUBLIC).decode("ascii"),
+                        "roles": [ROLE_COLLECTOR]},
+        OTHER_KEY_ID: {"key": B64_OTHER, "roles": [ROLE_POLICY]},
+    }})
+    att = verify_policy_signature(_sign_policy(POLICY_ARTIFACT_MANIFEST, digest),
+                                  digest, POLICY_ARTIFACT_MANIFEST, store)
+    assert att.status == P_KEY_WRONG_ROLE
+
+
+def test_a_revoked_policy_key_does_not_attest(tmp_path):
+    _p, digest = _artifact(tmp_path, "manifest.json", "{}")
+    att = verify_policy_signature(_sign_policy(POLICY_ARTIFACT_MANIFEST, digest),
+                                  digest, POLICY_ARTIFACT_MANIFEST,
+                                  _policy_store(revoked_at=1.0))
+    assert att.status == P_KEY_REVOKED
+
+
+def test_an_unknown_policy_key_and_an_empty_store_read_differently(tmp_path):
+    """"I do not know that key" and "I was given no policy keys at all" are
+    different operator mistakes and lead to different fixes."""
+    _p, digest = _artifact(tmp_path, "manifest.json", "{}")
+    signature = _sign_policy(POLICY_ARTIFACT_MANIFEST, digest)
+    other = TrustStore.from_obj({"scheme": TRUST_STORE_SCHEMA, "keys": {
+        "ed25519:someone-else": {"key": B64_OTHER, "roles": [ROLE_POLICY]}}})
+    assert verify_policy_signature(signature, digest, POLICY_ARTIFACT_MANIFEST,
+                                   other).status == P_KEY_UNKNOWN
+    assert verify_policy_signature(signature, digest, POLICY_ARTIFACT_MANIFEST,
+                                   _store()).status == P_NO_KEYS
+
+
+def test_the_signature_file_is_refused_rather_than_half_loaded():
+    good = {"scheme": POLICY_SIGNATURE_SCHEMA,
+            "artifact": POLICY_ARTIFACT_MANIFEST, "file_sha256": "ab" * 32,
+            "signed_at": SIGNED_AT, "key_id": "k",
+            "sig": base64.b64encode(b"\x00" * 64).decode("ascii")}
+    PolicySignature.from_obj(good)
+    for bad in (
+        {**good, "scheme": "something.else:1"},
+        {**good, "artifact": "the_universe"},
+        {**good, "file_sha256": "ab" * 16},          # too short
+        {**good, "file_sha256": "zz" * 32},          # not hex
+        {**good, "signed_at": "1785700000"},         # a string is not a clock
+        {**good, "signed_at": True},                 # nor is a boolean
+        {**good, "key_id": ""},
+        {**good, "sig": base64.b64encode(b"\x00" * 32).decode("ascii")},
+        {**good, "sig": "!!!not base64!!!"},
+    ):
+        with pytest.raises(PolicySignatureError):
+            PolicySignature.from_obj(bad)
+
+
+def test_hashing_an_oversized_artifact_is_refused_rather_than_read(tmp_path):
+    """C4-02's lesson, applied to the attestation path: the work has to be
+    bounded by a number here, not by the size of somebody else's file."""
+    p = tmp_path / "huge.jsonl"
+    p.write_text("x" * 4096, encoding="utf-8")
+    with pytest.raises(PolicySignatureError):
+        file_sha256(p, 1024)
+
+
+# ---------------------------------------------------------------------------
+# 9. Freshness, and the replay every other check is blind to
+# ---------------------------------------------------------------------------
+
+
+def test_a_replayed_archive_is_stale_and_otherwise_perfect():
+    """The stream is genuine. That is what makes replay a different attack.
+
+    Sequence contiguous, chain intact, every signature valid -- and the records
+    are three months old, which is the only thing that gives it away.
+    """
+    signed = sign_stream(_records(4), "stream-a", SECRET, KEY_ID)
+    state = _run(signed, freshness=Freshness(max_age_s=3600.0, as_of=9_000_000.0)
+                 ).for_session("sess-1")
+    assert R_CHAIN_BROKEN not in state.codes
+    assert R_SEQUENCE_GAP not in state.codes
+    assert state.signatures_verified == 4
+    assert R_STALE in state.codes
+    assert R_STALE in state.inadmissible
+
+
+def test_a_stream_inside_the_bound_is_not_stale():
+    signed = sign_stream(_records(4), "stream-a", SECRET, KEY_ID)
+    state = _run(signed, freshness=Freshness(max_age_s=3600.0, as_of=1100.0)
+                 ).for_session("sess-1")
+    assert R_STALE not in state.codes
+    assert state.freshness_checked == 4
+
+
+def test_a_future_dated_record_is_not_reported_as_stale():
+    """Clock skew is somebody else's finding. Calling it replay would be wrong
+    in the one direction that costs an analyst their trust in the code."""
+    signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
+    state = _run(signed, freshness=Freshness(max_age_s=60.0, as_of=0.0)
+                 ).for_session("sess-1")
+    assert R_STALE not in state.codes
+
+
+def test_freshness_over_an_unsigned_chain_is_reported_as_unverifiable():
+    """A chained-but-unsigned record's timestamp is a number the producer chose,
+    so aging it would be aging the attacker's own claim.
+    """
+    signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
+    state = _run(signed, keys=TrustStore(),
+                 freshness=Freshness(max_age_s=1.0, as_of=9_000_000.0)
+                 ).for_session("sess-1")
+    assert R_STALE not in state.codes
+    assert R_FRESHNESS_UNVERIFIABLE in state.codes
+    assert R_FRESHNESS_UNVERIFIABLE not in state.inadmissible
+
+
+def test_freshness_says_nothing_when_no_bound_was_set():
+    signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
+    state = _run(signed).for_session("sess-1")
+    assert R_STALE not in state.codes
+    assert R_FRESHNESS_UNVERIFIABLE not in state.codes
+
+
+def test_coverage_states_that_replay_was_not_considered():
+    """The absence has to be SAID. An operator reading a clean CH06 contract
+    should not have to know that replay was never in scope for that run.
+    """
+    signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
+    sessions = assemble([Event(raw=r) for r in signed], keys=KEYS)
+    contract = next(c for c in coverage(sessions[0], None)["checks"]
+                    if c["check"] == CH06_INTEGRITY)
+    assert "NO_FRESHNESS_BOUND" in contract["reasons"]
+    assert any("not checked for stream replay" in a
+               for a in contract["assumptions"])
+
+
+def test_the_verdict_records_each_streams_extent_for_cross_run_comparison():
+    """Cohaera keeps no state between runs, so this is the only shape replay
+    detection can take: write down what was scored and let two verdicts differ.
+    """
+    signed = sign_stream(_records(5), "stream-a", SECRET, KEY_ID)
+    summary = _run(signed).summary()["stream_summary"]
+    assert summary[0]["stream_id"] == "stream-a"
+    assert (summary[0]["first_seq"], summary[0]["last_seq"]) == (0, 4)
+    assert summary[0]["head"]
+
+
+# ---------------------------------------------------------------------------
+# 10. The control surface: what the CLI refuses to do
+# ---------------------------------------------------------------------------
+#
+# A signature nobody acts on is decoration. These assert the three decisions the
+# CLI makes on the operator's behalf: refuse when a supplied signature fails,
+# refuse when signatures were required and are missing, and record the absence
+# honestly when neither applies.
+
+
+def _policy_fixture(tmp_path, manifest_body='{"tools":{}}'):
+    telemetry = tmp_path / "t.jsonl"
+    telemetry.write_text(json.dumps(
+        {"event_type": "tool_start", "timestamp": 1000.0, "session_id": "a",
+         "tool_name": "read_x", "span_id": "S1"}) + "\n", encoding="utf-8")
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(manifest_body, encoding="utf-8")
+    store = tmp_path / "store.json"
+    store.write_text(json.dumps({"scheme": TRUST_STORE_SCHEMA, "keys": {
+        POLICY_KEY_ID: {"key": base64.b64encode(POLICY_PUBLIC).decode("ascii"),
+                        "roles": [ROLE_POLICY]}}}), encoding="utf-8")
+    sig = tmp_path / "manifest.json.sig"
+    signature = _sign_policy(POLICY_ARTIFACT_MANIFEST,
+                             file_sha256(manifest, 1 << 20))
+    sig.write_text(json.dumps({
+        "scheme": POLICY_SIGNATURE_SCHEMA, "artifact": POLICY_ARTIFACT_MANIFEST,
+        "file_sha256": signature.file_sha256, "signed_at": signature.signed_at,
+        "key_id": signature.key_id,
+        "sig": base64.b64encode(signature.sig).decode("ascii")}),
+        encoding="utf-8")
+    return telemetry, manifest, store, sig
+
+
+def test_cli_scores_a_signed_manifest_and_records_the_attestation(tmp_path, capsys):
+    telemetry, manifest, store, sig = _policy_fixture(tmp_path)
+    assert cli_main(["score", str(telemetry), "--tool-manifest", str(manifest),
+                     "--tool-manifest-sig", str(sig),
+                     "--trust-store", str(store)]) == EXIT_OK
+    prov = json.loads(capsys.readouterr().out.strip())["data"]["provenance"]
+    att = next(a for a in prov["policy_attestations"]
+               if a["artifact"] == POLICY_ARTIFACT_MANIFEST)
+    assert att["verified"] and att["key_id"] == POLICY_KEY_ID
+    assert prov["trust_store"]["policy_key_count"] == 1
+
+
+def test_cli_refuses_to_score_when_a_supplied_signature_does_not_hold(tmp_path):
+    """The one case where carrying on is worse than never having asked."""
+    telemetry, manifest, store, sig = _policy_fixture(tmp_path)
+    manifest.write_text('{"tools":{"send":{"effects":["read"]}}}',
+                        encoding="utf-8")
+    assert cli_main(["score", str(telemetry), "--tool-manifest", str(manifest),
+                     "--tool-manifest-sig", str(sig),
+                     "--trust-store", str(store)]) == EXIT_ERROR
+
+
+def test_cli_records_an_unsigned_manifest_as_unsigned(tmp_path, capsys):
+    """POLICY_SIGNATURE_ABSENT is the value nearly every deployment carries, and
+    it has to be in the verdict rather than implied by silence."""
+    telemetry, manifest, _store, _sig = _policy_fixture(tmp_path)
+    assert cli_main(["score", str(telemetry),
+                     "--tool-manifest", str(manifest)]) == EXIT_OK
+    prov = json.loads(capsys.readouterr().out.strip())["data"]["provenance"]
+    assert all(not a["verified"] for a in prov["policy_attestations"])
+    assert {a["status"] for a in prov["policy_attestations"]} == {
+        "POLICY_SIGNATURE_ABSENT"}
+
+
+def test_cli_require_signed_policy_refuses_an_unsigned_manifest(tmp_path):
+    telemetry, manifest, store, _sig = _policy_fixture(tmp_path)
+    assert cli_main(["score", str(telemetry), "--tool-manifest", str(manifest),
+                     "--trust-store", str(store),
+                     "--require-signed-policy"]) == EXIT_ERROR
+
+
+def test_cli_require_signed_policy_passes_when_everything_is_signed(tmp_path):
+    telemetry, manifest, store, sig = _policy_fixture(tmp_path)
+    assert cli_main(["score", str(telemetry), "--tool-manifest", str(manifest),
+                     "--tool-manifest-sig", str(sig),
+                     "--trust-store", str(store),
+                     "--require-signed-policy"]) == EXIT_OK
+
+
+def test_cli_still_accepts_the_superseded_collector_keys_flag(tmp_path):
+    """Deployments that adopted P1.1 pass --collector-keys at a
+    cohaera.collector_keys:1 file. Both halves keep working."""
+    telemetry, _m, _s, _sig = _policy_fixture(tmp_path)
+    legacy = tmp_path / "keys.json"
+    legacy.write_text(json.dumps({"scheme": "cohaera.collector_keys:1",
+                                  "keys": {KEY_ID: B64}}), encoding="utf-8")
+    assert cli_main(["score", str(telemetry),
+                     "--collector-keys", str(legacy)]) == EXIT_OK
+
+
+def test_cli_freshness_flags_reach_the_verdict(tmp_path, capsys):
+    telemetry, _m, _s, _sig = _policy_fixture(tmp_path)
+    assert cli_main(["score", str(telemetry), "--evidence-max-age", "3600",
+                     "--evidence-as-of", "1785700000"]) == EXIT_OK
+    prov = json.loads(capsys.readouterr().out.strip())["data"]["provenance"]
+    assert prov["evidence_freshness"] == {
+        "max_age_s": 3600.0, "as_of": 1785700000.0, "enabled": True}
+
+
+# ---------------------------------------------------------------------------
+# 11. The receipt adapters
+# ---------------------------------------------------------------------------
+#
+# CH07's schema and binding were built with nothing to feed them. These assert
+# the producer-side half against the response shapes real providers return, and
+# assert the property that makes the whole mechanism worth anything: an adapter
+# that cannot find an identifier emits NOTHING rather than inventing one.
+
+BIND = {"span_id": "S1", "tool_id": "s3_object_put",
+        "arg_digest": arg_digest({"bucket": "b", "key": "k"})}
+
+
+@pytest.mark.parametrize("authority,response,expected", [
+    ("aws.s3.put_object", {"VersionId": "3sL4kqtJlcpXroDTDmJ"},
+     "3sL4kqtJlcpXroDTDmJ"),
+    ("aws.s3.put_object",
+     {"ResponseMetadata": {"HTTPHeaders": {"x-amz-version-id": "abc123"}}},
+     "abc123"),
+    ("gcp.storage.upload", {"generation": 1785700000123456}, "1785700000123456"),
+    ("azure.blob.upload", {"version_id": "2026-08-08T00:00:00.0000000Z"},
+     "2026-08-08T00:00:00.0000000Z"),
+    ("aws.ses.send_email", {"MessageId": "0100018f-1234"}, "0100018f-1234"),
+    ("sendgrid.send", {"headers": {"X-Message-Id": "xyz.filterdrecv"}},
+     "xyz.filterdrecv"),
+    ("stripe.charge", {"id": "ch_3Ov", "object": "charge"}, "ch_3Ov"),
+    ("jira.create_issue", {"key": "OPS-4412", "id": "10042"}, "OPS-4412"),
+    ("servicenow.create_record", {"result": {"sys_id": "9f2c4e6a8b0d"}},
+     "9f2c4e6a8b0d"),
+    ("kubernetes.apply",
+     {"metadata": {"uid": "u-1", "resourceVersion": "88213"}}, "88213"),
+    ("aws.cloudtrail.event", {"eventID": "e-9f2c"}, "e-9f2c"),
+    ("github.create_pull_request", {"node_id": "PR_kwDO", "number": 6},
+     "PR_kwDO"),
+    ("postgres.commit", {"commit_lsn": "0/16B3748"}, "0/16B3748"),
+])
+def test_each_adapter_finds_the_identifier_the_provider_returned(
+        authority, response, expected):
+    receipt = adapt(authority, response, BIND)
+    assert receipt["identifier"] == expected
+    parsed, codes = EffectReceipt.parse(receipt)
+    assert parsed is not None and codes == (), \
+        "an adapter must emit something the verifier accepts"
+    assert parsed.binding.arg_digest == BIND["arg_digest"]
+
+
+def test_an_adapter_with_nothing_to_report_emits_nothing():
+    """The property the whole mechanism rests on.
+
+    Inventing an identifier -- a generated UUID, a hash of the request -- would
+    produce a receipt from a namespace the AGENT controls, which is the one
+    property that made a receipt worth more than the boolean it replaces.
+    NO_EFFECT_RECEIPT is the correct output for a tool with nothing to surface.
+    """
+    for response in ({}, {"VersionId": ""}, {"VersionId": None},
+                     {"VersionId": True}, {"ResponseMetadata": {}}, "not a dict"):
+        assert adapt("aws.s3.put_object", response, BIND) is None
+
+
+def test_the_mutation_identifier_wins_over_the_object_identifier():
+    """Kubernetes returns both, and only one of them identifies THIS write.
+
+    `uid` is stable for the object's whole life, so a receipt carrying it could
+    be presented for any later mutation of the same object.
+    """
+    receipt = adapt("kubernetes.apply",
+                    {"metadata": {"uid": "u-1", "resourceVersion": "88213"}},
+                    BIND)
+    assert receipt["kind"] == "resource_version"
+    assert receipt["identifier"] == "88213"
+
+
+def test_header_casing_is_not_something_an_adapter_has_an_opinion_about():
+    assert adapt("sendgrid.send", {"headers": {"x-message-id": "lower"}},
+                 BIND)["identifier"] == "lower"
+
+
+def test_an_unknown_authority_is_an_error_not_a_silent_none():
+    """A typo in an authority name must not read as "this call had no receipt"."""
+    with pytest.raises(ReceiptAdapterError):
+        adapt("aws.s3.put_objekt", {"VersionId": "v"}, BIND)
+
+
+def test_an_adapted_receipt_binds_and_contradicts_end_to_end():
+    """The producer half meeting the verifier half, through CH07.
+
+    A call whose telemetry reports failure while carrying an adapter-produced
+    receipt bound to it is the one detection in this repository that catches a
+    lying emitter rather than routing around it.
+    """
+    args = {"bucket": "audit-logs", "key": "2026/08/report.csv"}
+    receipt = adapt("aws.s3.put_object", {"VersionId": "v-9f2c"},
+                    binding_for("S1", "s3_object_put", args))
+    events = [
+        Event(raw={"event_type": "tool_start", "timestamp": 1000.0,
+                   "session_id": "a", "span_id": "S1",
+                   "tool_name": "s3_object_put",
+                   "data": {"action": "invoke_tool", "tool_args": args}}),
+        # tool_error, not tool_end: the telemetry says this call did NOT take
+        # effect, and it carries a receipt from the authority saying it did.
+        Event(raw={"event_type": "tool_error", "timestamp": 1001.0,
+                   "session_id": "a", "span_id": "S1",
+                   "tool_name": "s3_object_put",
+                   "data": {"action": "invoke_tool", "tool_args": args,
+                            "effect_receipt": receipt}}),
+    ]
+    manifest = CapabilityManifest.from_obj(
+        {"tools": {"s3_object_put": {"effects": ["write"], "reversible": False}}})
+    session = assemble(events, manifest=manifest)[0]
+    assert [f.check for f in ch07_effect_contradiction(session)] == [
+        CH07_CONTRADICTED]
+
+
+def test_a_receipt_bound_to_different_arguments_does_not_contradict_quietly():
+    """The guard on the detection above. A receipt copied from a real call onto
+    a different one must be reported as unbound rather than counted."""
+    real = binding_for("S1", "s3_object_put", {"bucket": "b", "key": "real"})
+    receipt = adapt("aws.s3.put_object", {"VersionId": "v-9f2c"}, real)
+    args = {"bucket": "b", "key": "substituted"}
+    events = [
+        Event(raw={"event_type": "tool_start", "timestamp": 1000.0,
+                   "session_id": "a", "span_id": "S1",
+                   "tool_name": "s3_object_put",
+                   "data": {"action": "invoke_tool", "tool_args": args}}),
+        # tool_error, not tool_end: the telemetry says this call did NOT take
+        # effect, and it carries a receipt from the authority saying it did.
+        Event(raw={"event_type": "tool_error", "timestamp": 1001.0,
+                   "session_id": "a", "span_id": "S1",
+                   "tool_name": "s3_object_put",
+                   "data": {"action": "invoke_tool", "tool_args": args,
+                            "effect_receipt": receipt}}),
+    ]
+    session = assemble(events)[0]
+    assert [f.check for f in ch07_effect_contradiction(session)] == [CH07_UNBOUND]

@@ -7,13 +7,15 @@
 
 **Status: built.** This document was written as a design, before any of it
 existed, because the mistake this project is most exposed to is shipping a field
-that looks like a control — the reason the capability manifest has no
-`signature` field today is that nothing would verify one, and a signature nobody
-checks is worse than no signature.
+that looks like a control. When it was written the capability manifest had no
+`signature` field, for exactly that reason: nothing would have verified one, and
+a signature nobody checks is worse than no signature. Stage 4 built the thing
+that verifies it, so §2b is the field, arriving after the verifier rather than
+before it.
 
 It is kept as written, with the implementation notes folded in, so that the
 difference between what was planned and what was built is readable rather than
-tidied away. Four things changed on contact with the code and each is marked
+tidied away. Six things changed on contact with the code and each is marked
 **BUILT** or **CHANGED** at the point it applies:
 
 | Where | Change | Why |
@@ -22,11 +24,15 @@ tidied away. Four things changed on contact with the code and each is marked
 | §2 | Two codes added: `INTEGRITY_EVIDENCE_PARTIAL` and `INTEGRITY_RECORDS_REORDERED` | The first closes the obvious way round a chain — strip the sidecar from the record you edited (EVASION.md E21). The second distinguishes the conclusion the verifier reached, which the design said it must and did not give a code for |
 | §4 | Enforcement may also be declared in the **capability manifest**, and the manifest wins | The design read `enforcement` off the event only. That field suppresses a finding and arrives in band, so an agent that wanted CH04 quiet would send it. EVASION.md E20 |
 | §4 | CH04's blocking case is a **new check ID**, not a rewording of the old one | Renaming `CH04_guardrail_bypass_completed` would silently change what every existing Sigma rule matches |
+| §2 keys | The key file became a **trust store** with roles, windows and revocation (§2a), and the two policy files got signatures of their own (§2b) | "Rotation, revocation and multi-collector fleets need more than a file" was written here three times as a known gap. It was also what `capabilities.py` said manifest signing was blocked on, so the two were one piece of work |
+| §2 | A **freshness bound** (§2c), because every check in §2 passes on a replayed stream | A captured stream re-fed next month has a contiguous sequence, an intact chain and valid signatures — it really was written by that collector. Replay is a different attack from tampering and nothing here saw it |
 
 Implementation is in [`src/cohaera/evidence.py`](../src/cohaera/evidence.py) and
-[`src/cohaera/ed25519.py`](../src/cohaera/ed25519.py); the reference producer is
-[`tools/collector_sign.py`](../tools/collector_sign.py); the tests are
-[`tests/test_evidence.py`](../tests/test_evidence.py). What it measured is §8.
+[`src/cohaera/ed25519.py`](../src/cohaera/ed25519.py); the reference producers are
+[`tools/collector_sign.py`](../tools/collector_sign.py) (telemetry) and
+[`tools/policy_sign.py`](../tools/policy_sign.py) (manifest and baseline); the
+tests are [`tests/test_evidence.py`](../tests/test_evidence.py). What it measured
+is §8, and §9 is what stage 4 is still not.
 
 Three external reviews have put the same item at the top and it has been open
 each time: *independent effect receipts, collector-side signing and hash
@@ -159,6 +165,135 @@ not *this telemetry is genuine*. Rotation, revocation and multi-collector fleets
 need more than a file, and shipping the file first is defensible only if the
 verdict says which of those it is not doing.
 
+**BUILT, as `cohaera.trust_store:1`.** The flat map of key id to bytes became a
+document where a key carries four more things, and each one is a deployment
+rather than a hypothetical: `roles` (a collector key attests telemetry, an
+operator key attests policy, and one key doing both hands the watched thing
+authority over the rules), `not_before`/`not_after` (rotation), `revoked_at`
+(compromise), and `replaces` (succession, so an auditor can reconstruct a
+rotation rather than infer it). `cohaera.collector_keys:1` still loads, as
+collector-role keys with no window, because deployments wrote one.
+
+Two decisions in there are worth arguing with, so §2a states them rather than
+leaving them in a docstring. What it is still **not** is enumerated on
+`TrustStore` and repeated in §9: no online revocation check, no key
+transparency, no quorum, no hardware binding, no automatic anything.
+
+---
+
+## 2a. What a validity window is judged against, and why revocation is not
+
+A window check needs a clock, and the only clock available offline is the one
+written on the record — which is producer-controlled, and this codebase treats
+producer-controlled fields as claims rather than facts everywhere else. So the
+window check has to justify itself.
+
+It is sound, and only in one position. The chain covers the record including its
+timestamp; the signature covers the chain; and the window is evaluated **only
+after that signature verifies**. The key vouches for the timestamp, and a key
+that is not compromised does not lie about when it signed. `_check_signature`
+enforces the ordering and `tests/test_evidence.py` asserts it: a record with a
+broken signature *and* a timestamp outside the window reports the signature,
+because the clock underneath a bad signature is a number the producer chose.
+
+Revocation breaks exactly that premise, and so it is treated differently.
+Revoking a key is the operator stating that somebody else holds it, so a
+signature made by that somebody proves nothing about the timestamp underneath —
+they would simply write a date inside the window. Revocation is therefore **not
+evaluated against any clock**: a key with `revoked_at` set is refused for every
+record, whatever the record claims.
+
+The cost is real and is not hidden. An archive legitimately signed last month by
+a key revoked yesterday can no longer be verified, because separating it from a
+forgery needs a trusted timestamp and Cohaera has none. An operator who means
+*this key was good until Tuesday* is describing rotation and should write
+`not_after`, which **is** judged against the record.
+
+The same three-step ordering — store first, signature second, clock last —
+governs `cohaera.policy_signature:1`, where the attested clock is the `signed_at`
+inside the signature rather than a timestamp on a record.
+
+---
+
+## 2b. P1.4 — Signing the two files that decide how records are read
+
+**Threat closed:** editing the capability manifest or the baseline.
+**Threat not closed:** an operator who signs the wrong file, and anyone who
+controls what goes *into* the baseline before it is signed.
+
+P1.1 signed the stream and left both files that decide how the stream is *read*
+unsigned, which is the wrong way round for at least one of them:
+
+| File | What editing it buys | Catalogued as |
+|---|---|---|
+| capability manifest | An egress tool declared `read_only`. CH02, CH03 and CH04 all go quiet on it, and not one telemetry record changed | SEC-03's cousin |
+| baseline | CH01 is the only detector here that **learns**. Add sessions to the baseline and it learns that the attack is normal | [E03](../EVASION.md) |
+
+```json
+{
+  "scheme":      "cohaera.policy_signature:1",
+  "artifact":    "capability_manifest",
+  "file_sha256": "7c9e2b…",
+  "signed_at":   1785700000,
+  "key_id":      "ed25519:4f1a…",
+  "sig":         "base64(Ed25519 over scheme ‖ artifact ‖ file_sha256 ‖ signed_at)"
+}
+```
+
+Detached, over the file's exact bytes, for the same reason `capabilities.py`
+keeps *both* digests: a signature over parsed semantics verifies happily after an
+edit that adds a field this version does not read, and *did this file change at
+all* is what a tamper signal has to answer strictly. Detached also leaves the
+manifest a plain JSON document every other tool can read.
+
+Domain separated twice. The scheme prefix stops a policy signature being
+presented as a `cohaera.integrity:1` signature or the reverse; the artifact tag
+stops a signature over a baseline being presented as cover for a swapped
+manifest. The tag is *inside* the signed message as well as beside it, so
+relabelling the `.sig` file breaks the signature rather than the comparison.
+
+`--tool-manifest-sig` and `--baseline-sig` verify it. A supplied signature that
+fails is a **refusal to score**, not a warning, because an operator who passed
+the flag asked for the file to be checked. `--require-signed-policy` turns the
+option into a control: refuse to run unless every supplied policy file carries a
+signature that held. Off by default, because on by default would break every
+existing deployment on the day it shipped.
+
+---
+
+## 2c. P1.5 — Freshness, and the replay every other check is blind to
+
+**Threat closed:** re-feeding a captured stream from outside the bound.
+**Threat not closed:** re-feeding one from inside it.
+
+`INTEGRITY_SEQUENCE_REPLAY` catches a record replayed inside one run, because its
+sequence position is already filled. It says nothing about the other replay:
+capture a signed stream, keep it, and re-feed the whole thing next month. Every
+check in §2 passes on that input — contiguous sequence, intact chain, valid
+signatures — and they pass *because the stream really was written by that
+collector*. It is just not this month's stream. That is what makes replay a
+different attack from tampering.
+
+The anchor is the same one §2a justifies: a replayer can re-send the bytes and
+cannot re-date them, so `--evidence-max-age` ages records **whose signature
+verified**, measured from `--evidence-as-of` (defaulting to the wall clock).
+A chained-but-unsigned record's timestamp is a number the producer chose, and
+aging it would be aging the attacker's own claim, so a session with no verified
+signature reports `INTEGRITY_FRESHNESS_UNVERIFIABLE` rather than *fresh*.
+
+Off by default, and coverage says `NO_FRESHNESS_BOUND` when it is off, because
+the honest default is unknowable: an hour is right for a live tail and wrong for
+a nightly batch, and a bound guessed wrong turns every scheduled run critical.
+
+What remains open is replay **inside** the window, which needs memory of which
+streams have already been scored — a ledger surviving between runs, and Cohaera
+keeps no state between runs at all. Instead every verdict records each stream's
+identity and extent (`collector_streams`: stream id, first and last sequence,
+final chain head), so two runs that scored the same stream are distinguishable by
+comparing verdicts, or by a SIEM rule over the field, which is a place state does
+survive. Evidence after the fact, not prevention — the same distinction this
+document keeps drawing.
+
 ---
 
 ## 3. P1.2 — Independent effect receipts
@@ -286,8 +421,9 @@ it first even though it is listed last.
 |---|---|---|---|
 | **0** | Freeze the three schemas above. Parse and verify what is present; report absence through coverage. No new required fields | Cohaera | **BUILT.** Producers emitting none of it see no change except honest coverage codes |
 | **1** | Approval binding, and CH04 split into bypass / continuation on declared `enforcement` | Policy engine | **BUILT**, plus the manifest override E20 forced |
-| **2** | Collector chain and signatures, CH06, `--collector-keys` | Collector (observra) | **BUILT.** Key *distribution* is still a file, and still says so |
+| **2** | Collector chain and signatures, CH06, `--collector-keys` | Collector (observra) | **BUILT.** Key *distribution* was a flat file; stage 4 replaced it |
 | **3** | Effect receipts, CH07 contradiction detection | Every tool adapter, incrementally | **BUILT.** The slow part is unchanged: every integration, one at a time |
+| **4** | Trust store (§2/§2a), signed manifest and baseline (§2b), freshness (§2c) | Operator | **BUILT.** §9 lists what the store still is not |
 
 Stage 0 was deliberately the largest commitment and the smallest change: the
 promise that the fields mean something, made before anyone emits them. Nothing
@@ -296,12 +432,16 @@ working — a stream carrying none of these three schemas scores exactly as it d
 before, and says `NO_INTEGRITY_EVIDENCE`, `NO_APPROVAL_EVIDENCE` and
 `NO_EFFECT_RECEIPT` instead of quietly reporting that it looked.
 
-The one thing still outstanding from this document is **key distribution**.
-`--collector-keys` reads a JSON file the operator names, which is the same trust
-model the capability manifest has. Rotation, revocation and multi-collector
-fleets need more than a file, and the verdict records the key file's digests so
-that two runs disagreeing about which keys were trusted are distinguishable
-after the fact. That is honest, and it is not a trust store.
+Key distribution was the one thing outstanding from this document, and stage 4
+closed it as far as an offline verifier can. `--trust-store` reads a
+`cohaera.trust_store:1` document: which keys, authorised for what, valid when,
+revoked or not. That is enough to sign the manifest and the baseline, which is
+what `capabilities.py` said signing was blocked on.
+
+It is still a file the operator names, which is still the capability manifest's
+trust model. Section 9 says what that leaves open, and it is a list rather than a
+sentence because the gap between this and a trust store somebody runs a fleet on
+is exactly the sort of thing a green tick hides.
 
 ---
 
@@ -408,3 +548,38 @@ deployed — the agent can reach the signing key, and a perfectly verified chain
 is a perfectly verified chain of whatever the agent chose to say. CH06's
 coverage contract states that as an assumption on every session it evaluates,
 rather than letting a green tick imply otherwise.
+
+---
+
+## 9. What the trust store is not
+
+Stage 4 replaced a flat key file with something that can express rotation and
+revocation. It did not build a PKI, and the difference matters most to whoever
+reads a verdict and concludes that the keys were fine.
+
+- **No online status check.** No OCSP, no CRL fetch, no directory lookup, because
+  Cohaera is offline by construction. A key revoked five minutes ago is revoked
+  here only once somebody edits the file and re-runs.
+- **No key transparency.** Nothing proves the store you loaded is the store your
+  organisation published. Two hosts can hold different files and both produce
+  confident verdicts. The pair of digests in provenance makes that *detectable*
+  by comparing verdicts after the fact; it does not prevent it.
+- **No quorum, no threshold.** One signature is the whole decision, so one
+  compromised key is a full compromise of whatever it was authorised for.
+- **No hardware binding.** Nothing establishes that a private key lives in an HSM
+  rather than in a file beside the collector — and where the collector runs
+  in-process with the agent, the agent can read it, which is the deployment §2
+  says gains nothing from any of this.
+- **No automatic rotation.** `not_after` and `replaces` let an operator *describe*
+  a rotation they performed. Nothing performs one. The store does report the
+  failure that actually happens — a key superseded by a live one and left with no
+  `not_after` and no `revoked_at`, so the rotation exists in the file and not in
+  the verifier — as `TRUST_STORE_SUPERSEDED_KEY_STILL_OPEN`.
+- **No trusted clock.** Everything time-dependent here rests on a timestamp some
+  key signed. §2a is the argument for why that is admissible for windows and
+  freshness and inadmissible for revocation; there is no fourth option in which
+  Cohaera knows what time it is in a way an attacker cannot influence.
+- **Signing the baseline is not the same as trusting it.** A signature proves the
+  file was not edited after the operator signed it. It says nothing about what
+  went into it, so E03's other half — poisoning the sessions *before* the
+  baseline is assembled — is untouched and stays open.
