@@ -1,0 +1,49 @@
+name: Evasion
+description: A way to defeat one of Cohaera's checks
+labels: ["evasion"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        These are welcome, and one with no fix attached is still valuable.
+        EVASION.md is a catalogue of what defeats this detector and
+        tests/test_evasion.py asserts those evasions STILL WORK -- so a new
+        entry is a contribution, not a bug report to be triaged away.
+        Check the catalogue first; several near-misses are already listed.
+  - type: textarea
+    id: technique
+    attributes:
+      label: The technique
+      description: What the agent or attacker does, in one paragraph.
+    validations:
+      required: true
+  - type: input
+    id: check
+    attributes:
+      label: Which check it defeats
+      description: "CH01-CH07, or 'coverage' if it makes a blind spot look clean."
+    validations:
+      required: true
+  - type: textarea
+    id: construction
+    attributes:
+      label: A session that demonstrates it
+      description: >-
+        Ideally a `test_evasion_*` function in the style of the existing ones:
+        build the session, assert nothing fires.
+      render: python
+  - type: dropdown
+    id: closable
+    attributes:
+      label: Do you think it is closable at this layer?
+      description: >-
+        Cohaera reads telemetry the observed agent chose to emit. Some evasions
+        are not closable here and are catalogued rather than fixed; saying which
+        you think this is helps.
+      options:
+        - Closable -- Cohaera has the evidence and does not use it
+        - Closable only with new evidence from the producer
+        - Not closable at this layer
+        - Not sure
+    validations:
+      required: true

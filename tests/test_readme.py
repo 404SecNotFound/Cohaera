@@ -97,3 +97,55 @@ def test_only_an_exact_closed_marker_counts_as_closed():
     assert not (closed & partial)
     assert readme_facts.count_working_evasions() == (
         readme_facts.count_constructed_evasions() - len(closed))
+
+
+# ---------------------------------------------------------------------------
+# COH-R19: the release surface
+# ---------------------------------------------------------------------------
+#
+# A private repository with no governance files cannot become a project anybody
+# else contributes to, and the sixth review scored that 2/10. These are cheap to
+# add and cheap to delete by accident, so they are asserted like anything else
+# this project publishes.
+
+REPO = Path(__file__).resolve().parent.parent
+
+_REQUIRED_DOCS = {
+    "SECURITY.md": "how to report a vulnerability privately",
+    "CONTRIBUTING.md": "the standards a change is held to",
+    "CODE_OF_CONDUCT.md": "conduct, and its enforcement route",
+    "CHANGELOG.md": "what changed, and the false-positive rate each release",
+    "CITATION.cff": "how to cite this in academic work",
+    "LICENSE": "the licence",
+    ".github/CODEOWNERS": "who reviews the files a mistake hides in",
+    ".github/pull_request_template.md": "the evidence a change has to bring",
+    ".github/ISSUE_TEMPLATE/defect.yml": "a defect form that asks for a repro",
+    ".github/ISSUE_TEMPLATE/evasion.yml": "an evasion form, because those are "
+                                          "contributions rather than bugs",
+    ".github/ISSUE_TEMPLATE/config.yml": "the pointer away from public issues "
+                                         "for security reports",
+}
+
+
+def test_the_release_surface_exists():
+    missing = [f"{name} ({why})" for name, why in _REQUIRED_DOCS.items()
+               if not (REPO / name).is_file()]
+    assert not missing, "missing release surface:\n  " + "\n  ".join(missing)
+
+
+def test_the_release_surface_is_not_a_stub():
+    """A placeholder file satisfies a checklist and helps nobody."""
+    thin = [name for name in _REQUIRED_DOCS
+            if len((REPO / name).read_text(encoding="utf-8").split()) < 60]
+    assert not thin, f"suspiciously short for what they promise: {thin}"
+
+
+def test_security_reporting_never_points_at_a_public_issue():
+    """The one thing these files must not get wrong. A security policy that
+    routes a report into a public tracker publishes the vulnerability."""
+    config = (REPO / ".github/ISSUE_TEMPLATE/config.yml").read_text(encoding="utf-8")
+    assert "blank_issues_enabled: false" in config, (
+        "a blank issue bypasses the forms, including the security routing")
+    assert "security/advisories/new" in config
+    security = (REPO / "SECURITY.md").read_text(encoding="utf-8")
+    assert "private vulnerability reporting" in security.lower()

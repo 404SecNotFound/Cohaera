@@ -9,7 +9,7 @@
 
 Cohaera is a **research prototype**. It has never been run against real agent
 traffic, its numbers come from a synthetic corpus written by its own author, and
-[EVASION.md](EVASION.md) catalogues seventeen ways to defeat its checks, sixteen
+[EVASION.md](EVASION.md) catalogues 20 constructed ways to defeat its checks, 19
 of which currently work.
 
 The single most important thing to know is not a vulnerability, it is a design

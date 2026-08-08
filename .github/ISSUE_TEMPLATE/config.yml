@@ -1,0 +1,13 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/404SecNotFound/Cohaera/security/advisories/new
+    about: >-
+      Do not open a public issue. Use private vulnerability reporting. Read
+      SECURITY.md first: "the observed agent can lie to you" is a documented
+      design boundary, not a vulnerability.
+  - name: Question about a published number
+    url: https://github.com/404SecNotFound/Cohaera/blob/main/eval/EVALUATION-CARD.md
+    about: >-
+      The evaluation card is generated and states its own limitations,
+      including the false-positive rate and what the corpus cannot measure.

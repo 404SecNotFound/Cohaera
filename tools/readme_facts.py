@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Derive the counted claims in README.md and EVASION.md, and check them.
+"""Derive the counted claims in README.md, EVASION.md, SECURITY.md, CHANGELOG.md.
 
 C4-11. The README said "Tests, 188 passing" against a tree with 197, and listed
 "CH02 semantic matching" twice in the same roadmap. Neither is dangerous on its
@@ -39,6 +39,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 README = REPO / "README.md"
 EVASION = REPO / "EVASION.md"
+SECURITY = REPO / "SECURITY.md"
+CHANGELOG = REPO / "CHANGELOG.md"
 SIGMA = REPO / "content" / "sigma"
 CHECKS = REPO / "src" / "cohaera" / "checks.py"
 
@@ -295,6 +297,24 @@ CLAIMS = (
           count_constructed_evasions),
     Claim("README constructed evasions", README,
           re.compile(r"(\d+) constructed evasions"), count_constructed_evasions),
+    # SECURITY.md carried the same two numbers in words -- "seventeen ways ...
+    # sixteen of which" -- against a tree with twenty and nineteen. Words are
+    # why it was not caught: nothing here can check a claim spelled out in
+    # prose, so the sentence now uses digits and joins the table. The lesson is
+    # the C4-11 one for the third time: a number in a document that nothing
+    # derives is a number that is already wrong.
+    Claim("SECURITY.md constructed evasions", SECURITY,
+          re.compile(r"catalogues (\d+) constructed ways"),
+          count_constructed_evasions),
+    Claim("CHANGELOG constructed evasions", CHANGELOG,
+          re.compile(r"\*\*(\d+) constructed evasions are catalogued"),
+          count_constructed_evasions),
+    Claim("CHANGELOG working evasions", CHANGELOG,
+          re.compile(r"constructed evasions are catalogued and (\d+) still work"),
+          count_working_evasions),
+    Claim("SECURITY.md working evasions", SECURITY,
+          re.compile(r"catalogues \d+ constructed ways to defeat its checks,\s+(\d+)\s+of which currently work"),
+          count_working_evasions),
     # \s+ rather than a literal space: these sentences are hard-wrapped prose and
     # a claim that stops matching when somebody rewraps a paragraph is a claim
     # that silently stops being checked.
