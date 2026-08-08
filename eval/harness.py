@@ -36,6 +36,7 @@ THREE REGIMES, AND WHY EACH ONE IS HERE
 
 from __future__ import annotations
 
+import base64
 import json
 import random
 import sys
@@ -46,9 +47,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cohaera import ed25519
 from cohaera.capabilities import EMPTY_MANIFEST, CapabilityManifest
 from cohaera.checks import SequenceGrammar, run_all
-from cohaera.evidence import INTEGRITY_FIELD, body_digest, chain_step
+from cohaera.evidence import (
+    EMPTY_STORE,
+    INTEGRITY_FIELD,
+    TrustStore,
+    body_digest,
+    chain_step,
+    signing_input,
+)
 from cohaera.identity import Correlator
 from cohaera.ingest import assemble
 from cohaera.limits import DEFAULT_LIMITS, Limits
@@ -319,7 +328,22 @@ def _rechain(records: list[dict]) -> list[dict]:
     records were DELETED at generation time still shows its gap. Only the chain
     is recomputed, and only for a condition that has already modified the
     stream on purpose.
+
+    THE SIGNATURE IS REBUILT TOO, and for exactly the same reason one layer up.
+    A signature covers the chain head, so recomputing the chain and leaving the
+    old signature in place would have made every signed session in this
+    condition report INTEGRITY_SIGNATURE_INVALID -- the same false-positive
+    cascade the chain rebuild exists to prevent, arriving one layer later and
+    looking like a cryptographic finding instead of a harness artifact.
+
+    Re-signing is only defensible because these are the corpus's own published
+    keys, signing the corpus's own synthetic stream, and because the
+    counterfactual collector would have signed the records that agent actually
+    wrote. The key used is the one the record was ALREADY signed by, so the
+    rotation and the revocation this condition is measuring are preserved
+    exactly -- the harness does not get to decide which key attested anything.
     """
+    secrets = {key_id: seed for seed, _public, key_id in gen.EVAL_KEYS.values()}
     out = []
     prev = None
     for record in records:
@@ -333,13 +357,18 @@ def _rechain(records: list[dict]) -> list[dict]:
         body = {k: v for k, v in record.items() if k != INTEGRITY_FIELD}
         prev = sidecar["chain"] = chain_step(sidecar.get("prev") or "",
                                              body_digest(body))
+        secret = secrets.get(sidecar.get("key_id"))
+        if secret is not None and sidecar.get("sig") is not None:
+            sidecar["sig"] = base64.b64encode(ed25519.sign(
+                secret, signing_input(sidecar["stream_id"], sidecar["seq"],
+                                      prev))).decode("ascii")
         out.append({**body, INTEGRITY_FIELD: sidecar})
     return out
 
 
 def _sessions_for(rows: list[Labelled], manifest: CapabilityManifest,
-                  limits: Limits, strip_reversible: bool = False
-                  ) -> dict[str, Session]:
+                  limits: Limits, strip_reversible: bool = False,
+                  store: TrustStore = EMPTY_STORE) -> dict[str, Session]:
     """Assemble each labelled row into a Cohaera Session, keyed by session_id.
 
     Assembled one row at a time on purpose. The corpus supplies a session_id per
@@ -355,7 +384,8 @@ def _sessions_for(rows: list[Labelled], manifest: CapabilityManifest,
             raws = _rechain(raws)
         events = [Event(raw=r, limits=limits) for r in raws]
         sessions = assemble(events, limits=limits, manifest=manifest,
-                            correlator=Correlator(b"eval", limits=limits))
+                            correlator=Correlator(b"eval", limits=limits),
+                            keys=store)
         if len(sessions) != 1:
             raise AssertionError(
                 f"{row.session_id}: assembled into {len(sessions)} sessions, so "
@@ -365,20 +395,22 @@ def _sessions_for(rows: list[Labelled], manifest: CapabilityManifest,
 
 
 def fit_grammar(train: list[Labelled], manifest: CapabilityManifest,
-                limits: Limits, strip_reversible: bool = False) -> SequenceGrammar:
+                limits: Limits, strip_reversible: bool = False,
+                store: TrustStore = EMPTY_STORE) -> SequenceGrammar:
     """Fit the benign sequence grammar on the training side's BENIGN sessions."""
     benign = [r for r in train if not r.is_attack]
     sessions = list(_sessions_for(benign, manifest, limits,
-                                  strip_reversible).values())
+                                  strip_reversible, store).values())
     return SequenceGrammar().fit(sessions)
 
 
 def score(test: list[Labelled], grammar: SequenceGrammar | None,
           manifest: CapabilityManifest,
           limits: Limits = DEFAULT_LIMITS,
-          strip_reversible: bool = False) -> list[Outcome]:
+          strip_reversible: bool = False,
+          store: TrustStore = EMPTY_STORE) -> list[Outcome]:
     """Run every check over the test side and record what happened."""
-    sessions = _sessions_for(test, manifest, limits, strip_reversible)
+    sessions = _sessions_for(test, manifest, limits, strip_reversible, store)
     outcomes = []
     for row in test:
         session = sessions[row.session_id]
@@ -402,19 +434,21 @@ def score(test: list[Labelled], grammar: SequenceGrammar | None,
 def run_condition(corpus: list[Labelled], regime: str, seed: int,
                   manifest: CapabilityManifest,
                   limits: Limits = DEFAULT_LIMITS,
-                  capability_source: str = CAP_MANIFEST
+                  capability_source: str = CAP_MANIFEST,
+                  store: TrustStore = EMPTY_STORE
                   ) -> tuple[list[Outcome], dict]:
     """Split, fit on train-benign, score test. Returns (outcomes, provenance)."""
     strip = capability_source == CAP_NAME_ONLY
     if capability_source != CAP_MANIFEST:
         manifest = EMPTY_MANIFEST
     train, test = split(corpus, regime, seed)
-    grammar = fit_grammar(train, manifest, limits, strip)
-    outcomes = score(test, grammar, manifest, limits, strip)
+    grammar = fit_grammar(train, manifest, limits, strip, store)
+    outcomes = score(test, grammar, manifest, limits, strip, store)
     return outcomes, {
         "regime": regime,
         "capability_source": capability_source,
         "train_sessions": len(train),
+        "trust_store_semantic_digest": store.semantic_digest,
         "test_sessions": len(test),
         "train_tasks": len({s.task_id for s in train}),
         "test_tasks": len({s.task_id for s in test}),
@@ -433,6 +467,7 @@ def run_condition(corpus: list[Labelled], regime: str, seed: int,
 def leakage_experiment(corpus: list[Labelled], seed: int,
                        manifest: CapabilityManifest,
                        limits: Limits = DEFAULT_LIMITS,
+                       store: TrustStore = EMPTY_STORE,
                        ) -> tuple[list[Outcome], list[Outcome], dict]:
     """Measure leakage with ONE test set, varying only the contamination.
 
@@ -465,10 +500,10 @@ def leakage_experiment(corpus: list[Labelled], seed: int,
             "the leakage experiment needs at least two attempts per task on "
             "each side; the corpus no longer supplies them")
 
-    clean_grammar = fit_grammar(train, manifest, limits)
-    leaky_grammar = fit_grammar([*train, *siblings], manifest, limits)
-    clean = score(fixed_test, clean_grammar, manifest, limits)
-    leaky = score(fixed_test, leaky_grammar, manifest, limits)
+    clean_grammar = fit_grammar(train, manifest, limits, store=store)
+    leaky_grammar = fit_grammar([*train, *siblings], manifest, limits, store=store)
+    clean = score(fixed_test, clean_grammar, manifest, limits, store=store)
+    leaky = score(fixed_test, leaky_grammar, manifest, limits, store=store)
     return clean, leaky, {
         "test_sessions": len(fixed_test),
         "test_attacks": sum(1 for r in fixed_test if r.is_attack),
@@ -488,6 +523,25 @@ def load_manifest(data_dir: Path, condition: str,
                   limits: Limits = DEFAULT_LIMITS) -> CapabilityManifest:
     return CapabilityManifest.from_file(
         data_dir / "manifests" / condition / "_all.json", limits=limits)
+
+
+def load_trust_store(data_dir: Path, condition: str,
+                     limits: Limits = DEFAULT_LIMITS) -> TrustStore:
+    """The keys the corpus's second collector stream was signed under.
+
+    Loaded out of band, from beside the manifests, because it is the same kind
+    of artifact: something the operator declares and the telemetry cannot talk
+    them out of.
+
+    Every path that scores the corpus has to pass this. Without it the signed
+    stream is parsed and not verified, so ``attack_revoked_key_stream`` becomes
+    an ordinary session nothing fires on and overall recall silently falls --
+    a measurement error that would look like a detector result.
+    ``tests/test_eval.py`` asserts the kind is caught, so forgetting it fails
+    loudly rather than quietly.
+    """
+    return TrustStore.from_file(
+        data_dir / "manifests" / condition / "trust-store.json", limits=limits)
 
 
 NO_MANIFEST = EMPTY_MANIFEST

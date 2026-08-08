@@ -490,7 +490,7 @@ The kinds that were built are `attack_omitted_call`, `attack_denied_effect`,
 Unseen vocabulary, task-disjoint split, with a capability manifest. Full numbers
 in [`eval/EVALUATION-CARD.md`](../eval/EVALUATION-CARD.md) §3b.
 
-| | before P1 | after P1 |
+| | before P1 | after P1 (1632-session corpus) |
 |---|---|---|
 | recall | 100.0% | 100.0% |
 | false positive rate | 61.8% | **44.3%** |
@@ -507,6 +507,34 @@ appeared that says whether the control was advisory or blocking; the check did
 not get cleverer, it stopped being asked a question it could not answer. The
 three new recall rows are genuinely new detections, and every one of them is
 conditional on a producer emitting something it does not emit today.
+
+### Stage 4, and why its headline numbers are not comparable to the above
+
+The trust-store kinds grew the corpus from 1632 sessions per vocabulary to 1824,
+so the split changed and the test population changed with it. The headline
+false-positive rate reads **42.0%** on the new corpus against 44.3% on the old
+one, and **that difference is not a result**. It is two numbers measured on
+different populations, put next to each other. Anyone quoting it as a 2.3-point
+improvement is quoting arithmetic.
+
+What *is* attributable to stage 4 is one row and one non-row:
+
+| | after stage 4 |
+|---|---|
+| `benign_hard_rotated_key` false positives | **0 of 72** |
+| `attack_revoked_key_stream` recall | **100%** |
+
+And the order those go in matters. The recall row is close to a tautology: the
+verifier reads a `key_id`, looks it up in a file the operator wrote, and finds
+`revoked_at` set. Nothing there could plausibly have failed. The benign row is
+the one that could have — a rotation is the most routine thing a key-using
+deployment ever does, one session per vocabulary has records on both sides of
+the handover signed by two different keys, and a verifier that called that
+tampering would teach operators to rotate less often. That is a security control
+making security worse, and 0 of 72 is the statement that it does not happen here.
+
+Nothing in stage 4 improved a detector, and the card says so in §3b rather than
+letting the corpus growth read as progress.
 
 One detector change did come out of this, and it came from a confounder rather
 than from design. A retry of a failed call produces a novel `X -> X` transition

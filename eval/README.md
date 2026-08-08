@@ -228,6 +228,53 @@ detector. It is reported through coverage as `NO_EFFECT_RECEIPT`, and
 receipts make in that direction: they do not make `success` more believable,
 they make failure and silence falsifiable.
 
+### 7. And a fourth time, for the trust store
+
+Same discipline, same order: the kinds were written before the detector could
+grade them. Stage 4 of EVIDENCE-TRUST gave keys roles, validity windows and
+revocations, and none of that is measurable against a stream where every
+`key_id` is a string anybody could have written.
+
+| kind | what it measures |
+|---|---|
+| `benign_hard_rotated_key` | one collector, one stream, and partway through it the signing key changes because the old one was retired. **Must not** fire |
+| `attack_revoked_key_stream` | a stream signed by a key the operator has declared compromised |
+
+**These two sit on a second collector stream, and it is signed.** Everything
+they measure is a statement about a key, so a chain alone establishes nothing
+about them. The rest of the corpus stays unsigned for the reason above: signing
+all 24,672 records per condition would add roughly 70,000 pure-Python scalar
+multiplications and measure nothing the chain does not. Signing 2,160 of them
+costs about ten seconds and buys the only multi-collector shape in the corpus,
+so cross-stream gap attribution is measured here rather than asserted.
+
+**Read the pair in the right order.** `attack_revoked_key_stream` is caught by
+reading a `key_id`, looking it up in a file the operator supplied, and finding
+`revoked_at` set — nothing there could plausibly have failed, and a 100% recall
+row for it is close to a tautology. `benign_hard_rotated_key` is the number that
+could have gone wrong. A rotation is the most routine thing a key-using
+deployment ever does; the rotation instant is deliberately placed *inside* a
+session, so one session per vocabulary has records on both sides of the handover
+signed by two different keys and both signatures are correct. A verifier that
+called that tampering would teach operators to rotate less often, which is a
+security control making security worse.
+
+**A third kind was considered and declined: `attack_replayed_stream`.** A
+captured stream re-fed months later passes every check in the module — the
+sequence is contiguous, the chain holds, the signatures verify — because it
+really was written by that collector. The only thing separating it from a
+legitimately delayed batch is the age of a timestamp, and the two are otherwise
+byte-identical, so labelling one "attack" would measure the label. Same reason
+`attack_forged_success` is absent. The freshness bound that catches it is real
+and is tested in `tests/test_evidence.py`; what it costs on a delayed batch is a
+property of the bound an operator picks, not of this corpus.
+
+**And the corpus growing is not a result.** These kinds took the corpus from
+1632 sessions per vocabulary to 1824, which changed the split and therefore the
+test population. The headline false-positive rate moved, and that movement is
+arithmetic rather than detection; `docs/EVIDENCE-TRUST.md` §8 says so in the
+same place it reports the two rows stage 4 is entitled to claim.
+
 ## Label integrity
 
 A mislabelled corpus produces confident wrong numbers, which is worse than none.

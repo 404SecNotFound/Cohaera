@@ -41,6 +41,7 @@ from eval.harness import (
     leakage_experiment,
     load_corpus,
     load_manifest,
+    load_trust_store,
     run_condition,
 )
 from eval.metrics import by_group, check_attribution, summarise
@@ -67,10 +68,17 @@ def run_grid(seed: int) -> dict[str, Any]:
     for vocabulary in CONDITIONS:
         corpus = load_corpus(DATA, vocabulary)
         manifest = load_manifest(DATA, vocabulary)
+        # Loaded for every cell, including the ones that ablate the manifest.
+        # The trust store is not a capability signal and ablating it would
+        # change what the ablation measures: `name_only` asks what happens when
+        # the producer declares no capabilities, not what happens when the
+        # operator also loses their keys.
+        store = load_trust_store(DATA, vocabulary)
         for regime in REGIMES:
             for capability in CAPABILITY_SOURCES:
                 outcomes, provenance = run_condition(
-                    corpus, regime, seed, manifest, capability_source=capability)
+                    corpus, regime, seed, manifest, capability_source=capability,
+                    store=store)
                 results[f"{vocabulary}|{regime}|{capability}"] = {
                     "vocabulary": vocabulary,
                     "regime": regime,
@@ -346,6 +354,11 @@ def render_card(results: dict[str, Any], seed: int, summary: dict,
         gen.BENIGN_HARD_REAPPROVED: "an approved action fails and is retried "
                                     "under a fresh approval. The most ordinary "
                                     "thing a governed agent does (CH04)",
+        gen.BENIGN_HARD_ROTATED: "a signed stream whose collector key is rotated "
+                                 "partway through, one session straddling the "
+                                 "handover. A verifier that reports a correct "
+                                 "rotation as tampering teaches operators to "
+                                 "rotate less often (CH06)",
     }
     by_kind = results[f"unseen|{REGIME_TASK_DISJOINT}|{CAP_MANIFEST}"]["by_kind"]
     for kind in gen.BENIGN_KINDS:
@@ -372,14 +385,14 @@ def render_card(results: dict[str, Any], seed: int, summary: dict,
 
     # ---- what P1 evidence trust bought ---------------------------------
     p1_attacks = (gen.ATTACK_OMITTED_CALL, gen.ATTACK_DENIED_EFFECT,
-                  gen.ATTACK_REUSED_APPROVAL)
+                  gen.ATTACK_REUSED_APPROVAL, gen.ATTACK_REVOKED_KEY)
     p1_benign = (gen.BENIGN_HARD_REORDERED, gen.BENIGN_HARD_APPROVED,
-                 gen.BENIGN_HARD_REAPPROVED)
+                 gen.BENIGN_HARD_REAPPROVED, gen.BENIGN_HARD_ROTATED)
     ch04 = attribution_for(results).get("CH04_guardrail_overrun", {})
     advisory = by_kind.get(gen.BENIGN_HARD_ADVISORY, {"flagged": 0, "sessions": 0})
     add("### 3b. What P1 evidence trust bought, and what it did not")
     add("")
-    add("Three of the attack kinds above and three of the benign ones exist only")
+    add("Four of the attack kinds above and four of the benign ones exist only")
     add("because [docs/EVIDENCE-TRUST.md](../docs/EVIDENCE-TRUST.md) needed to be")
     add("gradeable. A corpus can only grade fixes for attacks it contains, which is")
     add("the lesson E02 forced, applied in advance this time.")
@@ -400,6 +413,10 @@ def render_card(results: dict[str, Any], seed: int, summary: dict,
                                   "read as a bypass",
         gen.BENIGN_HARD_REAPPROVED: "an approved retry after a failure. **Must "
                                     "not** fire",
+        gen.ATTACK_REVOKED_KEY: "a stream signed by a key the operator has "
+                                "declared compromised",
+        gen.BENIGN_HARD_ROTATED: "a correctly performed key rotation, one session "
+                                 "straddling the handover. **Must not** fire",
     }
     for kind in (*p1_attacks, *p1_benign):
         row = by_kind.get(kind)
@@ -425,14 +442,43 @@ def render_card(results: dict[str, Any], seed: int, summary: dict,
         "every deployment that has not adopted the format already is. The corpus "
         "measures the mechanism working; it does not measure anyone having "
         "deployed it. `tests/test_evidence.py` asserts both directions.\n")
+    revoked = by_kind.get(gen.ATTACK_REVOKED_KEY, {"flagged": 0, "sessions": 0})
+    rotated = by_kind.get(gen.BENIGN_HARD_ROTATED, {"flagged": 0, "sessions": 0})
     add(
-        "The corpus is chained but **not signed**, and the evaluation runs with no "
-        "collector keys. That is the realistic first-adoption state and it is why "
-        "CH06 reports `degraded` rather than `evaluated` throughout: a chain with "
-        "nothing to verify its origin establishes that the stream is "
-        "self-consistent, which an attacker who rewrote the whole stream can also "
-        "arrange. Signature verification is a cryptographic property and is tested "
-        "against the RFC 8032 vectors instead.\n")
+        f"**Read the trust-store pair in the right order: the benign row is the "
+        f"result and the attack row is nearly a tautology.** "
+        f"`attack_revoked_key_stream` scores {revoked['flagged']} of "
+        f"{revoked['sessions']}, and it does so by looking a key id up in a file "
+        f"the operator supplied and finding `revoked_at` set. Nothing about that "
+        f"could plausibly have failed, and publishing it as a detection win would "
+        f"be measuring the label. The number that could have gone wrong is "
+        f"`benign_hard_rotated_key`: {rotated['flagged']} of "
+        f"{rotated['sessions']}, including one session per vocabulary whose "
+        f"records straddle the rotation instant and are therefore signed by two "
+        f"different keys, both correctly. A verifier that reported a correct "
+        f"rotation as tampering would teach operators to rotate less often, which "
+        f"is a security control making security worse.\n")
+    add(
+        "Most of the corpus is chained but **not signed**, and CH06 reports "
+        "`degraded` rather than `evaluated` across it: a chain with nothing to "
+        "verify its origin establishes that the stream is self-consistent, which "
+        "an attacker who rewrote the whole stream can also arrange. That is the "
+        "realistic first-adoption state. The two trust-store kinds are the "
+        "exception and sit on a second, signed collector stream, because "
+        "everything they measure is a statement about a KEY and an unsigned "
+        "record's `key_id` is a string anybody can write. They are also the "
+        "corpus's only multi-collector shape, so cross-stream gap attribution is "
+        "measured here rather than asserted.\n")
+    add(
+        "**One kind was considered and declined: a replayed stream.** A captured "
+        "stream re-fed months later passes every check in the module, and the "
+        "only thing that separates it from a legitimately delayed batch is the "
+        "age of a timestamp — the telemetry is otherwise byte-identical. "
+        "Labelling one of two identical inputs `attack` would measure the label "
+        "rather than a detector, which is the same reason `attack_forged_success` "
+        "is absent. The freshness bound is real and is tested in "
+        "`tests/test_evidence.py`; what it costs on a delayed batch is a property "
+        "of the bound the operator sets, not of this corpus.\n")
     dil = by_kind.get(gen.ATTACK_DILUTION, {"flagged": 0, "sessions": 0})
     long_rare = by_kind.get(gen.BENIGN_HARD_LONG_RARE,
                             {"flagged": 0, "sessions": 0})
@@ -583,7 +629,8 @@ def main(argv: list[str] | None = None) -> int:
     results = run_grid(args.seed)
     corpus = load_corpus(DATA, "unseen")
     clean, leaky, leak_prov = leakage_experiment(
-        corpus, args.seed, load_manifest(DATA, "unseen"))
+        corpus, args.seed, load_manifest(DATA, "unseen"),
+        store=load_trust_store(DATA, "unseen"))
     leakage = {"provenance": leak_prov, "clean": summarise(clean),
                "leaky": summarise(leaky)}
     payload = {

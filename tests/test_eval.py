@@ -56,6 +56,7 @@ from eval.harness import (
     assert_disjoint,
     fit_grammar,
     leakage_experiment,
+    load_trust_store,
     split,
 )
 from eval.metrics import (
@@ -779,3 +780,80 @@ def test_the_long_rare_confounder_keeps_its_control_case():
     assert familiar, (
         "every family's rare action is unseen, so the kind has no control case "
         "and its row in the card is 100% by construction")
+
+
+# ---------------------------------------------------------------------------
+# The trust store the corpus is scored against
+# ---------------------------------------------------------------------------
+
+
+def _store():
+    return load_trust_store(gen.Path(gen.__file__).resolve().parent / "data",
+                            "unseen")
+
+
+def test_the_corpus_trust_store_declares_a_rotation_and_a_revocation():
+    """Three keys, and each says a different thing. See EVIDENCE-TRUST 2a.
+
+    A store where all three looked alike would make the two new kinds
+    indistinguishable, and both would score whatever the first one scored.
+    """
+    store = _store()
+    retired = [k for k in store.keys.values() if k.not_after is not None]
+    current = [k for k in store.keys.values() if k.not_before is not None]
+    revoked = [k for k in store.keys.values() if k.revoked]
+    assert len(retired) == len(current) == len(revoked) == 1
+    assert current[0].replaces == retired[0].key_id
+    assert retired[0].not_after == current[0].not_before, (
+        "the handover must be one instant, or records between the two windows "
+        "belong to no key and every one of them reads as tampering")
+
+
+def test_a_revoked_key_stream_is_caught_only_when_the_store_is_supplied():
+    """The measurement error this guards against would look like a result.
+
+    Every path that scores the corpus has to pass the trust store. Forget it and
+    `attack_revoked_key_stream` becomes an ordinary session nothing fires on,
+    overall recall falls, and the fall is indistinguishable from a detector
+    regression. Asserting both directions makes the omission fail here instead.
+    """
+    rows = [r for r in corpus() if r.kind == gen.ATTACK_REVOKED_KEY][:4]
+    manifest = in_memory_manifest()
+    assert rows, "the corpus no longer contains the kind this asserts"
+
+    with_store = _sessions_for(rows, manifest, DEFAULT_LIMITS, False, _store())
+    for row in rows:
+        audit = with_store[row.session_id].integrity
+        assert "INTEGRITY_KEY_REVOKED" in audit.codes
+        assert audit.inadmissible
+
+    without = _sessions_for(rows, manifest, DEFAULT_LIMITS)
+    for row in rows:
+        audit = without[row.session_id].integrity
+        assert not audit.inadmissible, (
+            "with no keys supplied a signature is parsed and not verified, so "
+            "the stream must read as unverified rather than as failed")
+
+
+def test_a_correct_rotation_produces_no_finding_including_at_the_handover():
+    """The row stage 4 is actually entitled to claim.
+
+    A rotation is the most routine thing a key-using deployment does. At least
+    one session per vocabulary has records on BOTH sides of the handover, signed
+    by two different keys, and every one of those signatures is correct.
+    """
+    rows = [r for r in corpus() if r.kind == gen.BENIGN_HARD_ROTATED]
+    manifest = in_memory_manifest()
+    sessions = _sessions_for(rows, manifest, DEFAULT_LIMITS, False, _store())
+
+    straddling = 0
+    for row in rows:
+        session = sessions[row.session_id]
+        assert not session.integrity.inadmissible, (
+            f"{row.session_id}: a correct rotation must not read as tampering")
+        assert not run_all(session, None, limits=DEFAULT_LIMITS)[0]
+        if len(session.integrity.signing_key_ids) > 1:
+            straddling += 1
+    assert straddling >= 1, (
+        "no session straddles the rotation instant, so the boundary case this "
+        "kind exists for is not in the corpus")

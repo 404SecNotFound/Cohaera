@@ -267,16 +267,16 @@ There is now a labelled corpus and an evaluation harness. **The numbers are in
 [`eval/EVALUATION-CARD.md`](eval/EVALUATION-CARD.md)**, they are generated
 deterministically by `python eval/run_eval.py`, and they are not flattering.
 
-1632 sessions per condition, 408 tasks across 8 task families, splits by task and
+1824 sessions per condition, 456 tasks across 8 task families, splits by task and
 never at random, and seven in ten benign sessions are deliberate confounders —
 sessions that are genuinely benign and genuinely look like the attack they sit
 next to. Headline, `task_disjoint` with a capability manifest:
 
 | | |
 |---|---|
-| recall | **100%** (all 9 attack shapes caught) |
-| false positive rate | **44.3%** |
-| false positives per 1000 sessions | **317** |
+| recall | **100%** (all 10 attack shapes caught) |
+| false positive rate | **42.0%** |
+| false positives per 1000 sessions | **284** |
 | false positives on *plain* benign sessions | **0 / 96** |
 
 Both halves matter. Cohaera separates clean benign traffic from everything else
@@ -291,9 +291,9 @@ Two results worth pulling out:
   heuristic alone scores identically to a full capability manifest.** That is
   what the twelve fixtures below always measured — the keyword list checking
   itself. Swap in a realistic vocabulary the heuristic has never seen and its
-  classification accuracy is **0% of 34 tools**, and recall falls to 30.5%.
+  classification accuracy is **0% of 34 tools**, and recall falls to 34.7%.
 - **Under `family_holdout`, where the baseline never saw the test workload, the
-  false positive rate is 38.2%** and recall drops to 76.5%, because CH01 declines
+  false positive rate is 34.2%** and recall drops to 79.0%, because CH01 declines
   to judge a workload it was not fitted on and CH01 is the only check that
   catches a diluted attack. CH01 does not transfer across task families. Fitting
   one baseline across a fleet of differently-tasked agents buys silence where it
@@ -918,7 +918,7 @@ prevention claim collapses.
 - [x] Sigma content pack, 13 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 485 passing across unit, hostile-input and content conformance
+- [x] Tests, 488 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 23 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger
@@ -994,10 +994,17 @@ hide is a defect.
   contributor is CH04 no longer firing on advisory thresholds. CH04 did not get
   cleverer; a field appeared saying whether the control was advisory or blocking,
   and a check that had been reporting a sequence because it could not report a
-  bypass stopped having to. The three genuinely new detections — deletion from a
+  bypass stopped having to. The four genuinely new detections — deletion from a
   chained stream, a denied effect contradicted by a receipt, an approval reused
-  for different arguments — are all conditional on producers emitting evidence
-  they do not emit today.
+  for different arguments, a stream signed by a revoked key — are all conditional
+  on producers emitting evidence they do not emit today.
+- **And the current headline is not comparable to that 44.3% either.** The
+  trust-store corpus kinds grew the corpus from 1632 sessions per vocabulary to
+  1824, so the split and the test population both changed; the rate now reads
+  42.0% because a different set of sessions was scored, not because anything got
+  better. [EVIDENCE-TRUST §8](docs/EVIDENCE-TRUST.md) states what stage 4 is
+  actually entitled to claim, which is one benign row: a correctly performed key
+  rotation produces 0 false positives out of 72.
 
 ---
 
