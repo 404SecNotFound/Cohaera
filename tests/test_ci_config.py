@@ -265,22 +265,58 @@ def test_dependabot_covers_the_actions_that_are_now_frozen():
         f"dependabot covers {sorted(ecosystems)} but not github-actions")
 
 
-def test_codeql_runs_on_pull_requests():
-    """It is a required status check. A required check that does not report on
-    a pull request stays pending forever and blocks every merge with no error
-    message anywhere -- the same failure this file was written for, one
-    workflow over."""
-    path = WORKFLOW_DIR / "codeql.yml"
-    assert path.is_file(), "codeql.yml is missing but the ruleset requires it"
-    workflow = load_workflow(path)
-    triggers = workflow[True] if True in workflow else workflow.get("on")
-    assert "pull_request" in triggers, (
-        f"codeql.yml triggers on {sorted(triggers)}; without pull_request the "
-        "required check never reports and every pull request is blocked")
-    for job in workflow["jobs"].values():
-        assert "paths" not in str(job), (
-            "a paths filter skips the job, and a skipped required check does "
-            "not report")
+def test_codeql_is_absent_in_both_places_or_present_in_both():
+    """CodeQL was REMOVED, and this pins the removal as a matched pair.
+
+    It ran, and its analysis was clean -- 26 of 26 Python files, the full
+    security-extended suite. What it could never do is UPLOAD the result: this
+    is a private repository on a personal account, where code scanning requires
+    GitHub Code Security, so every run ended
+
+        Code scanning is not enabled for this repository.
+        CodeQL job status was configuration error.
+
+    That is not a defect in this diff and no code change fixes it. The reason it
+    could not simply be left red is the ruleset: `codeql (python)` was listed as
+    a tenth required status check, and a required check that can never report
+    success blocks every pull request forever -- the exact failure
+    ``test_required_checks_match_the_ci_jobs_exactly`` exists to prevent,
+    arriving from the other direction. A permanently failing check is also how
+    people learn to ignore red.
+
+    So the workflow and the required check were removed TOGETHER, and this test
+    is what stops them coming back apart. Restoring one without the other
+    reintroduces either a blocked repository or an ungated job, and which of
+    those you get depends on which half somebody restores first.
+
+    TO RESTORE, once code scanning is available -- either by making the
+    repository public, where it is free, or by enabling Code Security on the
+    account:
+
+        1. git revert the commit that removed .github/workflows/codeql.yml
+        2. add { "context": "codeql (python)" } to the required_status_checks
+           list in .github/rulesets/main.json
+        3. re-apply the ruleset (it does not apply itself; see this directory's
+           README)
+
+    Do 1 and 2 in the same commit. This test fails if you do not.
+    """
+    workflow = WORKFLOW_DIR / "codeql.yml"
+    required = required_contexts(load_ruleset())
+    if workflow.is_file():
+        assert "codeql (python)" in required, (
+            "codeql.yml is back but the ruleset does not require it, so the job "
+            "runs and a red result would not block a merge")
+        loaded = load_workflow(workflow)
+        triggers = loaded[True] if True in loaded else loaded.get("on")
+        assert "pull_request" in triggers, (
+            f"codeql.yml triggers on {sorted(triggers)}; without pull_request "
+            "the required check never reports and every pull request is blocked")
+    else:
+        assert "codeql (python)" not in required, (
+            "the ruleset requires 'codeql (python)' but codeql.yml has been "
+            "removed, so no job will ever report it and every pull request is "
+            "blocked forever")
 
 
 def test_workflow_permissions_are_least_privilege():

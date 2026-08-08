@@ -207,7 +207,7 @@ disclaimer.
 | Zero runtime dependencies | Enforced in CI from installed distribution metadata |
 | Actions pinned to commit SHAs | Enforced by `tests/test_ci_config.py` |
 | Dependabot on actions and dev extras | `.github/dependabot.yml` |
-| CodeQL, `security-extended`, per PR and weekly | `.github/workflows/codeql.yml` |
+| **Static analysis (CodeQL)** | **Removed.** Ran clean; could not upload results, because code scanning needs GitHub Code Security on a private personal-account repository. Removed WITH its required-check entry rather than left permanently red -- see `tests/test_ci_config.py` for the restore procedure |
 | `main` protected: squash-only, required checks, no force-push | `.github/rulesets/main.json`, asserted against the CI jobs |
 | SBOM (CycloneDX) generated per run | `sbom` job |
 | **Signed releases** | **Not implemented** |

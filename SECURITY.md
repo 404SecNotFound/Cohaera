@@ -94,7 +94,15 @@ What this repository does, so you can check whether it is still true:
   40-character SHA, so an unpinned action cannot arrive unnoticed.
 - **Dependabot** opens a pull request when a pinned action or dev dependency
   moves, so an update is reviewed rather than absent.
-- **CodeQL** on every pull request and weekly, `security-extended`.
+- **Static analysis (CodeQL): NOT RUNNING, deliberately.** It was configured and
+  its analysis ran clean, but this is a private repository on a personal account,
+  where code scanning requires GitHub Code Security. Every run therefore ended at
+  the upload step with `Code scanning is not enabled for this repository`. It was
+  removed rather than left permanently red, because it was also a *required*
+  status check and a required check that can never report success blocks every
+  pull request forever. `tests/test_ci_config.py` pins the removal as a matched
+  pair and documents how to restore it -- making the repository public, where
+  code scanning is free, is the cheapest route.
 - **`main` is protected by a committed ruleset** — squash-only merges, required
   status checks, no force-push, no deletion — and
   `tests/test_ci_config.py` asserts the ruleset's required checks match the CI

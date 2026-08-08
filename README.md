@@ -902,7 +902,8 @@ prevention claim collapses.
 - [x] CI with lint, fuzz smoke, Sigma validation, conversion and wheel install
 - [x] Eleven defects from the third external review, fixed with regression tests
 - [x] Eleven defects from the fourth external review, fixed with regression tests
-- [x] Supply chain: SHA-pinned actions, Dependabot, CodeQL, [SECURITY.md](SECURITY.md), [threat model](docs/THREAT-MODEL.md)
+- [x] Supply chain: SHA-pinned actions, Dependabot, [SECURITY.md](SECURITY.md), [threat model](docs/THREAT-MODEL.md)
+- [ ] Static analysis (CodeQL). Configured and clean, but code scanning needs GitHub Code Security on a private personal-account repository, so it was removed rather than left permanently red. Free the moment this repository is public
 - [ ] Signed releases with an SBOM attested to the released artefact, not a 90-day CI artefact
 - [ ] Cohaera schema 1.0 plus a tested Exabeam exporter and parser package
 - [x] Automated VMware Workstation lab build ([lab/](lab/))

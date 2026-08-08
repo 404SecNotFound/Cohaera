@@ -37,7 +37,7 @@ Equivalent UI path: **Settings → Rules → Rulesets → New branch ruleset**.
 | `deletion` | `main` cannot be deleted |
 | `non_fast_forward` | no force pushes |
 | `pull_request` | changes arrive through a PR; **squash is the only merge method**; stale reviews dismissed on push; review threads must be resolved |
-| `required_status_checks` | all ten CI checks must pass, and the branch must be up to date with `main` first |
+| `required_status_checks` | all nine CI checks must pass, and the branch must be up to date with `main` first |
 
 ## Why squash is the only merge method
 
@@ -85,9 +85,21 @@ merge something that was never tested against what it actually lands on.
 
 ## Keeping the check names honest
 
-The ten `context` values must match the job names GitHub reports, which come
+The nine `context` values must match the job names GitHub reports, which come
 from `name:` in **every** file under `.github/workflows/` with the matrix
-expanded — `ci.yml` and `codeql.yml` both contribute one.
+expanded. Today that is `ci.yml` alone; the loop reads the whole directory
+rather than one file, so a second workflow's gate cannot go unrequired.
+
+There were ten. `codeql (python)` was removed together with
+`.github/workflows/codeql.yml`, and the pairing matters more than the removal:
+CodeQL's analysis ran clean but could never UPLOAD its results, because this is
+a private repository on a personal account and code scanning there requires
+GitHub Code Security. Keeping it as a required check would have blocked every
+pull request forever — a required check that can never report success is the
+failure this section is about, arriving from the other direction. Keeping it as
+a non-required check would have left a permanently red tick, which is how people
+learn to ignore red. `tests/test_ci_config.py` now asserts the two halves are
+absent together or present together, and carries the restore procedure.
 
 A required check that no job ever reports does not error. It blocks merges
 forever, and the reason is invisible unless you already know to look here. So
@@ -101,9 +113,10 @@ refers to something by name should be checked against the thing it names.
 That file now also asserts the supply-chain properties the workflows claim:
 every `uses:` is pinned to a 40-character commit SHA, every pin carries a
 readable version comment, `.github/dependabot.yml` covers `github-actions` so
-the pins can move, `codeql.yml` triggers on `pull_request` (a required check
-that does not report on a PR blocks it forever), and every workflow declares
-least-privilege top-level `permissions`.
+the pins can move, any restored `codeql.yml` triggers on `pull_request` (a
+required check that does not report on a PR blocks it forever) and is required
+by the ruleset in the same commit, and every workflow declares least-privilege
+top-level `permissions`.
 
 ## Repository settings that cannot be committed
 
