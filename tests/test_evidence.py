@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import base64
 import json
+import random
+import subprocess
 import sys
 from pathlib import Path
 
@@ -214,6 +216,82 @@ def test_verify_never_raises_on_rubbish():
         assert not ed25519.verify(bad_key, b"x", b"\x00" * 64)
     for bad_sig in (b"", b"\x00" * 63, None, 12345):
         assert not ed25519.verify(pk, b"x", bad_sig)
+
+
+# ---------------------------------------------------------------------------
+# 1b. The fixed-base comb
+# ---------------------------------------------------------------------------
+#
+# `s * G` is half of every verification and G never changes, so the multiples
+# are precomputed. The vectors above already prove `verify` still verifies; what
+# is left to check is that the table is the same function as double-and-add
+# everywhere, not just on the four scalars RFC 8032 happens to publish -- and
+# that the SECRET path did not quietly acquire a table lookup along with it.
+
+_COMB_SCALARS = [
+    0,                                   # every digit zero: the identity
+    1, 2, 15, 16, 17,                    # inside, at, and over one window
+    ed25519.L - 1,                       # the largest scalar verify can see
+    (1 << 252),                          # a single set bit high up
+    0xF << 252,                          # a full digit in the top row
+    (1 << 255) - 1,                      # every digit at maximum
+]
+
+
+@pytest.mark.parametrize("scalar", _COMB_SCALARS)
+def test_the_comb_agrees_with_double_and_add(scalar):
+    assert ed25519._equal(ed25519._mul_base(scalar),
+                          ed25519._mul(ed25519._G, scalar))
+
+
+def test_the_comb_agrees_with_double_and_add_on_random_scalars():
+    """Seeded, so a failure is reproducible rather than a story about a run."""
+    rng = random.Random(20260808)
+    for _ in range(24):
+        scalar = rng.randrange(ed25519.L)
+        assert ed25519._equal(ed25519._mul_base(scalar),
+                              ed25519._mul(ed25519._G, scalar)), scalar
+
+
+def test_a_scalar_wider_than_the_comb_is_still_multiplied_correctly():
+    """The table covers 256 bits and nothing verify sees is wider. The fallback
+    exists so that "nothing sees it" being wrong someday is a slow answer rather
+    than a wrong one."""
+    wide = (1 << 260) + 12345
+    assert ed25519._equal(ed25519._mul_base(wide),
+                          ed25519._mul(ed25519._G, wide))
+
+
+def test_the_comb_is_not_built_until_something_verifies():
+    """Two claims in one subprocess, because both are about module state that
+    the rest of the suite will have already dirtied.
+
+    Built lazily: a `cohaera score` over telemetry carrying no signatures --
+    still the common case -- must not pay 7 ms and 960 points for a table it
+    never reads.
+
+    And NOT built by signing. `sign` and `public_key` multiply by a secret, and
+    the module docstring says they keep double-and-add so that a secret's digits
+    never index a table. That is a claim about the code, so it is a test.
+    """
+    script = (
+        "import sys; sys.path.insert(0, 'src')\n"
+        "from cohaera import ed25519 as e\n"
+        "built = lambda: e._comb.cache_info().currsize\n"
+        "assert not built(), 'built at import'\n"
+        "seed = bytes(range(32))\n"
+        "pub = e.public_key(seed)\n"
+        "sig = e.sign(seed, b'x')\n"
+        "assert not built(), 'signing built the comb'\n"
+        "assert e.verify(pub, b'x', sig)\n"
+        "assert built(), 'verifying did not build the comb'\n"
+        "print('ok')\n"
+    )
+    root = Path(__file__).resolve().parent.parent
+    done = subprocess.run([sys.executable, "-c", script], cwd=root,
+                          capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "ok"
 
 
 # ---------------------------------------------------------------------------
@@ -487,8 +565,9 @@ def test_the_reorder_buffer_is_bounded_and_says_when_the_bound_decided():
 
 
 def test_the_signature_budget_is_bounded():
-    """Verification is 5ms of scalar multiplication per record and the producer
-    decides how many records there are."""
+    """Verification is a couple of milliseconds of scalar multiplication per
+    record and the producer decides how many records there are. The fixed-base
+    comb made that constant smaller; it did not make it a constant."""
     limits = DEFAULT_LIMITS.with_overrides(max_signature_verifications=2)
     signed = sign_stream(_records(6), "stream-a", SECRET, KEY_ID)
     v = _run(signed, limits=limits)

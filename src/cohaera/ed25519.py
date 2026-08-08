@@ -30,6 +30,15 @@ would make both harder to check. **Cohaera itself never calls them.** Do not
 sign production telemetry with this on a host where an adversary can measure
 the process; use libsodium.
 
+That asymmetry is why the two paths multiply differently. ``verify`` uses a
+precomputed comb for ``s * G`` (see ``_mul_base``), which is about 6.7 times
+faster and is safe precisely because ``s`` comes out of the signature and is
+public. ``sign`` and ``public_key`` keep plain double-and-add: their scalars are
+secret, and indexing a table with a secret's digits would trade a
+secret-dependent branch for a secret-dependent memory access, which is a
+side channel this file has no business introducing for a speed-up nothing in
+Cohaera's path would use.
+
 WHAT IS CHECKED
 ---------------
 ``tests/test_evidence.py`` runs the four RFC 8032 section 7.1 test vectors,
@@ -44,6 +53,7 @@ they wanted to keep intact.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 
 # The prime field, the group order, and the twisted-Edwards curve constant.
@@ -115,6 +125,79 @@ def _mul(p: tuple[int, int, int, int], s: int) -> tuple[int, int, int, int]:
     return q
 
 
+# ---------------------------------------------------------------------------
+# Fixed-base multiplication
+# ---------------------------------------------------------------------------
+#
+# Half of every verification is ``s * G``, and G is a constant. Double-and-add
+# does not know that: it spends about 380 point additions rediscovering the
+# multiples of a point that never changes. A comb precomputes them once --
+# (d+1) * 2^(4i) * G, for every 4-bit digit d at every digit position i -- after
+# which the multiplication is a lookup and an add per nonzero digit, and there
+# are at most 64 of those.
+#
+# WHAT THIS IS NOT. It is not a different algorithm and not a different result:
+# the table is built by the same ``_add`` from the same ``_G``, and
+# ``tests/test_evidence.py`` checks it against ``_mul(_G, s)`` directly, on the
+# boundaries as well as at random. The RFC 8032 vectors still run through
+# ``verify`` unchanged.
+#
+# WHY VERIFICATION ONLY. ``sign`` and ``public_key`` keep double-and-add. Both
+# multiply by a SECRET scalar, and a table indexed by that scalar's digits
+# replaces a secret-dependent branch with a secret-dependent memory access --
+# the textbook cache-timing side channel. Neither path is constant-time and the
+# module docstring says so, but there is no reason to add a new class of leak to
+# the secret path for a saving nothing needs: signing here produces test
+# fixtures, and ``eval/corpus/signatures.py`` already caches the ones that used
+# to cost anything.
+_COMB_WINDOW = 4
+_COMB_MASK = (1 << _COMB_WINDOW) - 1
+_COMB_BITS = 256                         # every scalar this is asked for is < L
+_COMB_ROWS = _COMB_BITS // _COMB_WINDOW
+
+
+@functools.lru_cache(maxsize=1)
+def _comb() -> tuple[tuple[tuple[int, int, int, int], ...], ...]:
+    """The table, built once on first use. ``_comb.cache_info().currsize`` says
+    whether it exists yet, which is how the tests check it was not built at
+    import and is not built by signing."""
+    rows = []
+    base = _G
+    for _ in range(_COMB_ROWS):
+        row = [base]
+        for _ in range(_COMB_MASK - 1):
+            row.append(_add(row[-1], base))
+        rows.append(tuple(row))
+        for _ in range(_COMB_WINDOW):     # base <<= window, i.e. * 2^4
+            base = _add(base, base)
+    return tuple(rows)
+
+
+def _mul_base(s: int) -> tuple[int, int, int, int]:
+    """``s * G``, by table lookup rather than double-and-add.
+
+    BUILT ON FIRST USE, NOT AT IMPORT. The table costs about 7 ms and 960 points
+    to build, which is roughly five verifications' worth of the saving -- so a
+    process that verifies nothing (every ``cohaera score`` over telemetry with
+    no ``cohaera.integrity:1`` sidecars, which is still the common case) must not
+    pay for it, and one that verifies four signatures comes out slightly behind.
+    The case worth optimising is the other one: ``max_signature_verifications``
+    bounds a producer-controlled quantity at 100,000, and that worst case is
+    where this earns its keep.
+    """
+    if s < 0 or s >= 1 << _COMB_BITS:     # pragma: no cover - unreachable for s < L
+        return _mul(_G, s)                # wider than the table: be right, not fast
+    q = _IDENTITY
+    for row in _comb():
+        if not s:
+            break
+        digit = s & _COMB_MASK
+        if digit:
+            q = _add(q, row[digit - 1])
+        s >>= _COMB_WINDOW
+    return q
+
+
 def _equal(p: tuple[int, int, int, int], q: tuple[int, int, int, int]) -> bool:
     """Projective equality: cross-multiply rather than normalise both sides."""
     if (p[0] * q[2] - q[0] * p[2]) % P != 0:
@@ -176,7 +259,7 @@ def verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
         # would not uniquely identify the bytes that produced it.
         return False
     k = _sha512_int(r_bytes + public_key + message) % L
-    return _equal(_mul(_G, s), _add(r_point, _mul(a_point, k)))
+    return _equal(_mul_base(s), _add(r_point, _mul(a_point, k)))
 
 
 # ---------------------------------------------------------------------------

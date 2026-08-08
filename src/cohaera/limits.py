@@ -184,9 +184,12 @@ class Limits:
     # ---- P1 evidence (docs/EVIDENCE-TRUST.md) ---------------------------
     # Every one of these bounds an attacker-chosen quantity. A producer picks
     # how many streams it claims, how far out of order it delivers, and how many
-    # signatures it asks to have checked -- and a signature check is five
-    # milliseconds of pure-Python scalar multiplication, which is the most
-    # expensive thing in this codebase per unit of attacker effort.
+    # signatures it asks to have checked -- and a signature check is a few
+    # milliseconds of pure-Python scalar multiplication (about 2.5 ms since
+    # ed25519._mul_base precomputed the fixed-base half of it; it was 4), which
+    # is the most expensive thing in this codebase per unit of attacker effort.
+    # The comb changed the constant, not the shape: the work is still linear in
+    # a number the producer chooses, which is why the bound below stays.
     max_integrity_streams: int = 10_000
     # How far a record may arrive out of order before the gap ahead of it is
     # called a deletion. This is the reordering-versus-deletion decision from

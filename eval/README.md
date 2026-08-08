@@ -364,15 +364,45 @@ rather than assembled and dropped. The cache is scoped per vocabulary and
 released between them, which is what keeps that a constant rather than a
 doubling.
 
-What is left is close to the floor for this design: about half the remaining
-time is Ed25519 verification of the 2160 signed records, once per vocabulary per
-capability condition, and each of those nine passes is a distinct measurement.
-Going further would mean either caching inside Cohaera's own verification path —
-which is the thing being measured — or a faster scalar multiplication in
-`ed25519.py`. A fixed-base comb for the generator point would buy roughly 1.7×
-on verification and about 13% here, and it is not taken: it is a rewrite of a
-primitive whose current form is short enough to read against RFC 8032, in
-exchange for a saving in a program nobody waits on but CI.
+What was left after that was Ed25519 verification of the 2160 signed records,
+once per vocabulary per capability condition — nine passes, each a distinct
+measurement, so there is nothing there to skip. The remaining option was to make
+verification itself faster, which is the next section.
+
+## Why verification got faster, and why signing did not
+
+Half of every verification is `s · G`, and G is a constant the double-and-add
+loop kept rediscovering — about 380 point additions to walk multiples of a point
+that never changes. `ed25519._mul_base` precomputes them: a 4-bit comb, 960
+points, after which the multiplication is one table lookup and one addition per
+nonzero digit. That is **6.7× on the fixed-base multiplication and 1.6× on a
+whole verification** (4.0 ms → 2.5 ms), which took `run_eval.py` from 1 m 54 s to
+**1 m 16 s** cold and from 1 m 38 s to **59 s** warm. The card still regenerates
+byte for byte.
+
+Two deliberate limits on it:
+
+- **Signing keeps double-and-add.** `sign` and `public_key` multiply by a
+  *secret*, and indexing a table with a secret's digits swaps a
+  secret-dependent branch for a secret-dependent memory access — the textbook
+  cache-timing channel. Neither path is constant-time and the module says so,
+  but there is no reason to add a new class of leak to the secret path for a
+  saving nothing needs. A test asserts signing does not build the table, so that
+  decision is checkable rather than a comment.
+- **The table is built on first use, not at import.** It costs about 7 ms,
+  roughly five verifications' worth of the saving, so a `cohaera score` over
+  telemetry with no `cohaera.integrity:1` sidecars — still the common case —
+  pays nothing, and a run that verifies four signatures comes out slightly
+  behind. The case worth optimising is the other one:
+  `max_signature_verifications` bounds a producer-controlled quantity at
+  100,000, and that worst case fell from about 400 s to 250 s.
+
+This is a change to a cryptographic primitive, so it is checked as one. The comb
+is compared against `_mul(_G, s)` on the digit boundaries (0, 1, 15, 16, 17,
+`L-1`, a full top digit, all digits at maximum) and on seeded random scalars,
+and the RFC 8032 vectors still run through `verify` unchanged. Dropping one
+table row, misindexing a digit by one, or letting `sign` use the table each
+fail the suite.
 
 ## A CH02 property this surfaced
 
