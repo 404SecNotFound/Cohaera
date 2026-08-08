@@ -586,6 +586,73 @@ def test_capability_manifest_raises_classification_confidence():
     assert cov["manifest_class_calls"] == 1
 
 
+# -- COH-R07: a mean over calls is diluted by adding calls -------------------
+#
+# E02 said a violation RATE can be padded under threshold. This is the same
+# attack against a different denominator: the classification confidence in every
+# verdict was a mean over the session's calls, and the producer decides how many
+# calls there are.
+
+
+def _padded_session(known_reads: int, declared: bool) -> Session:
+    """One tool Cohaera cannot classify, buried in tools it can."""
+    tools = {"read_file": {"effects": ["read"]}} if declared else {}
+    manifest = CapabilityManifest.from_obj(
+        {"tools": tools}) if declared else EMPTY_MANIFEST
+    events = [ev("tool_start", 0, tool_name="frobnicate_ledger", span_id="X"),
+              ev("tool_end", 1, tool_name="frobnicate_ledger", span_id="X")]
+    for i in range(known_reads):
+        events += [ev("tool_start", 2 + 2 * i, tool_name="read_file", span_id=f"r{i}"),
+                   ev("tool_end", 3 + 2 * i, tool_name="read_file", span_id=f"r{i}")]
+    return Session(session_id="s", manifest=manifest, events=events)
+
+
+@pytest.mark.parametrize("declared", [True, False])
+def test_classification_confidence_cannot_be_padded_upwards(declared):
+    """The reproduction. One unclassifiable call, then 0, 1, 5, 20 and 100
+    harmless ones -- the confidence must not move, because the thing it is
+    confident about has not changed.
+
+    With a manifest covering the padding it reached 0.99, and a verdict claiming
+    99% classification confidence over a session containing a call Cohaera could
+    not classify at all is a misdescription, not a summary.
+    """
+    seen = {coverage(_padded_session(n, declared), None)["classification_confidence"]
+            for n in (0, 1, 5, 20, 100)}
+    assert seen == {0.0}, f"confidence moved with padding: {sorted(seen)}"
+
+
+def test_the_share_still_says_how_much_of_the_session_was_understood():
+    """The average is not deleted, it is demoted. One unknown call out of two
+    and one out of a hundred are different operational situations, and the worst
+    case cannot tell them apart."""
+    shares = [coverage(_padded_session(n, True), None)["classification_share"]
+              for n in (0, 1, 20, 100)]
+    assert shares == sorted(shares), shares
+    assert shares[0] == 0.0 and shares[-1] > 0.98
+
+
+def test_the_worst_call_sets_the_confidence_not_the_best():
+    """A session is scored as a whole, so its exposure is its least-known call.
+    A single name-heuristic guess among manifest declarations caps the session
+    at the heuristic's weight -- it does not average away."""
+    manifest = CapabilityManifest.from_obj(
+        {"tools": {"declared_tool": {"effects": ["read"]}}})
+    events = [ev("tool_start", 0, tool_name="declared_tool", span_id="A"),
+              ev("tool_end", 1, tool_name="declared_tool", span_id="A")]
+    all_declared = Session(session_id="s", manifest=manifest, events=list(events))
+    assert coverage(all_declared, None)["classification_confidence"] == 1.0
+
+    events += [ev("tool_start", 2, tool_name="send_email", span_id="B"),
+               ev("tool_end", 3, tool_name="send_email", span_id="B")]
+    mixed = Session(session_id="s", manifest=manifest, events=events)
+    cov = coverage(mixed, None)
+    assert cov["classification_confidence"] == 0.7
+    assert cov["classification_share"] == 0.85, (
+        "the mean of 1.0 and 0.7 -- which is exactly what must NOT be the "
+        "confidence")
+
+
 def test_manifest_outranks_the_producer_reversible_flag():
     """SEC-03. ``reversible`` arrives in band from the path an attacker would
     control to hide an action. A manifest is loaded out of band."""

@@ -1501,29 +1501,53 @@ class CheckContract:
         }
 
 
-def _classification_quality(session: Session) -> tuple[float, int, int, int]:
-    """(confidence, unknown, heuristic, manifest) over this session's calls.
+def _classification_quality(session: Session) -> tuple[float, int, int, int, float]:
+    """(worst_case, unknown, heuristic, manifest, mean) over this session's calls.
 
     A call classified from a signed-out-of-band manifest is a fact. One
     classified from its name is a guess about an attacker-supplied string. One
-    that matched nothing is not classified at all, and the old coverage score
-    treated that last case as a standalone gap that cost the session nothing.
+    that matched nothing is not classified at all.
+
+    COH-R07. THE CONFIDENCE IS THE WORST CALL, NOT THE AVERAGE ONE.
+
+    This used to return the mean, and a mean over calls is diluted by adding
+    calls -- which is a thing the producer decides. One unknown tool padded with
+    a hundred manifest-declared reads scored 0.99, and a verdict that says
+    "classification confidence 0.99" about a session containing one call Cohaera
+    could not classify at all is not a summary, it is a misdescription. It is
+    E02 again in a different field: the same dilution that hid a violation RATE
+    hid a classification gap.
+
+    The question a confidence answers is "how much should I trust what this
+    check concluded". A check concludes over the WHOLE session, so its exposure
+    is the least-known call in it, not the average call. One unknown call means
+    Cohaera does not know whether this session contained a consequential action
+    -- and no number of reads it does understand makes that less true.
+
+    The mean is still returned, and still reported, as ``classification_share``.
+    It answers a different and genuinely useful question -- how much of this
+    session was understood -- and losing it would cost an operator the
+    difference between one unknown call and forty. It is a diagnostic; the
+    worst case is the confidence.
     """
     calls = session.tool_calls
     if not calls:
-        return 1.0, 0, 0, 0
+        return 1.0, 0, 0, 0, 1.0
     unknown = heuristic = manifest = 0
     total = 0.0
+    worst = 1.0
     for c in calls:
         if c.klass == "unknown":
             unknown += 1
+            worst = 0.0
         elif c.klass_source == SOURCE_MANIFEST:
             manifest += 1
             total += 1.0
         else:
             heuristic += 1
             total += _HEURISTIC_CLASS_WEIGHT
-    return total / len(calls), unknown, heuristic, manifest
+            worst = min(worst, _HEURISTIC_CLASS_WEIGHT)
+    return worst, unknown, heuristic, manifest, total / len(calls)
 
 
 def _clock_quality(session: Session) -> float:
@@ -1567,7 +1591,8 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
     tool_result is charged to CH03, whose provenance story needs it.
     """
     calls = session.tool_calls
-    class_conf, unknown, heuristic, manifest_hits = _classification_quality(session)
+    (class_conf, unknown, heuristic, manifest_hits,
+     class_share) = _classification_quality(session)
     clock_conf = _clock_quality(session)
     corr_conf = session.correlation_confidence
     corr_kind = session.correlation.kind if session.correlation else "session_id"
@@ -1979,7 +2004,12 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
         "completeness": round(completeness, 3),
         "correlation_kind": corr_kind,
         "correlation_confidence": round(corr_conf, 3),
+        # Worst case, not average: see _classification_quality. The share is
+        # the average, kept as a diagnostic because "one unknown call" and
+        # "forty unknown calls" are different operational situations and the
+        # worst case cannot tell them apart.
         "classification_confidence": round(class_conf, 3),
+        "classification_share": round(class_share, 3),
         "clock_confidence": round(clock_conf, 3),
         "unknown_class_calls": unknown,
         "heuristic_class_calls": heuristic,

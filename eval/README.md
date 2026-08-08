@@ -473,6 +473,31 @@ This is not specific to the corpus. Shared-prefix tool suites are the norm
 and any agent using one can conceal a write by naming the adjacent read. It is
 catalogued as **E16** in [`../EVASION.md`](../EVASION.md).
 
+## The corpus grades the checks; it does not grade the plumbing
+
+Worth stating plainly, because two defects in a row have now landed in the gap.
+
+A sixth review found that CH03 read the scanner's `has_injection_patterns` with
+truthiness — `"false"` is a truthy string, so a scanner reporting it found
+*nothing* produced a critical finding — and that the classification confidence
+in every verdict was a **mean** over a session's calls, which the producer
+dilutes by adding calls. Both are real, both are fixed, and **neither changed a
+single number on the card.**
+
+They could not have. Every session in this corpus emits well-formed scanner
+fields, so the malformed case is never generated. And every session is
+homogeneous in how its tools are classified — all manifest, or all heuristic, or
+all unknown — so the mean and the worst case are the same number in all 1,824 of
+them, in every capability condition. Checked, not assumed.
+
+That is a real limit and it is not the synthetic-data limit. The corpus was
+built to grade the *checks*: does CH03 fire on the right sessions, does CH01
+decline on the right ones. The machinery the checks stand on — the schema
+firewall, the coverage arithmetic, the manifest loader — is graded by
+`tests/test_hostile.py` and by nothing here. A confounder kind for each would
+change prevalence and every published number, so it is a decision to take
+deliberately rather than a gap to quietly plug.
+
 ## What this is not
 
 The card's own "What this does not measure" section is the authoritative list.
