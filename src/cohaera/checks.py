@@ -60,11 +60,15 @@ from .evidence import (
     R_NO_COLLECTOR_KEYS,
     R_NO_FRESHNESS_BOUND,
     R_NO_INTEGRITY,
+    R_NO_STREAM_LEDGER,
     R_PARTIAL_INTEGRITY,
     R_SEQUENCE_GAP,
     R_SEQUENCE_REPLAY,
     R_SIGNATURE_INVALID,
     R_STALE,
+    R_STREAM_FORKED,
+    R_STREAM_REPLAYED,
+    R_STREAM_SKIPPED_RECORDS,
     R_UNSIGNED,
     SessionIntegrity,
 )
@@ -76,11 +80,26 @@ from .validate import sanitise_display
 # Re-exported so that every reason code an operator can see is importable from
 # one module, even though the integrity ones are produced in ``evidence``.
 __all__ = [
-    "R_CHAIN_BROKEN", "R_FRESHNESS_UNVERIFIABLE", "R_KEY_EXPIRED",
-    "R_KEY_NOT_YET_VALID", "R_KEY_REVOKED", "R_KEY_UNKNOWN",
-    "R_KEY_WINDOW_UNCHECKED", "R_KEY_WRONG_ROLE", "R_NO_COLLECTOR_KEYS",
-    "R_NO_FRESHNESS_BOUND", "R_NO_INTEGRITY", "R_PARTIAL_INTEGRITY",
-    "R_SEQUENCE_GAP", "R_SEQUENCE_REPLAY", "R_SIGNATURE_INVALID", "R_STALE",
+    "R_CHAIN_BROKEN",
+    "R_FRESHNESS_UNVERIFIABLE",
+    "R_KEY_EXPIRED",
+    "R_KEY_NOT_YET_VALID",
+    "R_KEY_REVOKED",
+    "R_KEY_UNKNOWN",
+    "R_KEY_WINDOW_UNCHECKED",
+    "R_KEY_WRONG_ROLE",
+    "R_NO_COLLECTOR_KEYS",
+    "R_NO_FRESHNESS_BOUND",
+    "R_NO_INTEGRITY",
+    "R_NO_STREAM_LEDGER",
+    "R_PARTIAL_INTEGRITY",
+    "R_SEQUENCE_GAP",
+    "R_SEQUENCE_REPLAY",
+    "R_SIGNATURE_INVALID",
+    "R_STALE",
+    "R_STREAM_FORKED",
+    "R_STREAM_REPLAYED",
+    "R_STREAM_SKIPPED_RECORDS",
     "R_UNSIGNED",
 ]
 
@@ -1226,6 +1245,17 @@ def ch06_evidence_integrity(session: Session,
         parts.append(f"{audit.codes[R_STALE]} verified record(s) are older than "
                      f"the freshness bound, the oldest by {age}, which is what "
                      f"re-feeding an archived stream looks like")
+    if R_STREAM_REPLAYED in codes:
+        seen = ", ".join(sorted({r["stream_id"] for r in audit.replayed_streams}))
+        parts.append(f"stream(s) {seen} occupy sequence positions a previous run "
+                     f"already scored, and the chain head matches at the shared "
+                     f"position -- the same records, fed twice")
+    if R_STREAM_FORKED in codes:
+        seen = ", ".join(sorted({r["stream_id"] for r in audit.replayed_streams}))
+        parts.append(f"stream(s) {seen} reuse sequence positions a previous run "
+                     f"scored, and the chain head DIFFERS there: two mutually "
+                     f"exclusive versions of the same stream, both signed. This "
+                     f"is not a replay, it is a rewritten history")
 
     return [Finding(
         check=CH06_INTEGRITY,
@@ -1819,6 +1849,32 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
             int_assumptions.append(
                 "No freshness bound was in force, so this session was not "
                 "checked for stream replay at all.")
+        # The seen-stream ledger. Freshness bounds how OLD a stream may be;
+        # this is the only thing that bounds how many TIMES it is scored, and
+        # whether it was in force is a property of the invocation.
+        if R_NO_STREAM_LEDGER in audit.codes:
+            conf *= 0.9
+            int_reasons.append(R_NO_STREAM_LEDGER)
+            int_remedies.append(
+                "Pass --seen-streams to keep a ledger of streams already "
+                "scored. It is the only check that sees a stream re-fed INSIDE "
+                "the freshness window, which every other check passes because "
+                "the replayed stream is genuine.")
+            int_assumptions.append(
+                "No ledger was in force, so a stream scored by a previous run "
+                "was scored again as if new.")
+        else:
+            int_assumptions.append(
+                "The seen-stream ledger is unsigned local state. It detects a "
+                "replay to THIS host; an attacker who can delete the file, or "
+                "who replays to a different Cohaera host, defeats it "
+                "(EVASION.md E22).")
+        if R_STREAM_SKIPPED_RECORDS in audit.codes:
+            int_reasons.append(R_STREAM_SKIPPED_RECORDS)
+            int_assumptions.append(
+                "Records between the last scored sequence and this run's first "
+                "were never scored. That is deletion or a deliberate subset, "
+                "and this cannot tell them apart.")
         if audit.inadmissible:
             conf = 0.0
         contracts.append(CheckContract(

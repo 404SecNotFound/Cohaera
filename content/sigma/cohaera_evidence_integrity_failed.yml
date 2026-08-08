@@ -29,6 +29,26 @@ description: |
   configuration. Verification says these records are the ones that collector
   wrote. It does not say the collector was truthful.
 
+  STREAM REPLAY AND STREAM FORK ARE THE TWO THAT NEED A LEDGER.
+  data.findings[].evidence.integrity.codes distinguishes them, and they mean
+  different things:
+
+    INTEGRITY_STREAM_REPLAYED  a stream this Cohaera host already scored was fed
+                               again, and the chain head matches at the shared
+                               sequence -- the same records, twice. Every other
+                               check in this pack passes on it, because the
+                               records are genuine; they are just not new.
+    INTEGRITY_STREAM_FORKED    the same sequence positions carry DIFFERENT
+                               records, both validly signed. Somebody holding a
+                               collector key produced two mutually exclusive
+                               versions of one stream. Escalate this above a
+                               replay: it is not a duplicate, it is a rewrite.
+
+  Both require `--seen-streams`. Without it the verdict carries
+  NO_STREAM_LEDGER and neither can fire, so their absence is not evidence of
+  absence. The ledger is unsigned local state by necessity and an attacker who
+  can delete it defeats it (EVASION.md E22).
+
   A SEQUENCE GAP IS THE ONE TO ESCALATE. Deleting an event was, before this,
   detectable only by accident -- when the missing call happened to break a
   learned bigram. data.findings[].evidence.integrity.sequence_gaps says how many

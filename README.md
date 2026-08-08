@@ -66,7 +66,7 @@ fitted on those same twelve near-identical sessions. That is a smoke test wearin
 a lab coat.
 
 So there is a file in this repository called [EVASION.md](EVASION.md) whose
-entire job is to break this one. 19 constructed evasions, 18 of them still
+entire job is to break this one. 20 constructed evasions, 19 of them still
 working, each backed by a test that passes when the evasion succeeds. Read it
 before you trust anything else here — including the entry for the one that has
 been closed, which cost 36 new false positives and says so.
@@ -599,10 +599,28 @@ score**; `--require-signed-policy` makes a missing one a refusal too.
 closes half of [E03](EVASION.md): editing the baseline is now detectable, and
 influencing what goes into it before it is signed is not.
 
-`--evidence-max-age` is the one bound that sees a replayed stream. Every other
-check passes on a captured stream re-fed months later — contiguous sequence,
-intact chain, valid signatures — because it really was written by that collector.
-Off by default, and coverage says `NO_FRESHNESS_BOUND` when it is off.
+`--evidence-max-age` and `--seen-streams` are the two controls that see a
+replayed stream, and they see different ones. Every other check passes on a
+captured stream re-fed later — contiguous sequence, intact chain, valid
+signatures — because it really was written by that collector.
+
+`--evidence-max-age` bounds how **old** a stream may be, judged from the
+timestamp the collector signed: a replayer can re-send the bytes and cannot
+re-date them. `--seen-streams` bounds how many **times** one is scored, and it
+is the only thing that catches a stream re-fed an hour later, still inside any
+sane window. It is a small JSON ledger — stream id, sequence range, chain head —
+and it is the first state Cohaera keeps between runs.
+
+The chain head is what separates a replay from a collector restart: the same
+records rebuild the same chain, new records over the same sequence numbers do
+not. Same position and same head is `INTEGRITY_STREAM_REPLAYED`; same position
+and a *different* head is `INTEGRITY_STREAM_FORKED`, which is worse — two
+mutually exclusive versions of one stream, both signed.
+
+Both are off by default and coverage says so (`NO_FRESHNESS_BOUND`,
+`NO_STREAM_LEDGER`). The ledger is unsigned local state by necessity — signing
+it would be Cohaera attesting to its own attestations — so deleting the file
+defeats it, which is [EVASION.md](EVASION.md) E22.
 
 Human summary goes to **stderr**, escaped: a producer that puts a newline and an
 ANSI sequence in a `session_id` could otherwise forge a convincing `0 finding(s)`
@@ -918,9 +936,9 @@ prevention claim collapses.
 - [x] Sigma content pack, 13 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 489 passing across unit, hostile-input and content conformance
+- [x] Tests, 501 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
-- [x] Adversarial self-test, 23 evasions ([EVASION.md](EVASION.md))
+- [x] Adversarial self-test, 25 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger
 - [x] Typed capability manifests per producer, replacing name heuristics
 - [x] Stable verdict, run and config identity for replay and dedup
@@ -1040,7 +1058,7 @@ tests/
                       resource amplification, correlation forgery, exit codes
   test_content.py     asserts every field the Sigma pack names exists in a real
                       record. Sigma validation cannot check this.
-  test_evasion.py     23 adversarial tests that PASS when an evasion works
+  test_evasion.py     24 adversarial tests that PASS when an evasion works
   test_evidence.py    the P1 mechanisms, attacked: RFC 8032 vectors, forged
                       signatures, deletion, modification, replay, reorder,
                       approval substitution and receipt copying

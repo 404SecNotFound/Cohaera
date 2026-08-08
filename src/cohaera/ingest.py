@@ -31,7 +31,14 @@ from pathlib import Path
 from typing import Any
 
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest
-from .evidence import EMPTY_STORE, NO_FRESHNESS, Freshness, StreamVerifier, TrustStore
+from .evidence import (
+    EMPTY_STORE,
+    NO_FRESHNESS,
+    Freshness,
+    StreamLedger,
+    StreamVerifier,
+    TrustStore,
+)
 from .identity import ANON_WINDOW_S, Correlator
 from .limits import (
     DEFAULT_LIMITS,
@@ -365,7 +372,8 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
              report: IngestReport | None = None,
              quiet: bool = False,
              keys: TrustStore = EMPTY_STORE,
-             freshness: Freshness = NO_FRESHNESS) -> list[Session]:
+             freshness: Freshness = NO_FRESHNESS,
+             ledger: StreamLedger | None = None) -> list[Session]:
     """Group a flat event stream into Sessions.
 
     Keyed on session_id, then trace_id, then a scoped anonymous key, then
@@ -420,7 +428,8 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
     # A dropped event still occupies a position in its collector stream, so it
     # is observed for sequence continuity and attributed to no session. Omitting
     # it would manufacture a gap out of Cohaera's own budget.
-    verifier = StreamVerifier(keys=keys, limits=limits, freshness=freshness)
+    verifier = StreamVerifier(keys=keys, limits=limits, freshness=freshness,
+                              ledger=ledger)
     for e in incoming:
         verifier.observe(e.raw, e.integrity, session_of.get(id(e), ""))
     verifier.finalise()
@@ -460,10 +469,11 @@ def load(path: str | Path, limits: Limits = DEFAULT_LIMITS,
          report: IngestReport | None = None,
          quiet: bool = False,
          keys: TrustStore = EMPTY_STORE,
-         freshness: Freshness = NO_FRESHNESS) -> list[Session]:
+         freshness: Freshness = NO_FRESHNESS,
+         ledger: StreamLedger | None = None) -> list[Session]:
     """Read and group one telemetry file. The report is filled in as a side effect."""
     rep = report if report is not None else IngestReport()
     events = list(read_events(path, limits=limits, report=rep, quiet=quiet))
     return assemble(events, limits=limits, correlator=correlator,
                     manifest=manifest, report=rep, quiet=quiet, keys=keys,
-                    freshness=freshness)
+                    freshness=freshness, ledger=ledger)

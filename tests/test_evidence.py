@@ -63,6 +63,7 @@ from cohaera.cli import main as cli_main
 from cohaera.evidence import (
     APPROVAL_SCHEMA,
     INTEGRITY_SCHEMA,
+    LEDGER_SCHEMA,
     NO_FRESHNESS,
     P_ARTIFACT_MISMATCH,
     P_DIGEST_MISMATCH,
@@ -84,6 +85,7 @@ from cohaera.evidence import (
     R_KEY_WINDOW_UNCHECKED,
     R_KEY_WRONG_ROLE,
     R_NO_COLLECTOR_KEYS,
+    R_NO_STREAM_LEDGER,
     R_PARTIAL_INTEGRITY,
     R_REORDER_BUDGET,
     R_REORDERED,
@@ -91,6 +93,9 @@ from cohaera.evidence import (
     R_SEQUENCE_REPLAY,
     R_SIGNATURE_INVALID,
     R_STALE,
+    R_STREAM_FORKED,
+    R_STREAM_REPLAYED,
+    R_STREAM_SKIPPED_RECORDS,
     RECEIPT_SCHEMA,
     ROLE_COLLECTOR,
     ROLE_POLICY,
@@ -103,8 +108,10 @@ from cohaera.evidence import (
     EffectReceipt,
     Freshness,
     Integrity,
+    LedgerError,
     PolicySignature,
     PolicySignatureError,
+    StreamLedger,
     StreamVerifier,
     TrustStore,
     TrustStoreError,
@@ -1546,3 +1553,215 @@ def test_a_receipt_bound_to_different_arguments_does_not_contradict_quietly():
     ]
     session = assemble(events)[0]
     assert [f.check for f in ch07_effect_contradiction(session)] == [CH07_UNBOUND]
+
+
+# ---------------------------------------------------------------------------
+# 7. The seen-stream ledger: replay INSIDE the freshness window
+# ---------------------------------------------------------------------------
+#
+# Every check above passes on a replayed archive, and each for a good reason:
+# the sequence really is contiguous, the chain really does hold, the signatures
+# really do verify. Freshness catches the replay that is OLD. This is the
+# residue -- re-feeding yesterday's stream, still inside any sane window.
+
+
+def _scored(records: list[dict], ledger_path, run_id: str = "run-1"):
+    """One full run against a persistent ledger, as the CLI does it."""
+    ledger = StreamLedger.load(ledger_path)
+    v = StreamVerifier(keys=KEYS, ledger=ledger, run_id=run_id)
+    for raw in records:
+        e = Event(raw=raw)
+        v.observe(e.raw, e.integrity, raw.get("session_id", ""))
+    v.finalise()
+    ledger.stamp(run_id)
+    ledger.save()
+    return v.for_session("sess-1"), ledger
+
+
+def test_a_stream_scored_twice_is_detected_the_second_time(tmp_path):
+    """The whole point. Nothing else in this module can see this."""
+    path = tmp_path / "seen.json"
+    signed = sign_stream(_records(6), "stream-a", SECRET, KEY_ID)
+
+    first, _ = _scored(signed, path)
+    assert not first.inadmissible, "a stream's first scoring must be clean"
+
+    second, _ = _scored(signed, path, run_id="run-2")
+    assert R_STREAM_REPLAYED in second.codes
+    assert second.inadmissible
+    assert second.replayed_streams[0]["head_comparison"] == "match"
+
+
+def test_a_rewritten_history_is_a_fork_and_not_a_replay(tmp_path):
+    """Same sequence positions, DIFFERENT records, both validly signed.
+
+    A replay re-sends the same records and rebuilds the same chain, so the head
+    matches at a shared sequence. A fork fills the same positions with different
+    records, so it does not. That distinction is the reason the ledger stores a
+    chain head and not just a sequence number -- without it, a collector restart
+    and a rewritten history are the same event, and one of them is an attack.
+    """
+    path = tmp_path / "seen.json"
+    _scored(sign_stream(_records(6), "stream-a", SECRET, KEY_ID), path)
+
+    other = [{**r, "tool_name": "object_put"} for r in _records(6)]
+    forked = sign_stream(other, "stream-a", SECRET, KEY_ID)
+    state, _ = _scored(forked, path, run_id="run-2")
+
+    assert R_STREAM_FORKED in state.codes
+    assert R_STREAM_REPLAYED not in state.codes
+    assert state.replayed_streams[0]["head_comparison"] == "differs"
+
+
+def test_a_genuine_continuation_is_not_a_replay(tmp_path):
+    """The confounder that decides whether this is usable.
+
+    A collector tailed in batches sends seq 0-5 then 6-11. If that read as a
+    replay, the ledger would fire on every scheduled run and be turned off
+    within a day.
+    """
+    path = tmp_path / "seen.json"
+    full = sign_stream(_records(12), "stream-b", SECRET, KEY_ID)
+    first, _ = _scored(full[:6], path)
+    second, ledger = _scored(full[6:], path, run_id="run-2")
+
+    assert not first.inadmissible
+    assert R_STREAM_REPLAYED not in second.codes
+    assert R_STREAM_FORKED not in second.codes
+    assert ledger.streams["stream-b"].last_seq == 11
+    assert ledger.streams["stream-b"].runs == 2
+
+
+def test_a_replay_does_not_advance_the_ledger(tmp_path):
+    """Or the SECOND replay would pass.
+
+    Recording a replay's extent would move the reference forward to exactly
+    where the attacker's copy ends, so re-feeding it again would read as a
+    continuation. Nothing legitimate was scored, so nothing is recorded except
+    that it happened.
+    """
+    path = tmp_path / "seen.json"
+    signed = sign_stream(_records(6), "stream-a", SECRET, KEY_ID)
+    _scored(signed, path)
+    _, after_first = _scored(signed, path, run_id="run-2")
+    third, after_second = _scored(signed, path, run_id="run-3")
+
+    assert R_STREAM_REPLAYED in third.codes, "the second replay must also fire"
+    assert after_first.streams["stream-a"].last_seq == 5
+    assert after_second.streams["stream-a"].runs == 3, (
+        "the ledger must still count the attempts even though it records no new "
+        "extent")
+
+
+def test_a_fork_does_not_become_the_reference(tmp_path):
+    """Adopting the fork's head would make the attacker's version the history
+    every future run is measured against."""
+    path = tmp_path / "seen.json"
+    original = sign_stream(_records(6), "stream-a", SECRET, KEY_ID)
+    _scored(original, path)
+    honest_head = StreamLedger.load(path).streams["stream-a"].head
+
+    other = [{**r, "tool_name": "object_put"} for r in _records(6)]
+    _scored(sign_stream(other, "stream-a", SECRET, KEY_ID), path, run_id="run-2")
+    assert StreamLedger.load(path).streams["stream-a"].head == honest_head
+
+
+def test_records_never_scored_are_reported_but_not_called_tampering(tmp_path):
+    """Scoring a subset on purpose and having records deleted look identical
+    from inside one run, so this is a reason code and not a finding."""
+    path = tmp_path / "seen.json"
+    full = sign_stream(_records(12), "stream-b", SECRET, KEY_ID)
+    _scored(full[:4], path)
+    state, _ = _scored(full[8:], path, run_id="run-2")
+    assert R_STREAM_SKIPPED_RECORDS in state.codes
+    assert not state.inadmissible
+
+
+def test_without_a_ledger_the_absence_is_stated(tmp_path):
+    """Not silence. A run with no ledger did not check for replay, and a
+    verdict that does not say so invites the reader to assume it did."""
+    signed = sign_stream(_records(4), "stream-a", SECRET, KEY_ID)
+    state = _run(signed).for_session("sess-1")
+    assert R_NO_STREAM_LEDGER in state.codes
+    assert not state.inadmissible
+
+
+def test_a_missing_ledger_file_is_a_first_run_and_a_corrupt_one_is_not(tmp_path):
+    """The asymmetry matters. Absent is the first run. Present-and-unreadable
+    is refused, because scoring everything as new is exactly what deleting the
+    ledger achieves, and doing it quietly would hide the deletion."""
+    missing = tmp_path / "nope.json"
+    assert StreamLedger.load(missing).streams == {}
+
+    corrupt = tmp_path / "bad.json"
+    corrupt.write_text("{", encoding="utf-8")
+    with pytest.raises(LedgerError):
+        StreamLedger.load(corrupt)
+
+    path = tmp_path / "seen.json"
+    _scored(sign_stream(_records(4), "stream-a", SECRET, KEY_ID), path)
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["streams"]["stream-a"]["last_seq"] = 99      # edited body, stale digest
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(LedgerError, match="digest does not match"):
+        StreamLedger.load(path)
+
+
+def test_the_ledger_is_replaced_atomically(tmp_path):
+    """C5-06's lesson, applied to the one file that survives between runs."""
+    path = tmp_path / "seen.json"
+    _scored(sign_stream(_records(4), "stream-a", SECRET, KEY_ID), path)
+    assert json.loads(path.read_text(encoding="utf-8"))["scheme"] == LEDGER_SCHEMA
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".")]
+
+
+def test_the_ledger_refuses_to_grow_without_bound(tmp_path):
+    """A stream id is producer-chosen, so a hostile producer minting one per
+    record turns the ledger into an unbounded disk write that PERSISTS. Refused
+    rather than evicted, because evicting makes an earlier stream's replay
+    undetectable and the producer picks which one goes."""
+    limits = DEFAULT_LIMITS.with_overrides(max_ledger_streams=2)
+    ledger = StreamLedger(streams={}, path=tmp_path / "seen.json", limits=limits)
+    for i in range(5):
+        signed = sign_stream(_records(2), f"stream-{i}", SECRET, KEY_ID)
+        v = StreamVerifier(keys=KEYS, ledger=ledger, limits=limits)
+        for raw in signed:
+            e = Event(raw=raw, limits=limits)
+            v.observe(e.raw, e.integrity, raw.get("session_id", ""))
+        v.finalise()
+    assert len(ledger.streams) == 2
+    assert ledger.budget_exhausted
+
+
+def test_the_ledger_catches_what_freshness_cannot(tmp_path):
+    """The two controls in one place, showing they cover different things.
+
+    A stream replayed one minute after it was scored is INSIDE any sane
+    freshness window, so the freshness bound passes it. That is not a defect in
+    freshness -- an old-stream bound cannot see a recent replay -- and it is the
+    entire reason this ledger exists.
+    """
+    path = tmp_path / "seen.json"
+    records = _records(5)
+    for i, r in enumerate(records):
+        r["timestamp"] = 1_000_000.0 + i
+    signed = sign_stream(records, "stream-a", SECRET, KEY_ID)
+    fresh = Freshness(max_age_s=3600.0, as_of=1_000_100.0)
+
+    def run(run_id: str):
+        ledger = StreamLedger.load(path)
+        v = StreamVerifier(keys=KEYS, ledger=ledger, freshness=fresh,
+                           run_id=run_id)
+        for raw in signed:
+            e = Event(raw=raw)
+            v.observe(e.raw, e.integrity, raw.get("session_id", ""))
+        v.finalise()
+        ledger.save()
+        return v.for_session("sess-1")
+
+    first = run("run-1")
+    second = run("run-2")
+    assert R_STALE not in first.codes and R_STALE not in second.codes, (
+        "both runs are inside the freshness window, which is the premise")
+    assert R_STREAM_REPLAYED in second.codes, (
+        "and the ledger is what sees it anyway")

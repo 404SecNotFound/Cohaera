@@ -50,9 +50,11 @@ from .evidence import (
     POLICY_ARTIFACT_BASELINE,
     POLICY_ARTIFACT_MANIFEST,
     Freshness,
+    LedgerError,
     PolicyAttestation,
     PolicySignature,
     PolicySignatureError,
+    StreamLedger,
     TrustStore,
     TrustStoreError,
     file_sha256,
@@ -311,6 +313,20 @@ def cmd_score(args: argparse.Namespace) -> int:
                  f"is not writable: {sanitise_display(str(exc), 200)}")
             return EXIT_ERROR
 
+    ledger: StreamLedger | None = None
+    if args.seen_streams:
+        try:
+            ledger = StreamLedger.load(args.seen_streams, limits)
+        except (LedgerError, OSError) as exc:
+            # Refused, not started fresh. An unreadable ledger scores every
+            # stream as new, which is precisely the state an attacker who
+            # deleted it wants, and doing that quietly would hide the deletion.
+            _err(f"[cohaera] seen-stream ledger rejected: "
+                 f"{sanitise_display(str(exc), 400)}")
+            return EXIT_ERROR
+        _err(f"[cohaera] seen-stream ledger {sanitise_display(args.seen_streams, 160)}: "
+             f"{len(ledger.streams)} stream(s) previously scored")
+
     report = IngestReport(source=str(args.telemetry))
     correlator = _correlator(args, limits)
 
@@ -358,7 +374,7 @@ def cmd_score(args: argparse.Namespace) -> int:
 
     sessions = load(args.telemetry, limits=limits, correlator=correlator,
                     manifest=manifest, report=report, keys=keys,
-                    freshness=freshness)
+                    freshness=freshness, ledger=ledger)
     _err(f"[cohaera] {sanitise_display(str(args.telemetry), 160)}: "
          f"{sum(len(s.events) for s in sessions)} events in {len(sessions)} sessions, "
          f"{report.rejected} record(s) quarantined\n")
@@ -372,6 +388,23 @@ def cmd_score(args: argparse.Namespace) -> int:
         baseline_hash=baseline_hash,
         manifest_hash=manifest.file_digest,
     )
+    if ledger is not None:
+        # Stamped here because analysis_run_id is a digest of everything read
+        # and does not exist until reading finishes. Written before any verdict
+        # is emitted: a run that dies while printing has still SCORED these
+        # streams, and forgetting that would let the same input through again.
+        ledger.stamp(run)
+        try:
+            ledger.save()
+        except (LedgerError, OSError) as exc:
+            # Same reasoning as the quarantine ledger (C4-04). Losing the record
+            # of what has been scored while reporting success means the next
+            # replay of this stream is undetectable and nothing said so.
+            _err(f"[cohaera] could not write the seen-stream ledger to "
+                 f"{sanitise_display(str(args.seen_streams), 160)}: "
+                 f"{sanitise_display(str(exc), 300)}")
+            return EXIT_ERROR
+
     provenance = {
         "analysis_run_id": run,
         "detector_version": __version__,
@@ -391,6 +424,10 @@ def cmd_score(args: argparse.Namespace) -> int:
         # silently.
         "policy_attestations": [a.as_dict() for a in attestations],
         "evidence_freshness": freshness.as_dict(),
+        "stream_ledger": (
+            {"enabled": True, "path": str(args.seen_streams),
+             "streams_known": len(ledger.streams)} if ledger
+            else {"enabled": False}),
         # Stream identity and extent, so that two runs which scored the same
         # collector stream twice are distinguishable after the fact. Cohaera
         # keeps no state between runs, so this is the only form replay detection
@@ -549,6 +586,16 @@ def _add_common(p: argparse._ActionsContainer) -> None:
                         "baseline) carries a signature that verified. Off by default "
                         "because it would break every existing deployment; on, it is "
                         "what turns the signature from an option into a control.")
+    p.add_argument("--seen-streams", metavar="PATH",
+                   help="JSON ledger of collector streams already scored, kept "
+                        "BETWEEN runs. It is what detects a stream re-fed inside "
+                        "the freshness window, which every other check passes "
+                        "because the replayed stream is genuine. Created on "
+                        "first use; a file that exists and does not parse is a "
+                        "hard error, because scoring everything as new is what "
+                        "deleting it would achieve. Unsigned local state: an "
+                        "attacker who can delete it removes the detection "
+                        "(EVASION.md E22).")
     p.add_argument("--evidence-max-age", type=positive_float, metavar="SECONDS",
                    help="Report signed records older than this as stale "
                         "(INTEGRITY_EVIDENCE_STALE). This is the bound that makes "

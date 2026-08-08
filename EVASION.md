@@ -11,10 +11,12 @@ later closes one, the test fails and this file gets updated.
 
 Run it: `PYTHONPATH=src python3 tests/test_evasion.py`
 
-**Current state: 18 of 19 constructed evasions still work.** Two, E02 and E21,
+**Current state: 19 of 20 constructed evasions still work.** Two, E02 and E21,
 are **closed** — and closing E02 opened two narrower ones, E18 and E19, while
-the P1 evidence-trust work opened E20. All three are in the table, because a fix
-that quietly relocates a weakness is worse than no fix.
+the P1 evidence-trust work opened E20 and E22. All four are in the table, because
+a fix that quietly relocates a weakness is worse than no fix. E22 is the clearest
+example of the pattern: the seen-stream ledger closes replay inside the freshness
+window, and the ledger is a local file somebody can delete.
 
 Four more — E03, E11, E13 and E16 — have had half of their impact removed. For
 E13 that half is now substantial rather than cosmetic: on a stream carrying
@@ -30,7 +32,7 @@ about the half that gives the evasion its name: an attacker who influences which
 sessions are *collected as benign* defines normal, and a signature over the
 resulting file says only that nobody edited it afterwards.
 
-The count goes up when a weakness is found, not only when one is fixed. Eighteen
+The count goes up when a weakness is found, not only when one is fixed. Twenty
 working evasions is a worse-looking number than sixteen and a more honest one.
 
 There is also a **denial-of-service class that is not in this table**, because
@@ -68,6 +70,8 @@ of this file under [Defects found by external review](#defects-found-by-external
 | E20 | CH04 | Declare a blocking control `advisory` on the event to silence CH04 entirely | Free, one string | Half closed, manifest overrides |
 | E20b | — | The manifest **does** take that declaration back | — | *the remedy, exercised* |
 | E21 | CH06 | Strip the integrity sidecar from the record you edited | — | **CLOSED**, reported as partial attestation |
+| E22 | CH06 | Delete the seen-stream ledger, then replay the stream | Write access to one local file | Half closed, the ledger is unsigned by necessity |
+| E22b | CH06 | Replay the stream to a *different* Cohaera host | A second collector | Open, the ledger is per-host |
 
 ---
 
@@ -209,6 +213,48 @@ advisory threshold in the evaluation corpus — its single largest source of fal
 positives. The alternative to trusting a declaration is paging an analyst for
 every soft limit forever, and an alarm nobody can act on is not a control
 either.
+
+## E22. Delete the seen-stream ledger, then replay
+
+**Introduced by the fix for cross-run replay, and it is the price of that fix
+rather than a defect in it.**
+
+`--seen-streams` gives Cohaera the one thing it never had: memory between runs.
+That memory is what detects a stream re-fed *inside* the freshness window —
+where the sequence is contiguous, the chain holds and the signatures verify,
+because the collector really did write those bytes. It is just last week's
+bytes.
+
+The ledger is a local JSON file and it is **unsigned**, which is not an
+oversight. Signing it would mean Cohaera attesting to its own attestations, and
+a verifier whose evidence it also produces proves nothing — the same argument
+that keeps signing in `tools/collector_sign.py` and out of `src/cohaera`. So the
+attack is: delete the file, replay the stream, and the next run sees every
+stream as new.
+
+**What the `digest` field does and does not do.** It catches a truncated or
+half-written ledger, which is a real failure mode and is refused rather than
+half-trusted. It catches nothing deliberate: anything that can rewrite the body
+can recompute the digest. The docstring says so and so does this entry, because
+a hash presented as tamper-evidence when it is only corruption-evidence is worse
+than no hash.
+
+**Half closed.** Deleting the ledger is no longer *free*: it requires write
+access to the Cohaera host's filesystem, where before replay required nothing at
+all. And a missing file is treated as a first run while a corrupt one is a hard
+error, so the noisy failure mode is refused and only outright deletion is quiet.
+Put the ledger somewhere the telemetry pipeline cannot reach and this costs an
+attacker a second foothold.
+
+## E22b. Replay to a different Cohaera host
+
+The ledger is per-host state, so a stream already scored on collector A is new
+to collector B. Nothing in this design fixes that; a shared ledger would need a
+store both hosts write to, which is a coordination problem and a new trust
+boundary rather than a bigger file.
+
+Stated because the alternative is an operator assuming a fleet is covered when
+each member is only covering itself.
 
 ## E21. Strip the sidecar from the record you edited — CLOSED
 
@@ -791,8 +837,8 @@ regression tests.
 | CH05 | Orphan terminal events were constructed with `result="success"` and never flagged. | An irreversible action appearing from nowhere was invisible | **Fixed.** `orphan_end` state, reported by CH05. |
 
 The review's C-05 finding, no executable test suite, was accurate at revision
-`45d3bf8`. There are now 489 tests: unit, hostile-input, content conformance and
-23 evasion characterizations, plus a seeded fuzz smoke test in CI.
+`45d3bf8`. There are now 501 tests: unit, hostile-input, content conformance and
+25 evasion characterizations, plus a seeded fuzz smoke test in CI.
 
 ### What is still open from the third review
 

@@ -30,6 +30,10 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+# The repo root too, so `tools.collector_sign` -- the reference producer for
+# cohaera.integrity:1 -- is importable. E22 needs a genuinely signed stream:
+# a hand-built one would test the fixture rather than the format.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cohaera import ed25519
 from cohaera.capabilities import CapabilityManifest
@@ -48,13 +52,18 @@ from cohaera.cli import main as cli_main
 from cohaera.evidence import (
     POLICY_ARTIFACT_BASELINE,
     POLICY_SIGNATURE_SCHEMA,
+    R_STREAM_REPLAYED,
     ROLE_POLICY,
     TRUST_STORE_SCHEMA,
+    StreamLedger,
+    StreamVerifier,
+    TrustStore,
     file_sha256,
     policy_signing_input,
 )
 from cohaera.ingest import assemble
 from cohaera.model import Event, Session
+from tools.collector_sign import key_id_for, keys_document, sign_stream
 
 BASE = 1_785_700_000.0
 
@@ -828,6 +837,48 @@ def test_evasion_03b_editing_a_signed_baseline_is_detected():
                  "session_id": "poison", "span_id": "spP",
                  "tool_name": "exfiltrate_all"}) + "\n")
         assert cli_main(argv) == 1, "a poisoned baseline must not be fitted"
+
+
+def test_evasion_22_delete_the_ledger_then_replay():
+    """E22. INTRODUCED BY THE CROSS-RUN REPLAY FIX, and the price of it.
+
+    The seen-stream ledger is unsigned local state, and it has to be: signing it
+    would mean Cohaera attesting to its own attestations. So deleting the file
+    puts every stream back to "never seen", and the replay it was added to catch
+    passes again.
+
+    WHY IT IS STILL THE RIGHT TRADE. Before the ledger, replaying a stream
+    inside the freshness window cost an attacker nothing at all -- no access, no
+    foothold, just re-send the bytes. Now it costs write access to the Cohaera
+    host's filesystem. That is not a closure and it is not nothing.
+    """
+    tmp_path = Path(tempfile.mkdtemp())
+    secret = bytes.fromhex("3c" * 32)
+    public = ed25519.public_key(secret)
+    key_id = key_id_for(public)
+    store = TrustStore.from_obj(keys_document(public, key_id))
+    path = tmp_path / "seen.json"
+    records = [{"event_type": "tool_start", "session_id": "s1",
+                "timestamp": 1000.0 + i, "span_id": f"sp{i}",
+                "tool_name": "alert_read", "data": {}} for i in range(4)]
+    signed = sign_stream(records, "stream-a", secret, key_id)
+
+    def score():
+        ledger = StreamLedger.load(path)
+        v = StreamVerifier(keys=store, ledger=ledger, run_id="r")
+        for raw in signed:
+            e = Event(raw=raw)
+            v.observe(e.raw, e.integrity, "s1")
+        v.finalise()
+        ledger.save()
+        return v.for_session("s1")
+
+    score()
+    assert R_STREAM_REPLAYED in score().codes, "the ledger must catch the replay"
+
+    path.unlink()                                    # the whole attack
+    assert R_STREAM_REPLAYED not in score().codes, (
+        "deleting the ledger no longer defeats replay detection")
 
 
 if __name__ == "__main__":

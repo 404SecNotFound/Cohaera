@@ -197,6 +197,16 @@ class Limits:
     max_approvals_per_session: int = 1_000
     max_collector_keys: int = 1_000
     max_keyfile_bytes: int = 1_048_576
+    # ---- the seen-stream ledger -----------------------------------------
+    # The one piece of state Cohaera keeps between runs, so it is also the one
+    # that can grow without an operator noticing. A stream id is producer-chosen,
+    # so a hostile producer can mint a new one per record and turn the ledger
+    # into an unbounded disk write on the collector host -- which is the same
+    # amplification fault as the 6.3 MB verdict, relocated to a file that
+    # persists. Bounded, with the eviction REPORTED, because an evicted stream
+    # is a stream whose replay is no longer detectable.
+    max_ledger_streams: int = 100_000
+    max_ledger_bytes: int = 33_554_432       # 32 MiB of ledger JSON
 
     # ---- CLI reject policy ----------------------------------------------
     max_rejects: int | None = None           # None = unlimited

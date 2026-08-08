@@ -15,7 +15,7 @@ before it.
 
 It is kept as written, with the implementation notes folded in, so that the
 difference between what was planned and what was built is readable rather than
-tidied away. Six things changed on contact with the code and each is marked
+tidied away. Seven things changed on contact with the code and each is marked
 **BUILT** or **CHANGED** at the point it applies:
 
 | Where | Change | Why |
@@ -26,6 +26,7 @@ tidied away. Six things changed on contact with the code and each is marked
 | §4 | CH04's blocking case is a **new check ID**, not a rewording of the old one | Renaming `CH04_guardrail_bypass_completed` would silently change what every existing Sigma rule matches |
 | §2 keys | The key file became a **trust store** with roles, windows and revocation (§2a), and the two policy files got signatures of their own (§2b) | "Rotation, revocation and multi-collector fleets need more than a file" was written here three times as a known gap. It was also what `capabilities.py` said manifest signing was blocked on, so the two were one piece of work |
 | §2 | A **freshness bound** (§2c), because every check in §2 passes on a replayed stream | A captured stream re-fed next month has a contiguous sequence, an intact chain and valid signatures — it really was written by that collector. Replay is a different attack from tampering and nothing here saw it |
+| §2 | A **seen-stream ledger** (§2d), the first state Cohaera has ever kept between runs | A freshness bound can only ask how *old* a stream is, so a stream replayed an hour after it was scored passes it — correctly, and unavoidably. Answering *have I seen this before* needs memory, and nothing else in this design has any |
 
 Implementation is in [`src/cohaera/evidence.py`](../src/cohaera/evidence.py) and
 [`src/cohaera/ed25519.py`](../src/cohaera/ed25519.py); the reference producers are
@@ -293,14 +294,77 @@ verdict stopped implying a question had been asked. That is the same move
 `NO_INTEGRITY_EVIDENCE` and the CH01 vocabulary contract make, and it is why the
 number an operator sees goes down after a commit that added a control.
 
-What remains open is replay **inside** the window, which needs memory of which
-streams have already been scored — a ledger surviving between runs, and Cohaera
-keeps no state between runs at all. Instead every verdict records each stream's
-identity and extent (`collector_streams`: stream id, first and last sequence,
-final chain head), so two runs that scored the same stream are distinguishable by
-comparing verdicts, or by a SIEM rule over the field, which is a place state does
-survive. Evidence after the fact, not prevention — the same distinction this
-document keeps drawing.
+---
+
+## 2d. P1.6 — The seen-stream ledger, and replay inside the window
+
+**Threat closed:** re-feeding a stream this host has already scored, at any age.
+**Threat not closed:** re-feeding it to a *different* Cohaera host, or deleting
+the ledger first.
+
+A freshness bound can only ask how OLD a stream is. Replay it an hour after it
+was scored and the answer is "an hour", which is inside any sane window — so
+§2c passes it, correctly, and cannot do otherwise. The two inputs are identical.
+
+Answering *have I seen this before* needs memory between runs, which is the one
+thing Cohaera has never had. `--seen-streams` is that memory, and it is
+deliberately small:
+
+```json
+{
+  "scheme": "cohaera.stream_ledger:1",
+  "digest": "<sha256 of the streams object>",
+  "streams": {
+    "collector-01": {"first_seq": 0, "last_seq": 812,
+                     "head": "<chain head at 812>", "runs": 3,
+                     "last_run_id": "…", "last_seen_at": 1786000000.0,
+                     "key_ids": ["ed25519:…"]}
+  }
+}
+```
+
+**Why it stores a chain head and not just a sequence number.** A collector
+restart and a replay both re-send seq 0, and conflating them would make every
+restart a critical finding. The chain separates them, because a replay re-sends
+the *same* records and rebuilds the *same* chain, while a restart writes new
+records over the same positions:
+
+| At a shared sequence | Meaning | Code |
+|---|---|---|
+| head matches | the same records, fed twice | `INTEGRITY_STREAM_REPLAYED` |
+| head differs | two mutually exclusive versions, both signed | `INTEGRITY_STREAM_FORKED` |
+| never reached | this run ended before the recorded position | reported as `not_reached` |
+
+The fork is the more serious of the two and is not a replay at all: it means
+somebody holding a valid collector key produced a second version of the same
+history. No check inside a single run can see that, because each version is
+internally perfect.
+
+**Neither outcome advances the ledger.** Recording a replay's extent would move
+the reference to exactly where the attacker's copy ends, so re-feeding it again
+would read as a continuation; adopting a fork's head would make the rewritten
+history the reference every future run is measured against. Nothing legitimate
+was scored, so nothing is recorded but the attempt — and the attempt is counted,
+so `runs` climbs.
+
+**What it is not, stated because the alternative is an operator assuming a fleet
+is covered.** The ledger is unsigned local state and has to be: signing it would
+be Cohaera attesting to its own attestations, the thing that keeps signing in
+`tools/collector_sign.py` and out of `src/cohaera`. Its `digest` field catches a
+truncated or half-written file — a real failure mode, refused rather than
+half-trusted — and catches nothing deliberate, because anything that can rewrite
+the body can recompute the digest. Deleting the file removes the detection
+(EVASION.md E22) and replaying to a second Cohaera host was never in its scope
+(E22b). What changed is the price: replay inside the window used to cost an
+attacker nothing at all, and now costs write access to the Cohaera host.
+
+A missing ledger is a first run and is not an error. A ledger that exists and
+does not parse **is** an error, because scoring everything as new is precisely
+what deleting it achieves, and doing that quietly would hide the deletion.
+
+`collector_streams` stays in every verdict regardless — it is what makes a
+replay auditable for a deployment running without a ledger, and a SIEM rule over
+the field is a place state survives that this process does not control.
 
 ---
 
@@ -450,6 +514,14 @@ It is still a file the operator names, which is still the capability manifest's
 trust model. Section 9 says what that leaves open, and it is a list rather than a
 sentence because the gap between this and a trust store somebody runs a fleet on
 is exactly the sort of thing a green tick hides.
+
+Stage 5 added the seen-stream ledger (§2d) and closed the last item this document
+listed as open — replay *inside* the freshness window. It is also the first state
+Cohaera keeps between runs, which is a genuinely new kind of thing for it to
+have, and §2d is explicit about what that state cannot do: it is unsigned by
+necessity, it is per-host, and deleting it is the whole of EVASION.md E22. What
+moved is the price of a replay, from nothing at all to write access on the
+Cohaera host.
 
 ---
 
