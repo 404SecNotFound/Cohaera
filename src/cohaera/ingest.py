@@ -43,6 +43,7 @@ from .limits import (
     DEFAULT_LIMITS,
     REJECT_LINE_TOO_LONG,
     REJECT_MALFORMED_JSON,
+    REJECT_MEMORY_BUDGET,
     REJECT_NESTING_TOO_DEEP,
     REJECT_NOT_AN_OBJECT,
     REJECT_RATIO_EXCEEDED,
@@ -53,6 +54,7 @@ from .limits import (
     REJECT_TOO_MANY_REJECTS,
     REJECT_TOO_MANY_SESSIONS,
     REJECT_UNDECODABLE,
+    RESIDENT_BYTES_PER_INPUT_BYTE,
     Limits,
     json_depth_exceeds,
 )
@@ -234,6 +236,7 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
 
     records_read = 0
     bytes_read = 0
+    retained_bytes = 0      # bytes of records that became Events
 
     def _budget_hit() -> tuple[str, str]:
         """The first live budget this run has exhausted, as (code, detail).
@@ -255,6 +258,18 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
         if rep.accepted >= limits.max_events_total:
             return REJECT_TOO_MANY_EVENTS, (
                 f"max_events_total={limits.max_events_total} reached")
+        # COH-R02. The one bound that is about what the input BECOMES. Every
+        # other budget here counts bytes or records; this design holds the
+        # whole run in memory, and a parsed record costs about 32 times its own
+        # bytes. Metered on RETAINED bytes, because a rejected record is read
+        # and released -- charging the estimate for it would abort honest runs
+        # over a noisy producer.
+        resident = retained_bytes * RESIDENT_BYTES_PER_INPUT_BYTE
+        if resident >= limits.max_resident_bytes:
+            return REJECT_MEMORY_BUDGET, (
+                f"estimated {resident} resident byte(s) from {retained_bytes} "
+                f"byte(s) of accepted input reaches "
+                f"max_resident_bytes={limits.max_resident_bytes}")
         if limits.max_rejects is not None and rep.rejected > limits.max_rejects:
             return REJECT_TOO_MANY_REJECTS, (
                 f"{rep.rejected} rejected record(s) exceeds "
@@ -364,6 +379,8 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
             continue
 
         e = Event(raw=obj, limits=limits)
+        retained_bytes += len(record)
+        rep.resident_bytes = retained_bytes * RESIDENT_BYTES_PER_INPUT_BYTE
         rep.note_bytes(record, b"A")
         rep.note_defects(e.defects)
         rep.accepted += 1

@@ -442,6 +442,10 @@ class IngestReport:
                           compare=False)
     reject_codes: dict[str, int] = field(default_factory=dict)
     defect_codes: dict[str, int] = field(default_factory=dict)
+    # COH-R02. The estimated peak resident cost of what has been ACCEPTED, so
+    # an operator can see how close a run came to max_resident_bytes rather
+    # than discovering the ceiling by being OOM-killed at it.
+    resident_bytes: int = 0
     aborted: bool = False
     abort_reason: str = ""
     # What the collector-stream verifier concluded across the whole input, as
@@ -493,6 +497,7 @@ class IngestReport:
             "defect_codes": dict(sorted(self.defect_codes.items())),
             "aborted": self.aborted,
             "abort_reason": self.abort_reason,
+            "resident_bytes_estimate": self.resident_bytes,
             "content_digest": self.content_digest,
         }
 

@@ -52,6 +52,7 @@ REJECT_TOO_MANY_RECORDS = "RECORD_BUDGET_EXHAUSTED"
 REJECT_TOO_MANY_BYTES = "INPUT_BYTE_BUDGET_EXHAUSTED"
 REJECT_TOO_MANY_REJECTS = "REJECT_BUDGET_EXHAUSTED"
 REJECT_RATIO_EXCEEDED = "REJECT_RATIO_EXCEEDED"
+REJECT_MEMORY_BUDGET = "RESIDENT_MEMORY_BUDGET_EXHAUSTED"
 
 # --- field-level defects (the record survives, degraded and labelled) ------
 DEFECT_EVENT_TYPE_TYPE = "INVALID_EVENT_TYPE"
@@ -89,11 +90,16 @@ DEFECT_RECEIPT_TYPE = "INVALID_EFFECT_RECEIPT"
 DEFECT_APPROVAL_TYPE = "INVALID_APPROVAL_OBJECT"
 DEFECT_ENFORCEMENT_TYPE = "INVALID_POLICY_ENFORCEMENT"
 
+# COH-R02. Peak resident bytes per byte of accepted input, measured across
+# record shapes and rounded up for headroom; see max_resident_bytes.
+RESIDENT_BYTES_PER_INPUT_BYTE = 32
+
 ALL_REJECT_CODES = (
     REJECT_MALFORMED_JSON, REJECT_NOT_AN_OBJECT, REJECT_LINE_TOO_LONG,
     REJECT_NESTING_TOO_DEEP, REJECT_UNDECODABLE, REJECT_TOO_MANY_EVENTS,
     REJECT_TOO_MANY_SESSIONS, REJECT_TOO_MANY_KEYS, REJECT_TOO_MANY_RECORDS,
     REJECT_TOO_MANY_BYTES, REJECT_TOO_MANY_REJECTS, REJECT_RATIO_EXCEEDED,
+    REJECT_MEMORY_BUDGET,
 )
 
 ALL_DEFECT_CODES = (
@@ -159,6 +165,40 @@ class Limits:
     # bound the WORK, not the yield, and are checked on every record.
     max_records_total: int = 4_000_000       # records READ, accepted or not
     max_input_bytes: int = 2_147_483_648     # 2 GiB of record bytes per run
+
+    # COH-R02. THE BOUND THAT WAS MISSING, AND WHY THE ONES ABOVE ARE NOT IT.
+    #
+    # Every bound above counts input. None of them counts what the input turns
+    # INTO, and this design holds the whole run in memory: `load` materialises
+    # every Event, groups them, and returns every Session at once. A parsed
+    # record is not the size of its bytes -- it is a dict of str objects, a
+    # frozen copy, and cached derived values -- so the ratio is large and it is
+    # driven by how many KEYS a record has rather than how long it is.
+    #
+    # Measured, peak RSS against input bytes, 20,000 records per shape:
+    #
+    #     8 keys per record       26.7x        128 keys      18.0x
+    #     40 keys                 21.6x        500 keys      20.1x
+    #     one 3 KB string          1.9x        typical observra record  16.3x
+    #
+    # So `max_input_bytes` at 2 GiB was a licence for roughly 64 GiB of
+    # process. It read as a bound and behaved as a suggestion.
+    #
+    # RESIDENT_BYTES_PER_INPUT_BYTE is the factor rounded up with headroom, and
+    # `max_resident_bytes` is the budget an operator actually cares about. With
+    # the defaults, memory binds first at about 64 MiB of accepted input --
+    # thirty-two times stricter than before, and the number is now one somebody
+    # can reason about against the RAM on the box.
+    #
+    # It is conservative for string-heavy telemetry, which amplifies about 2x
+    # rather than 20x. That direction is deliberate: a budget that stops a run
+    # early is an inconvenience, and one that stops it late is an OOM kill.
+    #
+    # THIS IS A BUDGET, NOT AN ARCHITECTURE. The honest fix is to stop holding
+    # the run in memory -- bounded session windows, a spool, external sorting.
+    # Until that exists this makes the failure a reported abort with a reason
+    # code instead of the kernel choosing which process dies.
+    max_resident_bytes: int = 2_147_483_648  # 2 GiB of assembled state
 
     # ---- identity and correlation ---------------------------------------
     max_span_chars: int = 256

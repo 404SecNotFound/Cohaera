@@ -72,6 +72,15 @@ any diff, so the numbers below are derived rather than claimed.
 - **COH-R01** — the input byte budget was checked after a whole physical record
   had been read and hashed, so a record with no newline could not be stopped
   while it was arriving.
+- **COH-R02** — none of the declared bounds bounded *memory*. Every one counted
+  input; this design holds the whole run in memory, and a parsed record costs
+  about 32× its own bytes because the cost is driven by how many keys it has,
+  not how long it is. `max_input_bytes` at 2 GiB was a licence for roughly
+  64 GiB of process. There is now a `max_resident_bytes` budget, metered on
+  retained bytes, enforced per record, reported in the ingest summary, and
+  regression-tested against `tracemalloc` so the factor cannot become folklore.
+  Under the defaults memory binds first, at about 64 MiB of accepted input.
+  **This is a budget, not an architecture** — see *Known limitations*.
 - **COH-R03** — CH03 read the scanner's `has_injection_patterns` with
   truthiness. `"false"` is a truthy string, so a scanner reporting it found
   *nothing* produced a critical finding. Both scanner fields now go through the
@@ -111,8 +120,13 @@ any diff, so the numbers below are derived rather than claimed.
 - **20 constructed evasions are catalogued and 19 still work**, on purpose:
   `tests/test_evasion.py` asserts they do, so that closing one without updating
   the catalogue fails the build.
-- Memory is not bounded end to end. `load` materialises every event and then
-  sorts (COH-R02).
+- **Cohaera still holds the whole run in memory.** `load` materialises every
+  event, groups them, and returns every session at once. COH-R02 added a budget
+  so that exceeding it is a reported abort with a reason code rather than the
+  kernel choosing which process dies — but the ceiling it enforces is low
+  (about 64 MiB of accepted telemetry per run under the defaults) because that
+  is what this design actually costs. Bounded session windows, a spool and
+  external sorting are the fix; they are not built.
 
 ## [0.2.0]
 

@@ -21,10 +21,12 @@ Run: PYTHONPATH=src python3 -m pytest tests/test_hostile.py -v
 
 from __future__ import annotations
 
+import gc
 import json
 import subprocess
 import sys
 import time
+import tracemalloc
 from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
 
@@ -63,6 +65,7 @@ from cohaera.limits import (
     DEFAULT_LIMITS,
     REJECT_LINE_TOO_LONG,
     REJECT_MALFORMED_JSON,
+    REJECT_MEMORY_BUDGET,
     REJECT_NESTING_TOO_DEEP,
     REJECT_NOT_AN_OBJECT,
     REJECT_RATIO_EXCEEDED,
@@ -70,6 +73,7 @@ from cohaera.limits import (
     REJECT_TOO_MANY_RECORDS,
     REJECT_TOO_MANY_REJECTS,
     REJECT_UNDECODABLE,
+    RESIDENT_BYTES_PER_INPUT_BYTE,
     Limits,
     LimitsError,
 )
@@ -2033,3 +2037,121 @@ def test_c507_the_escape_hatch_works_and_is_recorded(tmp_path, capsys):
     # budget. That IS the partial baseline this flag exists to permit.
     assert prov["baseline_ingest"]["records_rejected"] > 0
     assert prov["baseline_ingest"]["aborted"] is True
+
+
+# =====================================================================
+# COH-R02  the bound that is about memory
+# =====================================================================
+#
+# Every other budget in limits.py counts input. None counted what the input
+# BECOMES, and this design holds the whole run in memory. A parsed record is a
+# dict of str objects plus a frozen copy plus cached derived values, so it costs
+# far more than its bytes -- and how much more is driven by how many KEYS it has
+# rather than how long it is. `max_input_bytes` at 2 GiB was a licence for
+# roughly 64 GiB of process.
+
+
+def _keyed_records(path: Path, count: int, keys: int) -> Path:
+    with path.open("w", encoding="utf-8") as fh:
+        for i in range(count):
+            fh.write(json.dumps({
+                "timestamp": BASE + i, "event_type": "tool_end",
+                "session_id": "s",
+                "data": {f"k{j}": j for j in range(keys)}}) + "\n")
+    return path
+
+
+def test_a_key_dense_stream_aborts_on_the_memory_budget(tmp_path):
+    """The exhaustion test. 500 keys per record is the worst shape measured --
+    about 20x its own bytes in peak RSS -- and it is entirely producer-chosen,
+    since `max_record_keys` allows 512."""
+    path = _keyed_records(tmp_path / "dense.jsonl", 20_000, 500)
+    limits = DEFAULT_LIMITS.with_overrides(max_resident_bytes=64 * 1024 * 1024)
+    report = IngestReport()
+
+    events = list(read_events(path, limits=limits, report=report, quiet=True))
+
+    assert report.aborted
+    assert report.abort_reason == REJECT_MEMORY_BUDGET
+    assert report.reject_codes.get(REJECT_MEMORY_BUDGET) == 1
+    assert len(events) < 2000, (
+        f"{len(events)} events accepted under a 64 MiB budget; the bound is "
+        "not binding")
+    assert report.resident_bytes >= limits.max_resident_bytes
+
+
+def test_the_estimate_is_never_below_what_is_actually_allocated(tmp_path):
+    """The factor is a measurement, so it needs a regression test or it becomes
+    folklore. Measured with tracemalloc rather than RSS: RSS is what the OOM
+    killer counts and is what the factor is sized against, but it varies with
+    the allocator and the build, and a bound pinned to it would be flaky in CI.
+    tracemalloc runs BELOW RSS, so an estimate that clears it by the documented
+    margin clears RSS too.
+
+    If Event grows a field, this is what says so.
+    """
+    shapes = {"8 keys": (4000, 8), "40 keys": (4000, 40), "200 keys": (2000, 200)}
+    for name, (count, keys) in shapes.items():
+        path = _keyed_records(tmp_path / f"{keys}.jsonl", count, keys)
+        report = IngestReport()
+        gc.collect()
+        tracemalloc.start()
+        base = tracemalloc.get_traced_memory()[0]
+        events = list(read_events(path, report=report, quiet=True))
+        held = tracemalloc.get_traced_memory()[0] - base
+        tracemalloc.stop()
+
+        assert len(events) == count
+        assert report.resident_bytes >= held, (
+            f"{name}: estimated {report.resident_bytes} resident bytes but "
+            f"{held} were allocated; RESIDENT_BYTES_PER_INPUT_BYTE="
+            f"{RESIDENT_BYTES_PER_INPUT_BYTE} is now optimistic")
+        del events
+        gc.collect()
+
+
+def test_rejected_records_do_not_spend_the_memory_budget(tmp_path):
+    """Metered on RETAINED bytes. A record that is quarantined is read and
+    released, so charging the estimate for it would abort an honest run over a
+    noisy producer -- and the reject budget already covers that case."""
+    path = tmp_path / "mostly-junk.jsonl"
+    good = json.dumps({"timestamp": BASE, "event_type": "tool_end",
+                       "session_id": "s", "tool_name": "read_x"})
+    with path.open("w", encoding="utf-8") as fh:
+        for _ in range(500):
+            fh.write("{not json at all" + "x" * 4000 + "\n")
+        fh.write(good + "\n")
+
+    limits = DEFAULT_LIMITS.with_overrides(max_resident_bytes=1024 * 1024,
+                                           max_rejects=None,
+                                           max_reject_ratio=None)
+    report = IngestReport()
+    events = list(read_events(path, limits=limits, report=report, quiet=True))
+
+    assert report.rejected == 500
+    assert len(events) == 1
+    assert report.abort_reason != REJECT_MEMORY_BUDGET
+
+
+def test_the_default_bounds_state_a_memory_ceiling_somebody_can_check():
+    """Arithmetic, asserted, because the whole defect was that nobody had done
+    it. If a default moves, this says what the new worst case is rather than
+    letting it be discovered in production."""
+    limits = DEFAULT_LIMITS
+    input_allowed = limits.max_resident_bytes // RESIDENT_BYTES_PER_INPUT_BYTE
+    assert input_allowed < limits.max_input_bytes, (
+        "max_input_bytes binds before the memory budget, so the memory budget "
+        "is decorative")
+    assert limits.max_resident_bytes <= 4 * 1024**3, (
+        f"the default permits {limits.max_resident_bytes / 1024**3:.1f} GiB of "
+        "assembled state, which is not a bound a collector VM survives")
+    # Sixty-four MiB of accepted telemetry per run under the defaults. Small,
+    # and honest: it is what holding the whole run in memory costs.
+    assert 32 * 1024**2 <= input_allowed <= 128 * 1024**2
+
+
+def test_the_memory_budget_is_validated_like_every_other_bound():
+    with pytest.raises(LimitsError):
+        DEFAULT_LIMITS.with_overrides(max_resident_bytes=0)
+    with pytest.raises(LimitsError):
+        DEFAULT_LIMITS.with_overrides(max_resident_bytes=-1)

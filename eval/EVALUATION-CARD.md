@@ -7,7 +7,7 @@ a byte-identical card and any diff is a change in the detector.
 | Provenance | |
 |---|---|
 | detector version | `0.2.0` |
-| bounds digest (`config_hash`) | `83849b7be17f9917` |
+| bounds digest (`config_hash`) | `15a7fd270d8885a9` |
 | corpus digest | `a3d9aa5099f7e8d3` |
 | corpus seed | `20260807` |
 | sessions per vocabulary | 1824 (608 attack / 1216 benign) |
