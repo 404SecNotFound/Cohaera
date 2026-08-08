@@ -38,6 +38,7 @@ from eval.harness import (
     REGIME_RANDOM,
     REGIME_TASK_DISJOINT,
     REGIMES,
+    SessionCache,
     leakage_experiment,
     load_corpus,
     load_manifest,
@@ -136,11 +137,17 @@ def run_grid(seed: int) -> dict[str, Any]:
         # the producer declares no capabilities, not what happens when the
         # operator also loses their keys.
         store = load_trust_store(DATA, vocabulary)
+        # One assembled-session cache per capability condition, and none shared
+        # across vocabularies -- both because the sessions differ and because
+        # holding two vocabularies' worth at once buys nothing. The regimes
+        # inside share it: a regime decides which side of the split a session
+        # lands on, not what it assembles into. See harness.SessionCache.
+        caches = {capability: SessionCache() for capability in CAPABILITY_SOURCES}
         for regime in REGIMES:
             for capability in CAPABILITY_SOURCES:
                 outcomes, provenance = run_condition(
                     corpus, regime, seed, manifest, capability_source=capability,
-                    store=store)
+                    store=store, cache=caches[capability])
                 results[f"{vocabulary}|{regime}|{capability}"] = {
                     "vocabulary": vocabulary,
                     "regime": regime,

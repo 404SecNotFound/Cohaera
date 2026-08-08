@@ -27,6 +27,7 @@ silently stop measuring anything:
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -45,7 +46,12 @@ from cohaera.checks import (
     _shared_name_tokens,
     run_all,
 )
-from cohaera.evidence import INTEGRITY_FIELD, TrustStore, signing_input
+from cohaera.evidence import (
+    EMPTY_STORE,
+    INTEGRITY_FIELD,
+    TrustStore,
+    signing_input,
+)
 from cohaera.limits import DEFAULT_LIMITS
 from cohaera.model import _classify
 from eval import run_eval
@@ -63,10 +69,13 @@ from eval.harness import (
     REGIME_TASK_DISJOINT,
     Labelled,
     LeakageError,
+    SessionCache,
+    _assembly_fingerprint,
     _sessions_for,
     assert_disjoint,
     fit_grammar,
     leakage_experiment,
+    run_condition,
     split,
 )
 from eval.metrics import (
@@ -739,6 +748,138 @@ def test_the_cache_document_names_its_schema(tmp_path):
     doc = json.loads(path.read_text(encoding="utf-8"))
     assert doc["scheme"] == CACHE_SCHEMA
     assert "_note" in doc
+
+
+# =====================================================================
+# 4c. The session cache
+# =====================================================================
+#
+# Same argument as the signature cache and a different mechanism. Assembly is
+# the evaluation's dominant cost, and the grid assembles the same corpus once
+# per regime under each capability condition -- three times over, for objects
+# that come out identical because the regime decides which side of the split a
+# session lands on and not what the session is. What follows checks that reusing
+# them changes no number, and that a cache asked a question it was not built for
+# raises instead of answering.
+
+
+def _rows_for_cache_tests(limit: int = 24) -> list[Labelled]:
+    rows = corpus()
+    signed = [r for r in rows if r.kind in gen.SIGNED_KINDS][:6]
+    return signed + [r for r in rows if r not in signed][:limit]
+
+
+def _slice_of_corpus(families: int = 4) -> list[Labelled]:
+    """Four families, one task of every kind, all four attempts of each.
+
+    Scoring the full corpus three times uncached costs about forty seconds, and
+    a test that slow gets skipped -- which would be a poor trade for a change
+    whose entire purpose was to make the suite fast. WHOLE tasks and WHOLE
+    families, because the split guarantees are per task and per family and a
+    slice cutting across either would exercise a shape the harness never sees.
+    Kind coverage is asserted rather than assumed.
+    """
+    first_task_of_kind = {}
+    for index in range(gen.TASKS_PER_FAMILY):
+        first_task_of_kind.setdefault(gen._kind_for_task(index), index)
+    tasks = set(first_task_of_kind.values())
+    keep = sorted({r.family for r in corpus()})[:families]
+    rows = [r for r in corpus() if r.family in keep
+            and int(r.task_id.rsplit("-", 1)[1]) in tasks]
+
+    kinds = {r.kind for r in rows}
+    for kind in gen.SIGNED_KINDS:
+        assert kind in kinds, (
+            f"the slice no longer contains {kind}, so it does not exercise the "
+            "signed stream -- which is the expensive part the cache skips")
+    assert len(kinds) == len(first_task_of_kind), "the slice lost a kind"
+    assert len({r.family for r in rows}) >= 2, "family_holdout needs two sides"
+    return rows
+
+
+def test_a_reused_session_is_the_session_assembly_produces():
+    """Identity, not just equality: the cache hands back the same sealed object,
+    which is what makes reusing it across regimes free rather than merely
+    cheap."""
+    rows = _rows_for_cache_tests()
+    manifest = in_memory_manifest()
+    store = in_memory_trust_store()
+    cache = SessionCache()
+
+    first = _sessions_for(rows, manifest, DEFAULT_LIMITS, False, store, cache)
+    second = _sessions_for(rows, manifest, DEFAULT_LIMITS, False, store, cache)
+
+    assert cache.misses == len(rows) and cache.hits == len(rows)
+    for sid, session in first.items():
+        assert second[sid] is session
+    uncached = _sessions_for(rows, manifest, DEFAULT_LIMITS, False, store)
+    for sid, session in uncached.items():
+        assert session.integrity == first[sid].integrity
+        assert [e.raw for e in session.events] == [e.raw for e in first[sid].events]
+
+
+def test_reusing_sessions_across_regimes_does_not_change_a_single_outcome():
+    """The assertion the speed-up actually rests on, in the shape run_eval uses.
+
+    One cache, three regimes -- which is exactly what the grid does -- against
+    three independent uncached runs. They must agree on every session, every
+    fired check and every completeness score. If they ever disagree the cache is
+    not an optimisation, it is a second evaluation.
+    """
+    rows = _slice_of_corpus()
+    manifest = in_memory_manifest()
+    store = in_memory_trust_store()
+    shared = SessionCache()
+
+    for regime in (REGIME_TASK_DISJOINT, REGIME_FAMILY_HOLDOUT, REGIME_RANDOM):
+        plain, plain_prov = run_condition(
+            rows, regime, gen.SEED, manifest, store=store)
+        cached, cached_prov = run_condition(
+            rows, regime, gen.SEED, manifest, store=store, cache=shared)
+        assert plain_prov == cached_prov, regime
+        assert plain == cached, (
+            f"{regime}: scoring differs when sessions are reused across regimes")
+
+    assert shared.hits > shared.misses, (
+        "the cache was not actually reused across the three regimes, so this "
+        "test is passing without exercising what it claims to")
+
+
+def test_the_cache_refuses_a_question_it_was_not_built_for():
+    """A cache that silently answers under the wrong manifest, trust store or
+    capability condition is how an evaluation starts reporting numbers from a
+    configuration it never ran. Loud, not quiet."""
+    rows = _rows_for_cache_tests(8)
+    manifest = in_memory_manifest()
+    cache = SessionCache()
+    _sessions_for(rows, manifest, DEFAULT_LIMITS, False, EMPTY_STORE, cache)
+
+    with pytest.raises(AssertionError, match="assembly parameters"):
+        _sessions_for(rows, manifest, DEFAULT_LIMITS, True, EMPTY_STORE, cache)
+    with pytest.raises(AssertionError, match="assembly parameters"):
+        _sessions_for(rows, EMPTY_MANIFEST, DEFAULT_LIMITS, False, EMPTY_STORE,
+                      cache)
+    with pytest.raises(AssertionError, match="assembly parameters"):
+        _sessions_for(rows, manifest, DEFAULT_LIMITS, False,
+                      in_memory_trust_store(), cache)
+
+
+def test_the_fingerprint_leaves_the_regime_out_on_purpose():
+    """The one thing that must NOT be in the fingerprint, stated as a test.
+
+    If a regime ever starts changing how a session assembles, sharing a cache
+    across regimes becomes wrong and this is the assumption that broke.
+    """
+    manifest = in_memory_manifest()
+    args = (manifest, DEFAULT_LIMITS, False, EMPTY_STORE)
+    assert _assembly_fingerprint(*args) == _assembly_fingerprint(*args)
+    assert (_assembly_fingerprint(*args)
+            != _assembly_fingerprint(EMPTY_MANIFEST, DEFAULT_LIMITS, False,
+                                     EMPTY_STORE))
+    # Nothing in the signature takes a regime, and nothing may: `split` decides
+    # sides, `_sessions_for` decides content, and they share no argument.
+    assert "regime" not in inspect.signature(_assembly_fingerprint).parameters
+    assert "regime" not in inspect.signature(_sessions_for).parameters
 
 
 # =====================================================================

@@ -47,7 +47,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from cohaera import ed25519
 from cohaera.capabilities import EMPTY_MANIFEST, CapabilityManifest
 from cohaera.checks import SequenceGrammar, run_all
 from cohaera.evidence import (
@@ -359,16 +358,89 @@ def _rechain(records: list[dict]) -> list[dict]:
                                              body_digest(body))
         secret = secrets.get(sidecar.get("key_id"))
         if secret is not None and sidecar.get("sig") is not None:
-            sidecar["sig"] = base64.b64encode(ed25519.sign(
-                secret, signing_input(sidecar["stream_id"], sidecar["seq"],
-                                      prev))).decode("ascii")
+            # Through the corpus's signature cache, for the reason
+            # eval/corpus/signatures.py gives: this is the producer side, the
+            # message is derived from the chain the harness just rebuilt, and
+            # rebuilding it is deterministic -- so every pass over the corpus was
+            # re-deriving the same signatures the previous pass derived.
+            sidecar["sig"] = base64.b64encode(gen.SIGNATURES.sign(
+                secret, sidecar["key_id"],
+                signing_input(sidecar["stream_id"], sidecar["seq"],
+                              prev))).decode("ascii")
         out.append({**body, INTEGRITY_FIELD: sidecar})
     return out
 
 
+def _assembly_fingerprint(manifest: CapabilityManifest, limits: Limits,
+                          strip_reversible: bool,
+                          store: TrustStore) -> tuple:
+    """Everything other than the rows that decides what a Session comes out as.
+
+    The regime is deliberately absent, and that absence is the whole point of
+    :class:`SessionCache`: a regime decides which side of the split a session
+    lands on, not what the session IS.
+    """
+    return (manifest.semantic_digest, manifest.loaded, len(manifest.tools),
+            bool(strip_reversible), store.semantic_digest, limits.digest())
+
+
+class SessionCache:
+    """Assembled sessions, reused across regimes.
+
+    THE COST THIS REMOVES IS NOT A MEASUREMENT. Assembly is the evaluation's
+    dominant expense -- parsing every record, canonicalising it, walking the
+    hash chain and verifying signatures in pure-Python Ed25519 -- and the grid
+    runs three regimes over the same corpus under each capability condition. The
+    regime changes which sessions are trained on and which are scored. It does
+    not change what any session assembles into, so the corpus was being
+    assembled about four times more often than there were distinct sessions, and
+    every one of those repeats produced an object identical to the one before it.
+
+    SAFE BECAUSE THE SESSIONS ARE SEALED. ``assemble`` returns sessions whose
+    ``events`` is a tuple; see the C4-08 note on :class:`cohaera.model.Session`.
+    Nothing downstream can mutate one, its derived values are cached over an
+    immutable sequence, and ``run_all`` takes the grammar as an argument rather
+    than storing it. Scoring the same session under three regimes therefore
+    reads the same object three times and asks it three different questions.
+
+    IT REFUSES TO ANSWER A QUESTION IT WAS NOT ASKED. A cache holds the
+    assembly parameters it was first used with and raises on a lookup made under
+    different ones, rather than serving a session assembled with a different
+    manifest, trust store or capability condition. An evaluation that silently
+    reports numbers from a configuration it never ran is the failure this is
+    guarding against, and it is a quiet one.
+    """
+
+    def __init__(self) -> None:
+        self.fingerprint: tuple | None = None
+        self.sessions: dict[str, Session] = {}
+        self.hits = 0
+        self.misses = 0
+
+    def bind(self, fingerprint: tuple) -> None:
+        if self.fingerprint is None:
+            self.fingerprint = fingerprint
+            return
+        if self.fingerprint != fingerprint:
+            raise AssertionError(
+                "this session cache was built under assembly parameters "
+                f"{self.fingerprint} and is being used under {fingerprint}. "
+                "Use one cache per (vocabulary, capability condition); sharing "
+                "one across them would score sessions that were never "
+                "assembled the way the cell claims.")
+
+    def summary(self) -> str:
+        total = self.hits + self.misses
+        if not total:
+            return "session cache: unused"
+        return (f"session cache: {self.hits}/{total} reused "
+                f"({self.misses} assembled)")
+
+
 def _sessions_for(rows: list[Labelled], manifest: CapabilityManifest,
                   limits: Limits, strip_reversible: bool = False,
-                  store: TrustStore = EMPTY_STORE) -> dict[str, Session]:
+                  store: TrustStore = EMPTY_STORE,
+                  cache: SessionCache | None = None) -> dict[str, Session]:
     """Assemble each labelled row into a Cohaera Session, keyed by session_id.
 
     Assembled one row at a time on purpose. The corpus supplies a session_id per
@@ -376,8 +448,17 @@ def _sessions_for(rows: list[Labelled], manifest: CapabilityManifest,
     grouping -- but doing it per row means a change to correlation behaviour
     cannot silently merge two corpus sessions and corrupt the labels.
     """
+    if cache is not None:
+        cache.bind(_assembly_fingerprint(manifest, limits, strip_reversible,
+                                         store))
     out = {}
     for row in rows:
+        if cache is not None:
+            reused = cache.sessions.get(row.session_id)
+            if reused is not None:
+                cache.hits += 1
+                out[row.session_id] = reused
+                continue
         raws = [_strip_reversible(e) if strip_reversible else dict(e)
                 for e in row.events]
         if strip_reversible:
@@ -391,16 +472,20 @@ def _sessions_for(rows: list[Labelled], manifest: CapabilityManifest,
                 f"{row.session_id}: assembled into {len(sessions)} sessions, so "
                 "the label no longer describes one session")
         out[row.session_id] = sessions[0]
+        if cache is not None:
+            cache.misses += 1
+            cache.sessions[row.session_id] = sessions[0]
     return out
 
 
 def fit_grammar(train: list[Labelled], manifest: CapabilityManifest,
                 limits: Limits, strip_reversible: bool = False,
-                store: TrustStore = EMPTY_STORE) -> SequenceGrammar:
+                store: TrustStore = EMPTY_STORE,
+                cache: SessionCache | None = None) -> SequenceGrammar:
     """Fit the benign sequence grammar on the training side's BENIGN sessions."""
     benign = [r for r in train if not r.is_attack]
     sessions = list(_sessions_for(benign, manifest, limits,
-                                  strip_reversible, store).values())
+                                  strip_reversible, store, cache).values())
     return SequenceGrammar().fit(sessions)
 
 
@@ -408,9 +493,11 @@ def score(test: list[Labelled], grammar: SequenceGrammar | None,
           manifest: CapabilityManifest,
           limits: Limits = DEFAULT_LIMITS,
           strip_reversible: bool = False,
-          store: TrustStore = EMPTY_STORE) -> list[Outcome]:
+          store: TrustStore = EMPTY_STORE,
+          cache: SessionCache | None = None) -> list[Outcome]:
     """Run every check over the test side and record what happened."""
-    sessions = _sessions_for(test, manifest, limits, strip_reversible, store)
+    sessions = _sessions_for(test, manifest, limits, strip_reversible, store,
+                             cache)
     outcomes = []
     for row in test:
         session = sessions[row.session_id]
@@ -435,15 +522,16 @@ def run_condition(corpus: list[Labelled], regime: str, seed: int,
                   manifest: CapabilityManifest,
                   limits: Limits = DEFAULT_LIMITS,
                   capability_source: str = CAP_MANIFEST,
-                  store: TrustStore = EMPTY_STORE
+                  store: TrustStore = EMPTY_STORE,
+                  cache: SessionCache | None = None
                   ) -> tuple[list[Outcome], dict]:
     """Split, fit on train-benign, score test. Returns (outcomes, provenance)."""
     strip = capability_source == CAP_NAME_ONLY
     if capability_source != CAP_MANIFEST:
         manifest = EMPTY_MANIFEST
     train, test = split(corpus, regime, seed)
-    grammar = fit_grammar(train, manifest, limits, strip, store)
-    outcomes = score(test, grammar, manifest, limits, strip, store)
+    grammar = fit_grammar(train, manifest, limits, strip, store, cache)
+    outcomes = score(test, grammar, manifest, limits, strip, store, cache)
     return outcomes, {
         "regime": regime,
         "capability_source": capability_source,
@@ -500,10 +588,18 @@ def leakage_experiment(corpus: list[Labelled], seed: int,
             "the leakage experiment needs at least two attempts per task on "
             "each side; the corpus no longer supplies them")
 
-    clean_grammar = fit_grammar(train, manifest, limits, store=store)
-    leaky_grammar = fit_grammar([*train, *siblings], manifest, limits, store=store)
-    clean = score(fixed_test, clean_grammar, manifest, limits, store=store)
-    leaky = score(fixed_test, leaky_grammar, manifest, limits, store=store)
+    # One cache across all four passes. Every one of them assembles under the
+    # same manifest, store and capability condition -- the experiment varies the
+    # TRAINING SET and nothing else, which is the point of it -- and the fixed
+    # test set is scored twice by construction.
+    cache = SessionCache()
+    clean_grammar = fit_grammar(train, manifest, limits, store=store, cache=cache)
+    leaky_grammar = fit_grammar([*train, *siblings], manifest, limits,
+                                store=store, cache=cache)
+    clean = score(fixed_test, clean_grammar, manifest, limits, store=store,
+                  cache=cache)
+    leaky = score(fixed_test, leaky_grammar, manifest, limits, store=store,
+                  cache=cache)
     return clean, leaky, {
         "test_sessions": len(fixed_test),
         "test_attacks": sum(1 for r in fixed_test if r.is_attack),

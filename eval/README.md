@@ -325,8 +325,54 @@ almost the whole benefit with no cache to restore between runs.
 **It does not speed up verification, on purpose.** Every signature Cohaera
 checks while scoring goes through the same code path a deployment uses, because
 that path is what the evaluation exists to measure. `run_eval.py` therefore
-improves by only about 8%: the cache sits on the *producer* side, which in a
+improved by only about 8%: the cache sits on the *producer* side, which in a
 real deployment is not Cohaera's code at all.
+
+## Why the grid stopped assembling the same session eighteen times
+
+Verification is where `run_eval.py`'s time actually went, and the fix was not to
+verify less — it was to stop assembling the same corpus over and over.
+
+The grid is two vocabularies × three regimes × three capability conditions. A
+regime decides which side of the split a session lands on; it does not change
+what the session *is*. So each corpus was being assembled — parsed,
+canonicalised, chain-walked, signature-verified — once per regime under each
+capability condition, producing three identical objects and throwing two of them
+away. `harness.SessionCache` keeps them.
+
+Two things make that safe rather than merely fast:
+
+- **The sessions are sealed.** `assemble` returns sessions whose `events` is a
+  tuple (the C4-08 note on `cohaera.model.Session` says why), derived values are
+  cached over an immutable sequence, and `run_all` takes the grammar as an
+  argument rather than storing it. Reading one session under three regimes asks
+  it three different questions and cannot leave state behind.
+- **A cache refuses a question it was not built for.** It holds the assembly
+  parameters it was first used with — manifest, trust store, limits, capability
+  condition — and raises rather than serving a session assembled some other way.
+  An evaluation quietly reporting numbers from a configuration it never ran is
+  the failure worth guarding against here.
+
+`run_eval.py` went from **4 m 23 s to 1 m 54 s on a cold checkout**, 1 m 38 s
+warm, and the evaluation card regenerates byte for byte —
+`tests/test_eval.py` also scores three regimes with and without a cache and
+asserts every outcome matches.
+
+It is bought with memory: peak RSS goes from 239 MB to 390 MB, because up to
+three capability conditions' worth of one vocabulary's sessions are held at once
+rather than assembled and dropped. The cache is scoped per vocabulary and
+released between them, which is what keeps that a constant rather than a
+doubling.
+
+What is left is close to the floor for this design: about half the remaining
+time is Ed25519 verification of the 2160 signed records, once per vocabulary per
+capability condition, and each of those nine passes is a distinct measurement.
+Going further would mean either caching inside Cohaera's own verification path —
+which is the thing being measured — or a faster scalar multiplication in
+`ed25519.py`. A fixed-base comb for the generator point would buy roughly 1.7×
+on verification and about 13% here, and it is not taken: it is a rewrite of a
+primitive whose current form is short enough to read against RFC 8032, in
+exchange for a saving in a program nobody waits on but CI.
 
 ## A CH02 property this surfaced
 
