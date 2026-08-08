@@ -232,6 +232,15 @@ def cmd_score(args: argparse.Namespace) -> int:
     except (ManifestError, OSError) as exc:
         _err(f"[cohaera] capability manifest rejected: {sanitise_display(str(exc), 300)}")
         return EXIT_ERROR
+    if args.trust_store and args.collector_keys:
+        # Two paths naming the same thing, and no way to know which the operator
+        # meant. Silently preferring one would mean a run verified against a key
+        # set the operator did not think they had supplied, which is the worst
+        # possible outcome for a flag whose entire job is to say which keys are
+        # trusted.
+        _err("[cohaera] --trust-store and --collector-keys both given, and they "
+             "are the same option under two names. Pass one.")
+        return EXIT_ERROR
     try:
         keys = _load_keys(args.trust_store or args.collector_keys, limits)
     except (TrustStoreError, OSError) as exc:

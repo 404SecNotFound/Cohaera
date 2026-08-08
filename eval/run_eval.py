@@ -63,6 +63,34 @@ def corpus_digest() -> str:
     return h.hexdigest()[:16]
 
 
+def _summary_without_generating(seed: int) -> dict[str, Any]:
+    """The corpus summary ``gen.write`` returns, derived from the corpus on disk.
+
+    It has to produce the SAME KEYS, and that is not cosmetic. The card embeds
+    this summary, CI regenerates the card and fails on any diff, and this branch
+    used to omit ``events`` and ``tools_declared`` -- so a card written with
+    --no-generate differed from one written without it, and the drift check
+    reported a change in the detector when the only thing that had changed was
+    which flag the last person used. A determinism claim that depends on the
+    invocation is not a determinism claim.
+    """
+    conditions: dict[str, Any] = {}
+    for condition in CONDITIONS:
+        rows = load_corpus(DATA, condition)
+        attacks = sum(1 for s in rows if s.is_attack)
+        conditions[condition] = {
+            "sessions": len(rows),
+            "events": sum(len(s.events) for s in rows),
+            "attacks": attacks,
+            "benign": len(rows) - attacks,
+            "attack_prevalence": round(attacks / len(rows), 4),
+            "tasks": len({s.task_id for s in rows}),
+            "families": len(gen.FAMILIES),
+            "tools_declared": len(load_manifest(DATA, condition).tools),
+        }
+    return {"seed": seed, "conditions": conditions}
+
+
 def run_grid(seed: int) -> dict[str, Any]:
     results: dict[str, Any] = {}
     for vocabulary in CONDITIONS:
@@ -615,16 +643,7 @@ def main(argv: list[str] | None = None) -> int:
         gen.write_sample(gen.generate("unseen", args.seed),
                          Path(__file__).resolve().parent / "corpus")
     summary = (gen.write(DATA, args.seed) if not args.no_generate
-               else {"seed": args.seed, "conditions": {
-                   c: {"sessions": len(load_corpus(DATA, c)),
-                       "attacks": sum(1 for s in load_corpus(DATA, c) if s.is_attack),
-                       "benign": sum(1 for s in load_corpus(DATA, c)
-                                     if not s.is_attack),
-                       "attack_prevalence": round(
-                           sum(1 for s in load_corpus(DATA, c) if s.is_attack)
-                           / len(load_corpus(DATA, c)), 4),
-                       "tasks": len({s.task_id for s in load_corpus(DATA, c)}),
-                       "families": len(gen.FAMILIES)} for c in CONDITIONS}})
+               else _summary_without_generating(args.seed))
 
     results = run_grid(args.seed)
     corpus = load_corpus(DATA, "unseen")

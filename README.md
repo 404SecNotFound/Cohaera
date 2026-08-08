@@ -94,7 +94,7 @@ been closed, which cost 36 new false positives and says so.
 - [Known limitations](#known-limitations)
 - [Known evasions](EVASION.md)
 - [Threat model](docs/THREAT-MODEL.md) — what this trusts, and what survives an attacker who controls the telemetry
-- [Evidence trust](docs/EVIDENCE-TRUST.md) — the wire formats for collector integrity, effect receipts and approval binding, and what they measured
+- [Evidence trust](docs/EVIDENCE-TRUST.md) — the wire formats for collector integrity, effect receipts, approval binding, the trust store and signed policy files, and what they measured
 - [Security policy](SECURITY.md) — reporting, scope, supply chain
 - [Relationship to the upstream projects](#relationship-to-the-upstream-projects)
 
@@ -918,7 +918,7 @@ prevention claim collapses.
 - [x] Sigma content pack, 13 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 488 passing across unit, hostile-input and content conformance
+- [x] Tests, 489 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 23 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger

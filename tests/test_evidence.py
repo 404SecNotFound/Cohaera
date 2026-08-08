@@ -1394,6 +1394,15 @@ def test_cli_still_accepts_the_superseded_collector_keys_flag(tmp_path):
                      "--collector-keys", str(legacy)]) == EXIT_OK
 
 
+def test_cli_refuses_both_names_for_the_same_option(tmp_path):
+    """Silently preferring one would verify against a key set the operator did
+    not think they had supplied, which is the worst outcome for a flag whose
+    whole job is to say which keys are trusted."""
+    telemetry, _m, store, _sig = _policy_fixture(tmp_path)
+    assert cli_main(["score", str(telemetry), "--trust-store", str(store),
+                     "--collector-keys", str(store)]) == EXIT_ERROR
+
+
 def test_cli_freshness_flags_reach_the_verdict(tmp_path, capsys):
     telemetry, _m, _s, _sig = _policy_fixture(tmp_path)
     assert cli_main(["score", str(telemetry), "--evidence-max-age", "3600",

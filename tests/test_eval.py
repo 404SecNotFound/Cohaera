@@ -42,7 +42,7 @@ from cohaera.checks import (
     _shared_name_tokens,
     run_all,
 )
-from cohaera.evidence import INTEGRITY_FIELD
+from cohaera.evidence import INTEGRITY_FIELD, TrustStore
 from cohaera.limits import DEFAULT_LIMITS
 from cohaera.model import _classify
 from eval.corpus import generate as gen
@@ -56,7 +56,6 @@ from eval.harness import (
     assert_disjoint,
     fit_grammar,
     leakage_experiment,
-    load_trust_store,
     split,
 )
 from eval.metrics import (
@@ -253,6 +252,24 @@ def in_memory_manifest(condition: str = "unseen") -> CapabilityManifest:
         tools.update(gen.manifest_for(family, condition)["tools"])
     return CapabilityManifest.from_obj(
         {"producer": "cohaera-eval/all", "manifest_version": "1", "tools": tools})
+
+
+def in_memory_trust_store(condition: str = "unseen") -> TrustStore:
+    """The trust store the harness loads from disk, built without the disk.
+
+    Same reason as :func:`in_memory_manifest`, and the first version of this
+    read `eval/corpus/data/manifests/<condition>/trust-store.json` directly --
+    which passed locally, where the corpus had just been generated, and failed
+    on CI's fresh clone. The docstring above says not to do that; this is what
+    happens when you do it anyway.
+
+    The rotation instant has to come from the SAME in-memory corpus the caller
+    scored, or the store declares a handover the stream was not signed under and
+    every rotated session reads as a key used outside its window.
+    """
+    gen.generate(condition)
+    return TrustStore.from_obj(
+        gen.trust_store_for(condition, gen._ROTATION_AT[condition]))
 
 
 def _fitted_grammar_and_sessions(regime: str = REGIME_TASK_DISJOINT):
@@ -787,18 +804,13 @@ def test_the_long_rare_confounder_keeps_its_control_case():
 # ---------------------------------------------------------------------------
 
 
-def _store():
-    return load_trust_store(gen.Path(gen.__file__).resolve().parent / "data",
-                            "unseen")
-
-
 def test_the_corpus_trust_store_declares_a_rotation_and_a_revocation():
     """Three keys, and each says a different thing. See EVIDENCE-TRUST 2a.
 
     A store where all three looked alike would make the two new kinds
     indistinguishable, and both would score whatever the first one scored.
     """
-    store = _store()
+    store = in_memory_trust_store()
     retired = [k for k in store.keys.values() if k.not_after is not None]
     current = [k for k in store.keys.values() if k.not_before is not None]
     revoked = [k for k in store.keys.values() if k.revoked]
@@ -821,7 +833,7 @@ def test_a_revoked_key_stream_is_caught_only_when_the_store_is_supplied():
     manifest = in_memory_manifest()
     assert rows, "the corpus no longer contains the kind this asserts"
 
-    with_store = _sessions_for(rows, manifest, DEFAULT_LIMITS, False, _store())
+    with_store = _sessions_for(rows, manifest, DEFAULT_LIMITS, False, in_memory_trust_store())
     for row in rows:
         audit = with_store[row.session_id].integrity
         assert "INTEGRITY_KEY_REVOKED" in audit.codes
@@ -844,7 +856,7 @@ def test_a_correct_rotation_produces_no_finding_including_at_the_handover():
     """
     rows = [r for r in corpus() if r.kind == gen.BENIGN_HARD_ROTATED]
     manifest = in_memory_manifest()
-    sessions = _sessions_for(rows, manifest, DEFAULT_LIMITS, False, _store())
+    sessions = _sessions_for(rows, manifest, DEFAULT_LIMITS, False, in_memory_trust_store())
 
     straddling = 0
     for row in rows:

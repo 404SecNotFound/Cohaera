@@ -11144,17 +11144,21 @@
         "attack_prevalence": 0.3333,
         "attacks": 608,
         "benign": 1216,
+        "events": 24672,
         "families": 8,
         "sessions": 1824,
-        "tasks": 456
+        "tasks": 456,
+        "tools_declared": 34
       },
       "unseen": {
         "attack_prevalence": 0.3333,
         "attacks": 608,
         "benign": 1216,
+        "events": 24672,
         "families": 8,
         "sessions": 1824,
-        "tasks": 456
+        "tasks": 456,
+        "tools_declared": 34
       }
     },
     "seed": 20260807

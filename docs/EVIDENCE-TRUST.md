@@ -285,6 +285,14 @@ Off by default, and coverage says `NO_FRESHNESS_BOUND` when it is off, because
 the honest default is unknowable: an hour is right for a live tail and wrong for
 a nightly batch, and a bound guessed wrong turns every scheduled run critical.
 
+**This lowers CH06's coverage confidence on every existing deployment, and that
+is the intended reading.** A session with integrity evidence and no freshness
+bound now reports `degraded` rather than `evaluated`, because replay was not
+considered. Nothing about those sessions changed; what changed is that the
+verdict stopped implying a question had been asked. That is the same move
+`NO_INTEGRITY_EVIDENCE` and the CH01 vocabulary contract make, and it is why the
+number an operator sees goes down after a commit that added a control.
+
 What remains open is replay **inside** the window, which needs memory of which
 streams have already been scored — a ledger surviving between runs, and Cohaera
 keeps no state between runs at all. Instead every verdict records each stream's
