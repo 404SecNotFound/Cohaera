@@ -507,6 +507,16 @@ def render_card(results: dict[str, Any], seed: int, summary: dict,
         "is absent. The freshness bound is real and is tested in "
         "`tests/test_evidence.py`; what it costs on a delayed batch is a property "
         "of the bound the operator sets, not of this corpus.\n")
+    add(
+        "The same goes for the seen-stream ledger, and it explains a number in "
+        "this card that moves the wrong way. Cross-run replay needs TWO runs "
+        "against shared state; this harness scores one run, so the ledger cannot "
+        "be measured here at all and is tested directly instead. What it does do "
+        "here is lower `mean_coverage_completeness`, because CH06 now reports "
+        "`NO_STREAM_LEDGER` on every session — the eval runs without one. "
+        "**Coverage fell because a control was added and is not in force**, which "
+        "is the behaviour the contract is for: an absent check that says nothing "
+        "would have left the number flat and the blind spot invisible.\n")
     dil = by_kind.get(gen.ATTACK_DILUTION, {"flagged": 0, "sessions": 0})
     long_rare = by_kind.get(gen.BENIGN_HARD_LONG_RARE,
                             {"flagged": 0, "sessions": 0})

@@ -509,7 +509,7 @@
         "false_positives_per_1000_benign_sessions": 342.1,
         "false_positives_per_1000_sessions": 228.1,
         "incidental_detections": 32,
-        "mean_coverage_completeness": 0.6346,
+        "mean_coverage_completeness": 0.6278,
         "precision": {
           "ci95_high": 0.6103,
           "ci95_low": 0.522,
@@ -543,7 +543,7 @@
           "numerator": 240,
           "value": 0.7895
         },
-        "weighted_detected_mass": 0.8924
+        "weighted_detected_mass": 0.8926
       },
       "provenance": {
         "baseline_hash": "90972a4ce1b8c0a7",
@@ -1085,7 +1085,7 @@
         "false_positives_per_1000_benign_sessions": 394.7,
         "false_positives_per_1000_sessions": 263.2,
         "incidental_detections": 32,
-        "mean_coverage_completeness": 0.5044,
+        "mean_coverage_completeness": 0.4987,
         "precision": {
           "ci95_high": 0.5741,
           "ci95_low": 0.488,
@@ -1119,7 +1119,7 @@
           "numerator": 240,
           "value": 0.7895
         },
-        "weighted_detected_mass": 0.8918
+        "weighted_detected_mass": 0.892
       },
       "provenance": {
         "baseline_hash": "90972a4ce1b8c0a7",
@@ -1661,7 +1661,7 @@
         "false_positives_per_1000_benign_sessions": 342.1,
         "false_positives_per_1000_sessions": 228.1,
         "incidental_detections": 32,
-        "mean_coverage_completeness": 0.5068,
+        "mean_coverage_completeness": 0.5009,
         "precision": {
           "ci95_high": 0.6103,
           "ci95_low": 0.522,
@@ -1695,7 +1695,7 @@
           "numerator": 240,
           "value": 0.7895
         },
-        "weighted_detected_mass": 0.8918
+        "weighted_detected_mass": 0.892
       },
       "provenance": {
         "baseline_hash": "90972a4ce1b8c0a7",
@@ -2293,7 +2293,7 @@
         "false_positives_per_1000_benign_sessions": 331.2,
         "false_positives_per_1000_sessions": 223.7,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.7782,
+        "mean_coverage_completeness": 0.7713,
         "precision": {
           "ci95_high": 0.6342,
           "ci95_low": 0.5484,
@@ -2933,7 +2933,7 @@
         "false_positives_per_1000_benign_sessions": 370.1,
         "false_positives_per_1000_sessions": 250.0,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.6275,
+        "mean_coverage_completeness": 0.6208,
         "precision": {
           "ci95_high": 0.6067,
           "ci95_low": 0.5221,
@@ -3573,7 +3573,7 @@
         "false_positives_per_1000_benign_sessions": 331.2,
         "false_positives_per_1000_sessions": 223.7,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.6293,
+        "mean_coverage_completeness": 0.6224,
         "precision": {
           "ci95_high": 0.6342,
           "ci95_low": 0.5484,
@@ -4213,7 +4213,7 @@
         "false_positives_per_1000_benign_sessions": 420.4,
         "false_positives_per_1000_sessions": 284.5,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.7767,
+        "mean_coverage_completeness": 0.7698,
         "precision": {
           "ci95_high": 0.5727,
           "ci95_low": 0.4907,
@@ -4853,7 +4853,7 @@
         "false_positives_per_1000_benign_sessions": 458.6,
         "false_positives_per_1000_sessions": 310.3,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.6267,
+        "mean_coverage_completeness": 0.6199,
         "precision": {
           "ci95_high": 0.5504,
           "ci95_low": 0.4699,
@@ -5493,7 +5493,7 @@
         "false_positives_per_1000_benign_sessions": 420.4,
         "false_positives_per_1000_sessions": 284.5,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.6285,
+        "mean_coverage_completeness": 0.6215,
         "precision": {
           "ci95_high": 0.5727,
           "ci95_low": 0.4907,
@@ -6077,7 +6077,7 @@
         "false_positives_per_1000_benign_sessions": 342.1,
         "false_positives_per_1000_sessions": 228.1,
         "incidental_detections": 32,
-        "mean_coverage_completeness": 0.6346,
+        "mean_coverage_completeness": 0.6278,
         "precision": {
           "ci95_high": 0.6103,
           "ci95_low": 0.522,
@@ -6111,7 +6111,7 @@
           "numerator": 240,
           "value": 0.7895
         },
-        "weighted_detected_mass": 0.8924
+        "weighted_detected_mass": 0.8926
       },
       "provenance": {
         "baseline_hash": "73a194c0d6d9c945",
@@ -6653,7 +6653,7 @@
         "false_positives_per_1000_benign_sessions": 131.6,
         "false_positives_per_1000_sessions": 87.7,
         "incidental_detections": 32,
-        "mean_coverage_completeness": 0.0649,
+        "mean_coverage_completeness": 0.0584,
         "precision": {
           "ci95_high": 0.6788,
           "ci95_low": 0.5477,
@@ -7229,7 +7229,7 @@
         "false_positives_per_1000_benign_sessions": 342.1,
         "false_positives_per_1000_sessions": 228.1,
         "incidental_detections": 32,
-        "mean_coverage_completeness": 0.5068,
+        "mean_coverage_completeness": 0.5009,
         "precision": {
           "ci95_high": 0.6103,
           "ci95_low": 0.522,
@@ -7263,7 +7263,7 @@
           "numerator": 240,
           "value": 0.7895
         },
-        "weighted_detected_mass": 0.8918
+        "weighted_detected_mass": 0.892
       },
       "provenance": {
         "baseline_hash": "73a194c0d6d9c945",
@@ -7861,7 +7861,7 @@
         "false_positives_per_1000_benign_sessions": 331.2,
         "false_positives_per_1000_sessions": 223.7,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.7782,
+        "mean_coverage_completeness": 0.7713,
         "precision": {
           "ci95_high": 0.6342,
           "ci95_low": 0.5484,
@@ -8501,7 +8501,7 @@
         "false_positives_per_1000_benign_sessions": 112.0,
         "false_positives_per_1000_sessions": 75.7,
         "incidental_detections": 62,
-        "mean_coverage_completeness": 0.137,
+        "mean_coverage_completeness": 0.1303,
         "precision": {
           "ci95_high": 0.782,
           "ci95_low": 0.6742,
@@ -8535,7 +8535,7 @@
           "numerator": 126,
           "value": 0.4257
         },
-        "weighted_detected_mass": 0.5893
+        "weighted_detected_mass": 0.5921
       },
       "provenance": {
         "baseline_hash": "f151cec63e64beb6",
@@ -9141,7 +9141,7 @@
         "false_positives_per_1000_benign_sessions": 331.2,
         "false_positives_per_1000_sessions": 223.7,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.6293,
+        "mean_coverage_completeness": 0.6224,
         "precision": {
           "ci95_high": 0.6342,
           "ci95_low": 0.5484,
@@ -9781,7 +9781,7 @@
         "false_positives_per_1000_benign_sessions": 420.4,
         "false_positives_per_1000_sessions": 284.5,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.7767,
+        "mean_coverage_completeness": 0.7698,
         "precision": {
           "ci95_high": 0.5727,
           "ci95_low": 0.4907,
@@ -10421,7 +10421,7 @@
         "false_positives_per_1000_benign_sessions": 152.9,
         "false_positives_per_1000_sessions": 103.4,
         "incidental_detections": 56,
-        "mean_coverage_completeness": 0.1376,
+        "mean_coverage_completeness": 0.1308,
         "precision": {
           "ci95_high": 0.682,
           "ci95_low": 0.5643,
@@ -10455,7 +10455,7 @@
           "numerator": 104,
           "value": 0.3467
         },
-        "weighted_detected_mass": 0.486
+        "weighted_detected_mass": 0.4889
       },
       "provenance": {
         "baseline_hash": "9376c85f4e2bb8fb",
@@ -11061,7 +11061,7 @@
         "false_positives_per_1000_benign_sessions": 420.4,
         "false_positives_per_1000_sessions": 284.5,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.6285,
+        "mean_coverage_completeness": 0.6215,
         "precision": {
           "ci95_high": 0.5727,
           "ci95_low": 0.4907,
@@ -11137,7 +11137,7 @@
       "vocabulary": "unseen"
     }
   },
-  "config_hash": "7e1d22466f83511f",
+  "config_hash": "83849b7be17f9917",
   "corpus": {
     "conditions": {
       "lexical": {
@@ -11212,7 +11212,7 @@
       "false_positives_per_1000_benign_sessions": 420.4,
       "false_positives_per_1000_sessions": 284.5,
       "incidental_detections": 0,
-      "mean_coverage_completeness": 0.7767,
+      "mean_coverage_completeness": 0.7698,
       "precision": {
         "ci95_high": 0.5893,
         "ci95_low": 0.4736,
@@ -11294,7 +11294,7 @@
       "false_positives_per_1000_benign_sessions": 324.8,
       "false_positives_per_1000_sessions": 219.8,
       "incidental_detections": 0,
-      "mean_coverage_completeness": 0.7767,
+      "mean_coverage_completeness": 0.7698,
       "precision": {
         "ci95_high": 0.654,
         "ci95_low": 0.5336,
