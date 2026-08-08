@@ -23,6 +23,7 @@ python eval/run_eval.py            # score everything, rewrite the card
 | `corpus/sample.jsonl` | 104 sessions, one per family x kind, committed so the corpus can be read without running anything |
 | `corpus/data/` | The full corpus. **Not committed** — 15 MB, deterministic from the seed |
 | `corpus/data/manifests/` | Per-agent capability manifests, the ground truth for the `manifest` condition |
+| `corpus/signatures.py` | A content-addressed cache for the corpus's Ed25519 signatures. **Not committed**, safe to delete, and explained below |
 | `harness.py` | Split, fit, score. The split assertions live here |
 | `metrics.py` | Wilson intervals, FP per 1000, coverage-adjusted recall |
 | `run_eval.py` | The grid, and the card |
@@ -297,6 +298,35 @@ a corpus that fails:
 These are not decorative. `_assert_discloses` caught the `incident_triage` family
 disclosing under one vocabulary and not the other, which would have made the two
 conditions incomparable — the exact thing the corpus exists to compare.
+
+## Why the signatures are cached, and what that does not buy
+
+Cohaera has no runtime dependencies, so `src/cohaera/ed25519.py` is pure Python
+and costs about 5 ms per scalar multiplication. The corpus's second collector
+stream signs 2160 records per condition at two multiplications each, which put
+roughly nine seconds of signing inside every call to `generate()` — and
+`tests/test_eval.py` calls it once per test. The suite spent more than half its
+wall clock re-deriving signatures it had already derived, byte for byte.
+
+`corpus/signatures.py` memoises signing, addressed by `sha256(key_id ‖ message)`.
+The property that makes it safe is that there is nothing for it to be stale
+about: change anything in the corpus and the chain head changes, which changes
+the message, which changes the address, which misses. A cache that can only be
+addressed by its own content cannot answer a question it was not asked. It is
+gitignored, it lives outside `corpus/data/` so it cannot leak into the card's
+corpus digest, and deleting it costs one slow run.
+
+Measured on the tree that introduced it: `pytest tests/` went from **7 m 28 s to
+1 m 45 s on a cold checkout**, and to 1 m 19 s with the file already written.
+Nearly all of the saving is the in-process dictionary rather than the file —
+one pytest process generates the corpus dozens of times — which is why CI gets
+almost the whole benefit with no cache to restore between runs.
+
+**It does not speed up verification, on purpose.** Every signature Cohaera
+checks while scoring goes through the same code path a deployment uses, because
+that path is what the evaluation exists to measure. `run_eval.py` therefore
+improves by only about 8%: the cache sits on the *producer* side, which in a
+real deployment is not Cohaera's code at all.
 
 ## A CH02 property this surfaced
 

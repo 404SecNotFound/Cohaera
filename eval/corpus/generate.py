@@ -76,6 +76,7 @@ from cohaera.evidence import (
     signing_input,
 )
 from cohaera.model import ToolCall
+from eval.corpus.signatures import SignatureCache, resolve_path
 from eval.vocabulary import (
     BY_KEY,
     CONDITIONS,
@@ -1607,6 +1608,14 @@ EVAL_KEYS = {
 # Which kinds live on the second, signed collector stream.
 SIGNED_KINDS = (BENIGN_HARD_ROTATED, ATTACK_REVOKED_KEY)
 
+# Signing is the single most expensive thing the generator does: ~5 ms per
+# scalar multiplication in pure Python, two per signature, 2160 signatures per
+# condition. The cache is content-addressed on what is being signed, so it can
+# only ever return the answer real signing would have returned -- see
+# eval/corpus/signatures.py, which explains why there is no such thing as a
+# stale entry here.
+SIGNATURES = SignatureCache(resolve_path())
+
 
 def _rotation_instant(signed_specs: list[SessionSpec]) -> float:
     """The moment the collector's signing key changed.
@@ -1787,12 +1796,14 @@ def _sign_condition(signed: list[SessionSpec], condition: str,
                 "scheme": INTEGRITY_SCHEMA, "stream_id": stream_id,
                 "seq": seq, "prev": prev, "chain": head,
                 "key_id": key[2],
-                "sig": base64.b64encode(ed25519.sign(
-                    key[0], signing_input(stream_id, seq, head))).decode("ascii"),
+                "sig": base64.b64encode(SIGNATURES.sign(
+                    key[0], key[2],
+                    signing_input(stream_id, seq, head))).decode("ascii"),
             }
             chained.append({**record, INTEGRITY_FIELD: sidecar})
             seq += 1
         spec.events = chained
+    SIGNATURES.save()
 
 
 # Set by ``generate``; read by ``write`` so the trust store it emits declares
@@ -1947,6 +1958,7 @@ def main() -> int:
     print(f"corpus written to {out}")
     print(f"  committed sample: {n} sessions "
           f"(one per family x kind) in eval/corpus/sample.jsonl")
+    print(f"  {SIGNATURES.summary()}")
     for condition, stats in summary["conditions"].items():
         print(
             f"  {condition:8} {stats['sessions']:5} sessions "

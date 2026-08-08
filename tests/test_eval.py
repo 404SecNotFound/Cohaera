@@ -26,6 +26,8 @@ silently stop measuring anything:
 
 from __future__ import annotations
 
+import base64
+import json
 import sys
 from pathlib import Path
 
@@ -34,6 +36,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cohaera import ed25519
 from cohaera.capabilities import EMPTY_MANIFEST, CapabilityManifest
 from cohaera.checks import (
     ABSENT,
@@ -42,10 +45,18 @@ from cohaera.checks import (
     _shared_name_tokens,
     run_all,
 )
-from cohaera.evidence import INTEGRITY_FIELD, TrustStore
+from cohaera.evidence import INTEGRITY_FIELD, TrustStore, signing_input
 from cohaera.limits import DEFAULT_LIMITS
 from cohaera.model import _classify
+from eval import run_eval
 from eval.corpus import generate as gen
+from eval.corpus.signatures import (
+    CACHE_SCHEMA,
+    DEFAULT_PATH,
+    ENV_PATH,
+    SignatureCache,
+    resolve_path,
+)
 from eval.harness import (
     REGIME_FAMILY_HOLDOUT,
     REGIME_RANDOM,
@@ -519,6 +530,215 @@ def test_conditions_differ_only_in_tool_names():
             f"{key}: {len(spec.events)} events under 'unseen' but "
             f"{len(other.events)} under 'lexical'; the conditions differ in "
             "structure, not only in naming")
+
+
+# =====================================================================
+# 4b. The signature cache
+# =====================================================================
+#
+# It exists because pure-Python Ed25519 costs ~5 ms a multiplication and the
+# generator was spending nine seconds per call re-deriving signatures it had
+# already derived. What these assert is the property that makes it safe to have
+# at all: it is addressed by what is being signed, so it cannot answer a
+# question it was not asked. Nothing here tests that it is FAST -- speed is not
+# a correctness property and a slow suite is a nuisance, while a cache that
+# silently substitutes the wrong signature is a corpus that measures nothing.
+
+_CACHE_SEED = bytes.fromhex("0" * 63 + "7")
+
+
+def test_a_cached_signature_is_the_signature_real_signing_produces():
+    """The whole claim, stated as one assertion.
+
+    Ed25519 signing is deterministic (RFC 8032 section 5.1.6 derives the nonce
+    from the key and the message), so "cached" and "computed" are not merely
+    equivalent, they are the same bytes. If that ever stops being true the cache
+    is not an optimisation, it is a second implementation.
+    """
+    cache = SignatureCache(None)
+    public = ed25519.public_key(_CACHE_SEED)
+    message = b"cohaera.integrity:1\x1feval\x1f7\x1fdeadbeef"
+
+    first = cache.sign(_CACHE_SEED, "ed25519:test", message)
+    second = cache.sign(_CACHE_SEED, "ed25519:test", message)
+
+    assert first == second == ed25519.sign(_CACHE_SEED, message)
+    assert ed25519.verify(public, message, first)
+    assert (cache.misses, cache.hits) == (1, 1)
+
+
+def test_the_cache_address_changes_with_the_message_and_with_the_key():
+    """Two different questions must not share an answer.
+
+    The key id is in the address even though the same message under a different
+    key is a different signature only because the SECRET differs -- the secret
+    is deliberately not hashed in, so the key id is the only thing standing
+    between a rotation and a wrong lookup.
+    """
+    message = b"a"
+    other = b"b"
+    assert (SignatureCache.key("k1", message)
+            != SignatureCache.key("k1", other))
+    assert (SignatureCache.key("k1", message)
+            != SignatureCache.key("k2", message))
+    # And the separator does its job: "k" + "1a" must not address the same
+    # entry as "k1" + "a".
+    assert SignatureCache.key("k1", b"a") != SignatureCache.key("k", b"1a")
+
+
+def test_the_cache_survives_a_round_trip_through_disk(tmp_path):
+    path = tmp_path / "sigs.json"
+    message = b"round trip"
+
+    writer = SignatureCache(path)
+    signature = writer.sign(_CACHE_SEED, "ed25519:test", message)
+    writer.save()
+    assert path.exists()
+
+    reader = SignatureCache(path)
+    assert reader.sign(_CACHE_SEED, "ed25519:test", message) == signature
+    assert (reader.hits, reader.misses) == (1, 0)
+
+
+def test_two_processes_writing_the_cache_do_not_lose_each_others_work(tmp_path):
+    """Two pytest runs in two terminals is an ordinary thing to do."""
+    path = tmp_path / "sigs.json"
+    a, b = SignatureCache(path), SignatureCache(path)
+    a.sign(_CACHE_SEED, "ed25519:test", b"from a")
+    b.sign(_CACHE_SEED, "ed25519:test", b"from b")
+    a.save()
+    b.save()
+
+    merged = SignatureCache(path)
+    merged.load()
+    for message in (b"from a", b"from b"):
+        merged.sign(_CACHE_SEED, "ed25519:test", message)
+    assert (merged.hits, merged.misses) == (2, 0)
+
+
+def test_a_damaged_cache_file_is_discarded_rather_than_half_trusted(tmp_path):
+    """Content addressing means there is no such thing as a stale entry, but it
+    does not mean there is no such thing as a damaged file. A truncated or
+    edited cache is thrown away whole -- the alternative is trusting the half
+    that happens to parse."""
+    path = tmp_path / "sigs.json"
+    writer = SignatureCache(path)
+    signature = writer.sign(_CACHE_SEED, "ed25519:test", b"intact")
+    writer.save()
+
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    address = SignatureCache.key("ed25519:test", b"intact")
+    doc["signatures"][address] = base64.b64encode(b"\x00" * 64).decode("ascii")
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+    reader = SignatureCache(path)
+    assert reader.sign(_CACHE_SEED, "ed25519:test", b"intact") == signature, (
+        "the forged entry was served; the digest guard is not doing anything")
+    assert reader.misses == 1
+
+
+@pytest.mark.parametrize("value", ["0", "off", "none", ""])
+def test_the_uncached_path_stays_reachable(value, monkeypatch):
+    """`COHAERA_EVAL_SIGCACHE=0` has to keep working, or "the cache agrees with
+    real signing" becomes a claim with nothing behind it."""
+    monkeypatch.setenv(ENV_PATH, value)
+    assert resolve_path() is None
+    monkeypatch.delenv(ENV_PATH)
+    assert resolve_path() is not None
+
+
+def test_the_generator_signs_through_the_cache():
+    """A structural guard, not a performance one. If somebody restores the
+    direct ``ed25519.sign`` call the suite goes back to spending most of its
+    wall clock on signing, and nothing else here would notice."""
+    gen.generate("unseen")
+    assert isinstance(gen.SIGNATURES, SignatureCache)
+    assert gen.SIGNATURES.hits + gen.SIGNATURES.misses >= 2160, (
+        "the signed stream did not go through the cache")
+
+
+def test_the_corpuss_signatures_verify_against_the_declared_keys():
+    """End to end, on the real corpus, through the real verifier.
+
+    ``test_a_revoked_key_stream_...`` and ``test_a_correct_rotation_...`` verify
+    every signature on the signed stream as a side effect of scoring, so this is
+    belt and braces -- but they would also pass if the cache served a signature
+    that was wrong in a way the revocation check masks. This one asks the
+    verifier directly, on a deterministic sample, at a cost of a few dozen
+    milliseconds.
+    """
+    store = in_memory_trust_store()
+    signed = [e for s in gen.generate("unseen") if s.kind in gen.SIGNED_KINDS
+              for e in s.events if INTEGRITY_FIELD in e]
+    assert signed, "the corpus no longer has a signed stream to check"
+
+    checked = 0
+    for record in signed[::180]:
+        sidecar = record[INTEGRITY_FIELD]
+        key = store.keys[sidecar["key_id"]]
+        message = signing_input(sidecar["stream_id"], sidecar["seq"],
+                                sidecar["chain"])
+        assert ed25519.verify(key.public, message,
+                              base64.b64decode(sidecar["sig"])), (
+            f"seq {sidecar['seq']} does not verify under {sidecar['key_id']}")
+        checked += 1
+    assert checked >= 8, f"only {checked} signatures sampled"
+
+
+def test_the_cache_file_is_ignored_and_is_not_a_corpus_artefact():
+    """Two things, and the second one is the one that was actually wrong.
+
+    The cache is derived, 600-odd KB, and rewritten wholesale whenever the
+    corpus changes, so it must not be committed. But the first version of it
+    lived in ``eval/corpus/data/``, which ``eval/run_eval.py`` digests to name
+    the card's inputs -- so enabling the cache changed the corpus digest and the
+    card reported a corpus change that had not happened. A cache that alters the
+    measurement it was added to speed up is worse than a slow suite.
+    """
+    root = Path(__file__).resolve().parent.parent
+    # DEFAULT_PATH rather than resolve_path(), which honours the environment and
+    # would make this assert something about how the suite happened to be run.
+    assert DEFAULT_PATH.parent == root / "eval" / "corpus", (
+        f"the cache moved to {DEFAULT_PATH}; check git ignores it")
+    assert (root / "eval" / "corpus" / "data") not in DEFAULT_PATH.parents, (
+        "the cache is inside the directory run_eval digests into the card")
+    ignored = (root / ".gitignore").read_text(encoding="utf-8").split()
+    assert DEFAULT_PATH.relative_to(root).as_posix() in ignored
+
+
+def test_a_stray_file_in_the_corpus_directory_is_refused_not_absorbed(tmp_path,
+                                                                      monkeypatch):
+    """The general form of the same defect.
+
+    ``corpus_digest`` used to hash whatever it found under ``data/``. Anything
+    that ended up there -- a swap file, a scratch export, a cache -- changed the
+    digest, and the card would report a change in the corpus when only the
+    directory listing had changed.
+    """
+    monkeypatch.setattr(run_eval, "DATA", tmp_path)
+    monkeypatch.setattr(run_eval, "corpus_artefacts", lambda: {tmp_path / "a.jsonl"})
+    (tmp_path / "a.jsonl").write_text("{}\n", encoding="utf-8")
+    clean = run_eval.corpus_digest()
+
+    (tmp_path / "scratch.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(SystemExit, match="not corpus"):
+        run_eval.corpus_digest()
+
+    (tmp_path / "scratch.json").unlink()
+    assert run_eval.corpus_digest() == clean
+
+
+def test_the_cache_document_names_its_schema(tmp_path):
+    """Every other artefact this project writes says what it is in its first
+    field. A cache is not exempt: a bare JSON blob in a data directory is
+    indistinguishable from output somebody meant to keep."""
+    path = tmp_path / "sigs.json"
+    cache = SignatureCache(path)
+    cache.sign(_CACHE_SEED, "ed25519:test", b"schema")
+    cache.save()
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert doc["scheme"] == CACHE_SCHEMA
+    assert "_note" in doc
 
 
 # =====================================================================

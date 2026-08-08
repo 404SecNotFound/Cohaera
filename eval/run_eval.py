@@ -53,13 +53,47 @@ CARD_MD = Path(__file__).resolve().parent / "EVALUATION-CARD.md"
 CARD_JSON = Path(__file__).resolve().parent / "evaluation-card.json"
 
 
+def corpus_artefacts() -> set[Path]:
+    """Exactly the files ``gen.write`` produces. Named, not discovered."""
+    expected: set[Path] = set()
+    for condition in CONDITIONS:
+        expected.add(DATA / f"{condition}.jsonl")
+        expected.add(DATA / f"{condition}.labels.jsonl")
+        manifests = DATA / "manifests" / condition
+        expected.add(manifests / "_all.json")
+        expected.add(manifests / "trust-store.json")
+        for family in gen.FAMILIES:
+            expected.add(manifests / f"{family.name}.json")
+    return expected
+
+
 def corpus_digest() -> str:
-    """One digest over every corpus artefact, so a card names its inputs."""
+    """One digest over every corpus artefact, so a card names its inputs.
+
+    OVER A NAMED SET, NOT OVER WHATEVER IS IN THE DIRECTORY. This used to walk
+    ``data/`` and hash what it found, which meant any file that ended up there
+    -- an editor's swap file, a scratch export, a cache -- silently changed the
+    corpus digest and therefore the card, and the card would report a change in
+    the corpus when nothing about the corpus had changed. That is the same
+    class of defect as the ``--no-generate`` drift below, and it was found the
+    same way: by tripping it.
+
+    A file in ``data/`` that is not a corpus artefact is refused rather than
+    absorbed. The digest is a claim about the corpus; a directory listing is not.
+    """
+    expected = corpus_artefacts()
+    present = {p for p in DATA.rglob("*") if p.is_file()}
+    stray = sorted(p.relative_to(DATA).as_posix() for p in present - expected)
+    if stray:
+        raise SystemExit(
+            f"{DATA} contains {len(stray)} file(s) that are not corpus "
+            f"artefacts: {', '.join(stray[:5])}. The corpus digest is a "
+            "statement about the corpus, so it will not absorb them. Remove "
+            "them, or regenerate the corpus into a clean directory.")
     h = hashlib.sha256()
-    for path in sorted(DATA.rglob("*")):
-        if path.is_file():
-            h.update(path.relative_to(DATA).as_posix().encode("utf-8"))
-            h.update(path.read_bytes())
+    for path in sorted(expected):
+        h.update(path.relative_to(DATA).as_posix().encode("utf-8"))
+        h.update(path.read_bytes())
     return h.hexdigest()[:16]
 
 
