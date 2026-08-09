@@ -361,7 +361,8 @@ def view(raw: dict[str, Any], limits: Limits = DEFAULT_LIMITS) -> RecordView:
     if raw.get("data") is not None and not isinstance(raw.get("data"), dict):
         defects.append(DEFECT_DATA_TYPE)
 
-    data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+    raw_data = raw.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     if "response_text" in data:
         _, codes = semantic_text(data.get("response_text"), limits.max_response_chars,
                                  DEFECT_RESPONSE_TEXT_TYPE, DEFECT_RESPONSE_TEXT_LENGTH)

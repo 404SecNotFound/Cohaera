@@ -27,7 +27,7 @@ import sys
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest
 from .evidence import (
@@ -449,7 +449,10 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
             dropped_events += 1
             continue
         session_of[id(e)] = key.value
-        s.events.append(e)
+        # Sessions are built as lists here and sealed at the end of this
+        # function; `Session.events` is typed Sequence because a sealed one is
+        # a tuple. See the C4-08 note on the class.
+        cast("list[Event]", s.events).append(e)
 
     # A dropped event still occupies a position in its collector stream, so it
     # is observed for sequence continuity and attributed to no session. Omitting
@@ -479,7 +482,7 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
 
     sessions = list(buckets.values())
     for s in sessions:
-        s.events.sort(key=lambda x: x.sort_key)
+        cast("list[Event]", s.events).sort(key=lambda x: x.sort_key)
         # C4-08. Sealed, not merely invalidated. Batch assembly is finished with
         # these sessions, and everything downstream caches derived values off
         # them, so the event list is made immutable rather than left mutable

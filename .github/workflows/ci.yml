@@ -97,6 +97,19 @@ jobs:
           # re-run to answer it.
           ruff --version
           ruff check src tests
+      - name: Type check
+        run: |
+          # COH-R15. The review raised this as unverified because mypy was not
+          # installed anywhere; it is a gate now. The configuration lives in
+          # pyproject's [tool.mypy], including the two flags that are switched
+          # off and why, for the same reason the ruff selection does.
+          #
+          # src only. The test suite constructs deliberately ill-typed values
+          # by the hundred -- that is what tests/test_hostile.py IS -- and type
+          # checking it would mean annotating hostile input as hostile, which
+          # proves nothing about the shipped package.
+          mypy --version
+          mypy
       - name: Unit and hostile tests
         run: python -m pytest tests/ -q
       - name: Adversarial self-test
@@ -207,6 +220,23 @@ jobs:
           assert all(r["verdict_id"] for r in rows)
           print(f"{len(rows)} verdict record(s) emitted from the installed wheel")
           PY
+      - name: The installed package carries its PEP 561 marker
+        run: |
+          # COH-R15. Checked on the INSTALLED package rather than in the source
+          # tree, because the failure this guards against is a packaging one:
+          # `py.typed` present in src/ and missing from the wheel means every
+          # downstream type checker silently treats `import cohaera` as Any,
+          # and nothing in the repository looks wrong.
+          /tmp/verify/bin/python - <<'PY'
+          import importlib.util, pathlib
+          spec = importlib.util.find_spec("cohaera")
+          root = pathlib.Path(spec.origin).parent
+          marker = root / "py.typed"
+          assert marker.is_file(), (
+              f"py.typed is not in the installed package at {root}; the "
+              "annotations ship but no downstream checker will read them")
+          print(f"PEP 561 marker present at {marker}")
+          PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dist
@@ -222,10 +252,53 @@ jobs:
           python-version: "3.12"
       - name: Generate an SBOM for the built artefact
         run: |
+          # COH-R17. This step used to be `cyclonedx-py environment` against the
+          # runner's own interpreter, after pip-installing the wheel into it. The
+          # step was named "for the built artefact" and produced an SBOM of the
+          # BUILD ENVIRONMENT: pip, build, cyclonedx-bom, setuptools, wheel and
+          # their transitive closure, plus whatever the GitHub image ships. Run
+          # here that command emits 94 components and cohaera is not the subject
+          # of any of them. Shipping it as this project's SBOM would be a
+          # supply-chain document describing a machine nobody receives.
+          #
+          # The artefact's dependency closure is what installing the WHEEL pulls
+          # in, so that is what gets built and described: an empty virtualenv,
+          # the wheel installed into it, and the SBOM taken of that. --pyproject
+          # supplies the root component's own metadata, so the document says it
+          # describes cohaera rather than leaving the subject unnamed.
           python -m pip install --upgrade pip build cyclonedx-bom
           python -m build
-          python -m pip install dist/*.whl
-          cyclonedx-py environment -o /tmp/cohaera-sbom.json
+          python -m venv --without-pip /tmp/sbom-venv
+          SITE=$(/tmp/sbom-venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+          # No --no-deps: a runtime dependency added later MUST appear here.
+          python -m pip install --target "$SITE" dist/*.whl
+          cyclonedx-py environment /tmp/sbom-venv \
+            --pyproject pyproject.toml \
+            -o /tmp/cohaera-sbom.json
+      - name: The SBOM describes the wheel, and the wheel has no dependencies
+        run: |
+          # Two assertions, because the old step could not have failed and an
+          # SBOM nothing checks is an artefact rather than a control.
+          #
+          # The first is about this job: if the document's subject is not
+          # cohaera then it is describing something else again, whatever it
+          # happens to contain. The second re-derives the zero-dependency claim
+          # from the installed CLOSURE rather than from the distribution
+          # metadata the tests job reads -- same commitment, independent route,
+          # and this one would catch a dependency that arrives without ever
+          # appearing in cohaera's own metadata.
+          python - <<'PY'
+          import json
+          sbom = json.load(open("/tmp/cohaera-sbom.json"))
+          root = sbom.get("metadata", {}).get("component", {})
+          assert root.get("name") == "cohaera", (
+              f"the SBOM describes {root.get('name')!r}, not the wheel")
+          components = [c["name"] for c in sbom.get("components", [])]
+          assert not components, (
+              f"installing the wheel pulled in {components}; the runtime is "
+              "supposed to have zero dependencies")
+          print(f"SBOM subject: cohaera {root.get('version')}, 0 components")
+          PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sbom

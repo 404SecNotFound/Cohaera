@@ -335,3 +335,66 @@ def test_workflow_permissions_are_least_privilege():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# ---------------------------------------------------------------------------
+# COH-R15 / COH-R17: the two gates the sixth review found missing or misaimed
+# ---------------------------------------------------------------------------
+
+
+def _steps(job_name: str) -> list[dict]:
+    return load_workflow()["jobs"][job_name].get("steps", [])
+
+
+def _run_text(job_name: str) -> str:
+    return "\n".join(s.get("run", "") for s in _steps(job_name))
+
+
+def test_r15_the_type_checker_actually_runs_in_ci():
+    """The review raised typing as unverified because mypy was installed
+    nowhere. A gate that exists only in a contributor's shell is not a gate."""
+    text = _run_text("test")
+    assert "mypy" in text, "no mypy step in the test job"
+    assert any(line.strip() == "mypy" for line in text.splitlines()), (
+        "mypy must be invoked, not merely mentioned")
+
+
+def test_r15_mypy_is_pinned_and_configured_in_pyproject():
+    """Configured in the repository rather than inherited from whichever
+    version CI resolves -- the same argument as the ruff selection."""
+    pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    assert "[tool.mypy]" in pyproject
+    assert re.search(r'"mypy>=[\d.]+,<\d+"', pyproject), (
+        "mypy must be in the dev extra with an upper bound")
+
+
+def test_r15_the_pep561_marker_exists_and_is_packaged():
+    """Both halves. The file on disk does nothing unless setuptools is told to
+    ship it, and a marker that does not reach the wheel means every downstream
+    type checker reads this package as Any."""
+    assert (REPO / "src" / "cohaera" / "py.typed").is_file()
+    pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    assert "[tool.setuptools.package-data]" in pyproject
+    assert 'cohaera = ["py.typed"]' in pyproject
+
+
+def test_r17_the_sbom_describes_the_wheel_not_the_build_machine():
+    """`cyclonedx-py environment` with no argument documents the runner's own
+    interpreter -- pip, build, cyclonedx-bom, setuptools and whatever the
+    GitHub image ships -- under a step named "for the built artefact"."""
+    text = _run_text("sbom")
+    assert "cyclonedx-py environment" in text, "the sbom job stopped generating one"
+    assert not re.search(r"cyclonedx-py environment\s+-o", text), (
+        "cyclonedx-py environment with no target describes the build "
+        "environment, not the artefact")
+    assert "/tmp/sbom-venv" in text, (
+        "the SBOM must be taken of a venv containing the wheel")
+
+
+def test_r17_the_sbom_is_asserted_on_rather_than_only_uploaded():
+    """An SBOM nothing checks is an artefact, not a control."""
+    text = _run_text("sbom")
+    assert 'root.get("name") == "cohaera"' in text, (
+        "nothing checks that the SBOM's subject is this project")
+    assert "zero dependencies" in text, (
+        "nothing checks the closure against the zero-dependency claim")

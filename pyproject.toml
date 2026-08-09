@@ -33,6 +33,10 @@ dependencies = []
 # alone proves a rule is well-formed, not that it can ever match.
 dev = [
   "pytest>=8.0,<10",
+  # COH-R15. Bounded like everything else here: a type checker whose rule set
+  # moves underneath you is the same coin flip the ruff comment below
+  # describes, and mypy's inference genuinely does change between minors.
+  "mypy>=1.11,<3",
   # Floor raised to 0.15: the explicit lint select in [tool.ruff.lint]
   # names rules (RUF034, PLE2502) that older releases do not implement,
   # and ruff errors on an unknown rule code rather than skipping it.
@@ -49,6 +53,13 @@ Repository = "https://github.com/404SecNotFound/Cohaera"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# COH-R15. PEP 561: without this marker a type checker in a DOWNSTREAM project
+# silently ignores every annotation in this package and treats `import cohaera`
+# as returning Any. The annotations exist and are checked in CI; the marker is
+# what makes them mean anything to anyone else.
+[tool.setuptools.package-data]
+cohaera = ["py.typed"]
 
 [tool.ruff]
 line-length = 100
@@ -84,3 +95,41 @@ select = [
 # The evasion suite documents weaknesses in prose that is the point of the file.
 # Test files legitimately construct hostile literals.
 "tests/*" = ["B011"]
+
+
+# COH-R15. The type checker's configuration is declared here for the reason the
+# ruff selection above is: a gate whose strictness depends on the version CI
+# happens to resolve is not a gate.
+#
+# NOT --strict, and the reason is the schema firewall. `validate.py` exists to
+# take producer-controlled JSON of any shape and hand back values of known
+# type, so `Any` at its inputs is the design rather than laziness, and
+# disallow_any_expr would fire on every correct line of it. What is switched on
+# is the part that catches real defects in this codebase: a None reaching an
+# operation that cannot take one, which is the shape of most of what external
+# review has found here.
+[tool.mypy]
+python_version = "3.10"
+files = ["src/cohaera"]
+strict_optional = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
+
+# Two flags are deliberately OFF, and both were tried before being switched off.
+#
+# warn_unreachable fires 16 times, every one of them on a defensive isinstance
+# the schema firewall makes on purpose -- `isinstance(v, (list, tuple)) and not
+# isinstance(v, (str, bytes))`, where mypy is correct that a list cannot also
+# be a str and the guard is there because str IS a sequence and this code reads
+# producer-controlled JSON. Satisfying the flag means deleting those guards,
+# which is precisely the "reviewer who cannot see why a line is defensive will
+# eventually simplify it away" failure CONTRIBUTING warns about. The flag would
+# be a machine doing it.
+#
+# warn_unused_ignores is version-dependent across the range the dev extra
+# allows. The `# type: ignore[assignment]` comments on FrozenDict's mutators
+# are required by mypy 1.x and unnecessary by 2.3, so the flag fails on one end
+# of the supported range and removing the ignores fails on the other. A gate
+# whose result depends on which version resolved is the coin flip the ruff
+# selection above exists to prevent.

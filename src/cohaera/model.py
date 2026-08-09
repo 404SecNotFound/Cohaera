@@ -24,7 +24,7 @@ from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from functools import cached_property
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from . import evidence, validate
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest
@@ -750,7 +750,9 @@ class Session:
                 "cached and adding an event would serve stale ones (C4-08)")
         if isinstance(self.events, tuple):      # defensive: sealed flag cleared
             self.events = list(self.events)
-        self.events.append(event)
+        # `events` is Sequence because a SEALED session's is a tuple. Before
+        # sealing it is always a list, which the line above guarantees.
+        cast("list[Event]", self.events).append(event)
         self.invalidate()
 
     # ---- identity -------------------------------------------------------
@@ -896,14 +898,14 @@ class Session:
                     start_stream=e.integrity.stream_id if e.integrity else None,
                     start_seq=e.integrity.seq if e.integrity else None,
                 )
-                idx = len(calls)
+                started = len(calls)
                 calls.append(tc)
                 if tc.span_id and tc.span_id not in open_by_span:
                     # Span collision: two open calls claiming the same span are
                     # not merged. The first keeps the index; the second falls
                     # back to name matching rather than silently overwriting.
-                    open_by_span[tc.span_id] = idx
-                open_by_name.setdefault(tc.name, deque()).append(idx)
+                    open_by_span[tc.span_id] = started
+                open_by_name.setdefault(tc.name, deque()).append(started)
 
             elif etype in {"tool_end", "tool_error"}:
                 sid = e.span_id
@@ -1037,9 +1039,14 @@ class Session:
 
     @property
     def max_delegation_depth(self) -> int:
-        depths = [e.data.get("current_depth") for e in self.events
-                  if isinstance(e.data.get("current_depth"), int)
-                  and not isinstance(e.data.get("current_depth"), bool)]
+        # Read once per event and narrowed with a walrus, rather than three
+        # separate .get calls the type checker has to prove agree with each
+        # other. `bool` is excluded because it is a subclass of `int` and a
+        # producer sending `current_depth: true` would otherwise contribute 1.
+        depths: list[int] = [
+            d for e in self.events
+            if isinstance(d := e.data.get("current_depth"), int)
+            and not isinstance(d, bool)]
         return max(depths) if depths else 0
 
     @property
@@ -1303,14 +1310,14 @@ def to_cim_event(session: Session, findings: list[Finding],
         schema=schema,
     )
 
-    record = {
+    record: dict[str, Any] = {
         "type": "cohaera_session_verdict",
         "schema": schema,
         "event_type": "cohaera_session_verdict",
         "timestamp": session.ended_at,
         "session_id": session.session_id,
         "trace_id": session.session_id,
-        "agent_name": (session.agent_names or [None])[0],
+        "agent_name": session.agent_names[0] if session.agent_names else None,
         "framework": session.framework,
         "host": session.host,
         "user": session.user,

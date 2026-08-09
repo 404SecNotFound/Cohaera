@@ -1288,9 +1288,14 @@ class Freshness:
                 and math.isfinite(self.max_age_s) and math.isfinite(self.as_of))
 
     def age_of(self, when: float | None) -> float | None:
-        if not self.enabled or when is None or not math.isfinite(when):
+        # `enabled` establishes that both are non-None finite floats, but it is
+        # a property and the narrowing does not survive the call, so the two
+        # locals restate it for the type checker as well as the reader.
+        as_of, max_age = self.as_of, self.max_age_s
+        if (as_of is None or max_age is None or when is None
+                or not self.enabled or not math.isfinite(when)):
             return None
-        return float(self.as_of) - float(when)
+        return float(as_of) - float(when)
 
     def stale(self, when: float | None) -> bool | None:
         """None when the question cannot be answered. Future-dated is not stale.
@@ -1300,7 +1305,7 @@ class Freshness:
         else's finding.
         """
         age = self.age_of(when)
-        if age is None:
+        if age is None or self.max_age_s is None:
             return None
         return age > float(self.max_age_s)
 

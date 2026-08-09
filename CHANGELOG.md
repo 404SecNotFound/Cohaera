@@ -168,6 +168,28 @@ any diff, so the numbers below are derived rather than claimed.
   whichever accessor ran first; it now rejects at construction. A non-object
   from the wire is still quarantined as `NOT_A_JSON_OBJECT` rather than raising
   — that path is rule 3 and stays rule 3.
+- **COH-R15** — the project shipped annotations that nothing checked and that no
+  downstream consumer could read. `mypy` is now in the dev extra with an upper
+  bound, configured in `pyproject.toml` so the gate means the same thing
+  everywhere, and run in CI; the 24 errors it found on first run are fixed. Two
+  of its flags are deliberately off with the reasoning recorded beside them --
+  `warn_unreachable` fires only on defensive `isinstance` guards the schema
+  firewall makes on purpose, and `warn_unused_ignores` disagrees with itself
+  across the supported mypy range. `py.typed` now ships in the wheel, checked on
+  the *installed* package: present in `src/` and missing from the wheel means
+  every downstream type checker silently reads `import cohaera` as `Any`, and
+  nothing in the repository looks wrong.
+- **COH-R17** — the `sbom` job ran `cyclonedx-py environment` against the
+  runner's own interpreter and uploaded the result under a step named "Generate
+  an SBOM for the built artefact". It was an SBOM of the build machine: 94
+  components when reproduced here — pip, build, cyclonedx-bom, setuptools and
+  whatever the image ships — with cohaera the subject of none of them. The SBOM
+  is now taken of a virtualenv containing only the installed wheel, so it
+  describes the artefact's real dependency closure, and it is **asserted on**
+  rather than only uploaded: the document's subject must be cohaera, and the
+  closure must be empty. That second assertion re-derives the zero-dependency
+  claim from the installed closure, independently of the distribution metadata
+  the test job reads.
 - **COH-R14 / COH-R16** — the direct evasion runner missed a test defined after
   its `__main__` block, and CI actions were not pinned to commit SHAs.
 - **E02** — a diluted attack is no longer a quiet session; **E16** — a

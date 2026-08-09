@@ -1531,7 +1531,8 @@ def ch07_effect_contradiction(session: Session,
     findings: list[Finding] = []
     if contradicted:
         shown, dropped = cap_list(
-            [{**c.brief(limits), "receipt": c.receipt.as_dict()}
+            [{**c.brief(limits),
+              "receipt": c.receipt.as_dict() if c.receipt else None}
              for c in contradicted], limits.max_evidence_items)
         findings.append(Finding(
             check=CH07_CONTRADICTED,
@@ -1557,7 +1558,8 @@ def ch07_effect_contradiction(session: Session,
 
     if unbound:
         shown, dropped = cap_list(
-            [{**c.brief(limits), "receipt": c.receipt.as_dict(),
+            [{**c.brief(limits),
+              "receipt": c.receipt.as_dict() if c.receipt else None,
               "binding": _receipt_binding(c)} for c in unbound],
             limits.max_evidence_items)
         findings.append(Finding(
@@ -1884,7 +1886,7 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
     # ---- CH01 -----------------------------------------------------------
     required = [SURFACE_BENIGN_BASELINE, SURFACE_TOOL_LIFECYCLE,
                 SURFACE_CORRELATION_KEY]
-    if not baseline_ok:
+    if grammar is None or not baseline_ok:
         contracts.append(CheckContract(
             check="CH01_sequence_order", status=STATUS_NOT_EVALUATED, confidence=0.0,
             required_surfaces=required,
@@ -2071,7 +2073,7 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
         required = [*required, SURFACE_POLICY_SEMANTICS, SURFACE_APPROVAL]
     conf = corr_conf * class_conf * clock_conf
     reasons = common_reasons + class_reasons()
-    remedies: list[str] = []
+    remedies = []
     missing = []
     assumptions = ["A policy event is a log line. Whether it was enforced is "
                    "not stated by this telemetry."]
