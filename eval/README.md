@@ -475,7 +475,8 @@ catalogued as **E16** in [`../EVASION.md`](../EVASION.md).
 
 ## The corpus grades the checks; it does not grade the plumbing
 
-Worth stating plainly, because two defects in a row have now landed in the gap.
+Worth stating plainly, because three defects in a row have now landed in the
+gap.
 
 A sixth review found that CH03 read the scanner's `has_injection_patterns` with
 truthiness — `"false"` is a truthy string, so a scanner reporting it found
@@ -489,6 +490,14 @@ fields, so the malformed case is never generated. And every session is
 homogeneous in how its tools are classified — all manifest, or all heuristic, or
 all unknown — so the mean and the worst case are the same number in all 1,824 of
 them, in every capability condition. Checked, not assumed.
+
+COH-R13 is the third and the clearest of them. `seal()` froze a session's event
+list and left `manifest`, `integrity`, `limits` and the `_sealed` flag itself
+rebindable, so a scored session could be reclassified under a manifest it was
+never sealed with. Nothing in this harness does that — `assemble` seals every
+session it returns and `SessionCache` reads them and nothing else — which is
+exactly why the corpus cannot see it. The defect is in what the API *permits*,
+and a corpus measures what the code *does*.
 
 That is a real limit and it is not the synthetic-data limit. The corpus was
 built to grade the *checks*: does CH03 fire on the right sessions, does CH01

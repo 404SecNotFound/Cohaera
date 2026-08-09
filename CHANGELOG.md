@@ -118,6 +118,19 @@ any diff, so the numbers below are derived rather than claimed.
   — `read_only` is a positive classification, `unknown` is the absence of one,
   and scoping it to consequential calls alone made CH07 declare itself blind on
   64 corpus sessions where it had just produced a finding.
+- **COH-R13** — `seal()` froze a session's event list and nothing else. The
+  fault C4-08 closed was still open one field over: `manifest` decides how every
+  call is classified, so rebinding it after sealing either served classes cached
+  under the previous manifest — an egress call still reported `read_only` — or
+  silently reclassified the session under a manifest it was never sealed with.
+  `integrity` was rebindable too, where `None` means no verification ran and
+  must not be forgeable into a verdict, and so was `_sealed` itself, so the seal
+  could be switched off and the event list reopened. A sealed session is now
+  read-only in every field except its two cache slots. Separately,
+  `Event(raw=...)` accepted a non-object and raised `AttributeError` from
+  whichever accessor ran first; it now rejects at construction. A non-object
+  from the wire is still quarantined as `NOT_A_JSON_OBJECT` rather than raising
+  — that path is rule 3 and stays rule 3.
 - **COH-R14 / COH-R16** — the direct evasion runner missed a test defined after
   its `__main__` block, and CI actions were not pinned to commit SHAs.
 - **E02** — a diluted attack is no longer a quiet session; **E16** — a
@@ -128,9 +141,11 @@ any diff, so the numbers below are derived rather than claimed.
 - The corpus is synthetic, written by the detector's author, at an attack
   prevalence of 33%. There is no adaptive attacker and no real agent traffic.
 - The corpus grades the *checks*. It does not grade the schema firewall, the
-  coverage arithmetic or the manifest loader — two real defects (COH-R03,
-  COH-R07) were fixed in this cycle with the card unmoved, because every corpus
-  session is well-formed and homogeneous in the ways those defects needed. Half
+  coverage arithmetic or the manifest loader — three real defects (COH-R03,
+  COH-R07, COH-R13) were fixed in this cycle with the card unmoved, because
+  every corpus session is well-formed and homogeneous in the ways those defects
+  needed, and because a corpus measures what the code does rather than what its
+  API permits. Half
   of COH-R12 is the one exception, and it reached the card only as a side
   effect of the `producer_flag` ablation rather than by design; see
   `eval/README.md`.

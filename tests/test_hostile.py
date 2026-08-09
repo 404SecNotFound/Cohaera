@@ -2336,3 +2336,136 @@ def test_r12_a_known_read_only_receipt_is_not_in_the_population():
     contract = _receipt_coverage(_classified_session(*events))
     assert contract["status"] == "not_evaluated"
     assert contract["confidence"] == 0.0
+
+
+# =====================================================================
+# COH-R13  the seal that covered one field
+# =====================================================================
+#
+# C4-08 sealed `events` because a cache keyed on LENGTH could be defeated by
+# replacing an event in place. The seal stopped there. `manifest` decides how
+# every call is classified, `integrity` carries what the stream verifier
+# concluded, `limits` sets every bound the evidence was cut to -- and `_sealed`
+# itself was rebindable, so the seal could be switched off and the event list
+# reopened. Same fault, one field over, and the same answer: remove the
+# mutation rather than add an invalidation hook.
+
+
+_READ_MANIFEST = CapabilityManifest.from_obj({
+    "producer": "a", "manifest_version": "1",
+    "tools": {"frobnicate": {"effects": ["read"], "reversible": True}}})
+_EGRESS_MANIFEST = CapabilityManifest.from_obj({
+    "producer": "b", "manifest_version": "1",
+    "tools": {"frobnicate": {"effects": ["egress"], "reversible": False,
+                             "destination": "external:https"}}})
+
+
+def _sealed_session(manifest):
+    s = Session(session_id="s1", manifest=manifest, events=[
+        ev("tool_start", 0, tool_name="frobnicate", span_id="A"),
+        ev("tool_end", 1, tool_name="frobnicate", span_id="A"),
+    ])
+    s.seal()
+    return s
+
+
+def test_r13_a_sealed_session_cannot_have_its_manifest_replaced():
+    """The swap that reclassifies. Before the fix this either served classes
+    cached under the old manifest -- an egress call still reported read_only --
+    or silently reclassified the session under a manifest it was never sealed
+    with, depending only on whether anything had been derived yet."""
+    s = _sealed_session(_READ_MANIFEST)
+    assert s.tool_calls[0].klass == "read_only"
+
+    with pytest.raises(SealedSessionError):
+        s.manifest = _EGRESS_MANIFEST
+
+    assert s.manifest is _READ_MANIFEST
+    assert s.tool_calls[0].klass == "read_only"
+
+
+def test_r13_the_swap_is_refused_before_anything_is_derived_too():
+    """The cache is not the defect and emptying it is not the fix: a sealed
+    session must classify under the manifest it was sealed with whether or not
+    a cache has been populated yet."""
+    s = _sealed_session(_READ_MANIFEST)
+    with pytest.raises(SealedSessionError):
+        s.manifest = _EGRESS_MANIFEST
+    assert s.tool_calls[0].klass == "read_only"
+
+
+@pytest.mark.parametrize("field_name,value", [
+    ("manifest", EMPTY_MANIFEST),
+    ("integrity", None),
+    ("limits", DEFAULT_LIMITS),
+    ("events", ()),
+    ("session_id", "somebody-elses-session"),
+    ("correlation", None),
+])
+def test_r13_no_field_of_a_sealed_session_is_rebindable(field_name, value):
+    s = _sealed_session(_READ_MANIFEST)
+    with pytest.raises(SealedSessionError):
+        setattr(s, field_name, value)
+
+
+def test_r13_the_seal_cannot_be_switched_off():
+    """The one that made the rest of the guard decorative."""
+    s = _sealed_session(_READ_MANIFEST)
+    with pytest.raises(SealedSessionError):
+        s._sealed = False
+    with pytest.raises(SealedSessionError):
+        del s._sealed
+    assert s.sealed
+    with pytest.raises(SealedSessionError):
+        s.add_event(ev("tool_start", 2, tool_name="x", span_id="B"))
+
+
+def test_r13_integrity_absent_cannot_be_forged_into_a_verdict():
+    """`integrity is None` means no verification ran, which coverage reports as
+    a blind spot. Rebinding it after sealing would turn that into a clean
+    verdict from nowhere."""
+    s = _sealed_session(_READ_MANIFEST)
+    assert s.integrity is None
+    with pytest.raises(SealedSessionError):
+        s.integrity = "anything at all"
+    assert s.integrity is None
+
+
+def test_r13_cache_plumbing_still_works_on_a_sealed_session():
+    """The guard exempts the two cache fields on purpose. Rebinding them cannot
+    change what the session is -- the events are a tuple -- only how often
+    derived values are recomputed, and blocking them would break invalidate()
+    for no gain."""
+    s = _sealed_session(_READ_MANIFEST)
+    first = s.tool_calls
+    s.invalidate()
+    assert s.tool_calls == first
+    assert s.tool_calls[0].klass == "read_only"
+
+
+@pytest.mark.parametrize("bad", ["not a dict", ["a", "b"], 42, None, 1.5, True])
+def test_r13_an_event_payload_must_be_an_object_at_construction(bad):
+    """It used to construct happily -- freeze turns a str into a str and a list
+    into a tuple -- and then raise AttributeError from whichever accessor ran
+    first, arbitrarily far from the caller that caused it."""
+    with pytest.raises(TypeError):
+        Event(raw=bad)
+
+
+def test_r13_a_non_object_record_from_the_stream_is_still_quarantined(tmp_path):
+    """The other half of that fix, and the one that keeps rule 3 intact. A
+    non-object arriving from the wire is a hostile record and is quarantined
+    with a reason code; only a non-object built in memory is a caller defect.
+    Raising on the wire path instead would have turned a bounded quarantine
+    into a crash on the first malformed line."""
+    path = write_jsonl(tmp_path, ['"just a string"', "[1, 2, 3]", "42",
+                                  json.dumps({"timestamp": BASE,
+                                              "event_type": "tool_end",
+                                              "session_id": "s",
+                                              "tool_name": "read_x"})])
+    report = IngestReport()
+    events = list(read_events(path, report=report, quiet=True))
+
+    assert len(events) == 1
+    assert report.rejected == 3
+    assert {r.code for r in report.rejects} == {REJECT_NOT_AN_OBJECT}

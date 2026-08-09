@@ -286,6 +286,26 @@ class Event:
     limits: Limits = field(default=DEFAULT_LIMITS, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        # COH-R13. A record is a JSON OBJECT, and this is where that stops
+        # being an assumption. `Event(raw="{}")` used to construct happily --
+        # freeze turns a str into a str and a list into a tuple -- and then
+        # raise `AttributeError: 'str' object has no attribute 'get'` from
+        # whichever accessor happened to run first, a crash arbitrarily far
+        # from the line that caused it.
+        #
+        # This is not the rule-3 case and must not be softened into it. A
+        # non-object arriving from the wire is already quarantined by ingest as
+        # NOT_A_JSON_OBJECT and never reaches this constructor; a non-object
+        # arriving here came from Cohaera's own code or from a tool building
+        # events in memory, which is a defect in the caller rather than a
+        # hostile record to be tolerated. Absent-and-flagged is for fields
+        # inside a record. It is not for the record not being one.
+        if not isinstance(self.raw, dict):
+            raise TypeError(
+                "Event.raw must be a JSON object, not "
+                f"{type(self.raw).__name__}. A record read from a stream is "
+                "quarantined as NOT_A_JSON_OBJECT before it reaches here, so "
+                "this is a caller building an Event by hand.")
         if not isinstance(self.raw, FrozenDict):
             object.__setattr__(self, "raw", freeze(self.raw))
 
@@ -596,6 +616,12 @@ class SealedSessionError(RuntimeError):
     """An attempt to mutate a session that has already been scored against."""
 
 
+# Pure cache plumbing: rebinding these cannot change what the session IS, only
+# how often its derived values are recomputed over an event list that can no
+# longer change. Everything else is frozen by seal(). See Session.__setattr__.
+_SESSION_CACHE_FIELDS = frozenset({"_caches", "_revision"})
+
+
 @dataclass
 class Session:
     """A correlated agent session. This is the object observra never builds.
@@ -642,6 +668,43 @@ class Session:
     def sealed(self) -> bool:
         return self._sealed
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        """COH-R13. Seal the SESSION, not just its event list.
+
+        ``seal`` froze ``events`` and nothing else, which closed one route to a
+        stale cache and left the others open. ``manifest`` is the clearest:
+        classification reads it, so rebinding it after sealing either serves
+        classes cached under the previous manifest -- an egress call still
+        reported read_only -- or silently reclassifies the session under a
+        manifest it was never sealed with. ``integrity`` is worse in kind,
+        because None there means no verification ran and must not be
+        distinguishable from a verdict; ``limits`` changes every bound the
+        evidence was cut to; and ``_sealed`` itself was rebindable, so the seal
+        could simply be switched off and ``add_event`` used again.
+
+        This is C4-07 and C4-08 a third time, and it gets the same answer they
+        did: remove the mutation rather than add an invalidation hook for
+        callers to forget. ``cohaera.ingest.assemble`` assigns ``integrity``
+        before it seals, and ``eval.harness.SessionCache`` hands one sealed
+        session to three scoring regimes on the strength of this guarantee.
+        """
+        # `_sealed` is absent from __dict__ until the dataclass __init__ sets
+        # it last, so construction is unaffected.
+        if self.__dict__.get("_sealed") and name not in _SESSION_CACHE_FIELDS:
+            raise SealedSessionError(
+                f"session {self.session_id!r} is sealed; {name!r} cannot be "
+                "rebound because derived values are cached from it and every "
+                "reader of a sealed session assumes it cannot change (C4-08, "
+                "COH-R13)")
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if self.__dict__.get("_sealed"):
+            raise SealedSessionError(
+                f"session {self.session_id!r} is sealed; {name!r} cannot be "
+                "deleted (COH-R13)")
+        object.__delattr__(self, name)
+
     # ---- cache plumbing --------------------------------------------------
     def _cached(self, key: str, build):
         # Length AND revision. Once sealed the events are a tuple and neither
@@ -662,12 +725,14 @@ class Session:
         self._revision += 1
 
     def seal(self) -> None:
-        """Freeze the event list. Idempotent; after this the session is read-only."""
+        """Freeze the session. Idempotent; after this it is read-only."""
         if self._sealed:
             return
+        # Order matters: `_sealed` goes last because __setattr__ refuses every
+        # other rebinding once it is set, and that includes these two.
         self.events = tuple(self.events)
-        self._sealed = True
         self.invalidate()
+        self._sealed = True
 
     def add_event(self, event: Event) -> None:
         """Append an event and invalidate everything derived from the old set."""
