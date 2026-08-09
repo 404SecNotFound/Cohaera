@@ -80,7 +80,10 @@ any diff, so the numbers below are derived rather than claimed.
   retained bytes, enforced per record, reported in the ingest summary, and
   regression-tested against `tracemalloc` so the factor cannot become folklore.
   Under the defaults memory binds first, at about 64 MiB of accepted input.
-  **This is a budget, not an architecture** — see *Known limitations*.
+  **This is a budget, not an architecture** — see *Known limitations*, and
+  `docs/BOUNDED-SESSIONS.md` for the scoping of the architecture half, which is
+  proposed rather than built because it needs a session-completion rule and
+  that is a semantics decision that changes what the corpus measures.
 - **COH-R03** — CH03 read the scanner's `has_injection_patterns` with
   truthiness. `"false"` is a truthy string, so a scanner reporting it found
   *nothing* produced a critical finding. Both scanner fields now go through the
