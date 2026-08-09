@@ -507,10 +507,30 @@ firewall, the coverage arithmetic, the manifest loader — is graded by
 change prevalence and every published number, so it is a decision to take
 deliberately rather than a gap to quietly plug.
 
-### The exception, and why it is one
+### The exceptions, and why they are ones
 
-COH-R12 is the counter-example, and it is worth recording because it shows what
-it takes for the corpus to reach a coverage defect at all. CH07's receipt share
+Two coverage defects in this cycle did reach the card, and both are worth
+recording because they show what it takes.
+
+COH-R09 is the larger of the two, and it moved every cell. CH03's contract read
+one well-formed scanner answer as "a scanner ran on this session", so 168 of
+the 1,824 sessions — the ones that scan one read of two, or one of three —
+reported the check at full strength over reads nothing had examined. Binding
+each answer to the call it names drops `mean_coverage_completeness` by 0.004 to
+0.008 everywhere and `weighted_detected_mass` by 0.0013 in the family-holdout
+cells, the latter only because it is weighted by completeness. **No detection
+number moved**, and that is the useful part of the result: nothing about which
+sessions alert changed, only how much the card claims Cohaera saw.
+
+The corpus grades this one for a plain reason — the generator emits a scanner
+answer only on reads where it planted markers, which is what a real scanner
+that reports positives does. The partial coverage was in the corpus from the
+start; nothing was looking at it. Note also what stayed still:
+`unseen`/`name_only` did not move at all, because classification confidence is
+already 0.0 there and CH03's confidence was a product with zero in it either
+way.
+
+COH-R12 is the smaller and the odder. CH07's receipt share
 counted receipted calls of *any* class against a denominator of consequential
 ones, and twelve `deploy_pipeline` sessions in the `producer_flag` condition
 happen to contain the exact shape: `feature_flag_toggle` declares

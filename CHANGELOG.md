@@ -104,6 +104,26 @@ any diff, so the numbers below are derived rather than claimed.
   floats that overflow to `inf`. All five parse sites now use a strict loader.
   Also: an integer too long for CPython to stringify raised a bare `ValueError`
   that the manifest and trust-store loaders did not catch, and ended the run.
+- **COH-R09** — a scanner's answer is evidence about the call it names, and it
+  was being read as evidence about the session. COH-R03 fixed the *type* half
+  (a malformed claim buys nothing); this is the *binding*. One well-formed
+  answer anywhere made CH03's contract report a scanner as having run, so ten
+  pages fetched with one of them scanned reported the check at full strength
+  over nine unexamined entry points. `has_result` had the same shape — `any()`
+  over the session — so capturing `tool_result` on one trivial read and
+  stripping it from the nine that returned attacker-controlled text cost
+  nothing either. Both are now shares over the calls that can bring untrusted
+  content in, with answers bound to a call by span where the span names one and
+  by tool name otherwise; an answer naming no call in the session is counted
+  and reported rather than dropped. Consequential calls are excluded from that
+  surface, because they are what CH03 orders the markers *against*.
+  **This moved the card**: self-reported coverage on the headline manifest rows
+  went 0.77 → 0.76, `mean_coverage_completeness` fell by 0.004–0.008 in every
+  cell, and `weighted_detected_mass` by 0.0013 in the family-holdout cells,
+  the last only because it is weighted by completeness. Every recall, precision
+  and false-positive figure is unchanged to the digit, because no finding
+  changed — 168 of 1,824 corpus sessions scan one read of two or one of three,
+  and the card now says so instead of scoring them as fully examined.
 - **COH-R11** — CH03 and CH04 each decided "did this call run after that
   event?" with one comparison against the wall clock, and they disagreed with
   each other: CH03 used `>=` so a tie was *after*, CH04 used `>` so a tie was

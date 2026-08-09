@@ -36,8 +36,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from cohaera.capabilities import EMPTY_MANIFEST, CapabilityManifest, ManifestError
 from cohaera.checks import (
+    R_NO_TOOL_RESULT,
     R_ORDER_INDETERMINATE,
+    R_SCANNER_PARTIAL,
     SequenceGrammar,
+    _scanner_coverage,
     ch02_concealment_gap,
     ch03_untrusted_to_consequential,
     ch04_guardrail_overrun,
@@ -2629,3 +2632,141 @@ def test_r11_an_ordinary_ordered_session_is_untouched():
     contract = _ch04_contract(s)
     assert R_ORDER_INDETERMINATE not in contract["reasons"]
     assert contract["confidence"] > 0.0
+
+
+# =====================================================================
+# COH-R09  the scanner's answer is about one call, not the session
+# =====================================================================
+#
+# COH-R03 fixed the TYPE half: a malformed claim is not a scanner's answer and
+# cannot buy coverage. What it left is the BINDING. One well-formed answer
+# anywhere in the session was read as "a scanner ran here", so ten pages
+# fetched with one of them scanned reported CH03 running at full strength over
+# nine unexamined entry points. The same shape one field over: `has_result` was
+# `any(...)`, so capturing tool_result on one trivial read and stripping it
+# from the nine that returned attacker text cost the contract nothing.
+
+
+def _read(name, ts, span, result=True, scanned=None, scanned_name=None):
+    end_data = {"reversible": True}
+    if result:
+        end_data["tool_result"] = "page text"
+    out = [ev("tool_start", ts, tool_name=name, span_id=span,
+              data={"reversible": True}),
+           ev("tool_end", ts + 0.4, tool_name=name, span_id=span,
+              data=end_data)]
+    if scanned is not None:
+        out.append(ev("skill_invocation", ts + 0.1,
+                      tool_name=scanned_name or name,
+                      data={"has_injection_patterns": scanned}))
+    return out
+
+
+def _egress(ts=50.0, span="X"):
+    return [ev("tool_start", ts, tool_name="send_email", span_id=span,
+               data={"reversible": False}),
+            ev("tool_end", ts + 1, tool_name="send_email", span_id=span,
+               data={"reversible": False})]
+
+
+def _ch03(session):
+    return next(c for c in coverage(session, None)["checks"]
+                if c["check"] == "CH03_untrusted_to_consequential")
+
+
+def _reads(n, scanned_count, result_count=None):
+    result_count = n if result_count is None else result_count
+    events = []
+    for i in range(n):
+        events += _read(f"fetch_page_{i}", 1.0 + i, f"A{i}",
+                        result=i < result_count,
+                        scanned=False if i < scanned_count else None)
+    return sess(*events, *_egress())
+
+
+def test_r09_one_scanned_read_does_not_cover_the_other_nine():
+    s = _reads(10, scanned_count=1)
+    contract = _ch03(s)
+
+    assert R_SCANNER_PARTIAL in contract["reasons"]
+    assert contract["confidence"] == pytest.approx(0.7 * 0.1), (
+        "one of ten reads examined is one tenth of the surface, not all of it")
+    assert any("no scanner answer" in r for r in contract["remedies"])
+
+
+def test_r09_a_fully_scanned_session_pays_nothing():
+    """The guard against fixing a blind spot by penalising everybody."""
+    s = _reads(10, scanned_count=10)
+    contract = _ch03(s)
+    assert R_SCANNER_PARTIAL not in contract["reasons"]
+    assert contract["confidence"] == pytest.approx(0.7)
+
+
+def test_r09_a_scanner_answer_binds_to_the_call_it_names():
+    """Two reads, one answer, and the answer names the SECOND one. Coverage is
+    one of two either way -- but it has to be the named call that counts, or
+    the binding is decorative."""
+    events = _read("fetch_alpha", 1.0, "A0")
+    events += _read("fetch_beta", 2.0, "A1", scanned=False)
+    s = sess(*events, *_egress())
+
+    scan = _scanner_coverage(s)
+    assert (scan.scanned, scan.scannable, scan.unbound) == (1, 2, 0)
+    assert {c.name for c in s.tool_calls if not c.consequential} == {
+        "fetch_alpha", "fetch_beta"}
+
+
+def test_r09_an_answer_naming_no_call_in_this_session_is_not_coverage():
+    """A scanner reporting on something this session cannot see is a
+    provenance gap of its own, and was previously indistinguishable from a
+    scanner that had examined the session's own reads."""
+    events = _read("fetch_alpha", 1.0, "A0")
+    events += _read("fetch_beta", 2.0, "A1", scanned=False,
+                    scanned_name="some_other_tool_entirely")
+    s = sess(*events, *_egress())
+
+    scan = _scanner_coverage(s)
+    assert (scan.scanned, scan.unbound) == (0, 1)
+    contract = _ch03(s)
+    assert R_SCANNER_PARTIAL in contract["reasons"]
+    assert any("name no call" in r for r in contract["remedies"])
+
+
+def test_r09_consequential_calls_are_not_the_scannable_surface():
+    """CH03 orders markers AGAINST consequential calls; they are not where the
+    markers come from. Counting them would make the share depend on how many
+    actions the agent took, which is not a fact about scanning."""
+    events = _read("fetch_alpha", 1.0, "A0", scanned=False)
+    s_one = sess(*events, *_egress())
+    s_many = sess(*events, *_egress(50.0, "X1"), *_egress(60.0, "X2"),
+                  *_egress(70.0, "X3"))
+
+    assert _scanner_coverage(s_one).scannable == 1
+    assert _scanner_coverage(s_many).scannable == 1
+    assert _ch03(s_one)["confidence"] == _ch03(s_many)["confidence"]
+
+
+def test_r09_one_captured_result_does_not_satisfy_the_session():
+    s = _reads(10, scanned_count=10, result_count=1)
+    contract = _ch03(s)
+    assert R_NO_TOOL_RESULT in contract["reasons"]
+    # 0.8 with none captured, 1.0 with all; one of ten sits just above the floor.
+    assert contract["confidence"] == pytest.approx(0.7 * (0.8 + 0.2 * 0.1))
+
+
+def test_r09_full_result_capture_is_still_worth_full_marks():
+    s = _reads(10, scanned_count=10, result_count=10)
+    assert R_NO_TOOL_RESULT not in _ch03(s)["reasons"]
+    assert _ch03(s)["confidence"] == pytest.approx(0.7)
+
+
+def test_r09_a_session_with_nothing_to_scan_is_vacuous_not_blind():
+    """No reads at all means no untrusted-input surface, so there is nothing a
+    scanner could have missed. That must not read as a blind spot."""
+    s = sess(ev("skill_invocation", 0.5, tool_name="send_email",
+                data={"has_injection_patterns": False}),
+             *_egress(1.0, "X"))
+    scan = _scanner_coverage(s)
+    assert scan.scannable == 0
+    assert scan.share == 1.0
+    assert R_SCANNER_PARTIAL not in _ch03(s)["reasons"]

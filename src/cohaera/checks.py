@@ -1630,6 +1630,9 @@ R_AMBIGUOUS_DISCLOSURE = "DISCLOSURE_AMBIGUOUS_SHARED_TOKENS"
 # order is not a fact this telemetry contains. Charged to whichever check
 # needed the order.
 R_ORDER_INDETERMINATE = "EVENT_ORDER_INDETERMINATE"
+# COH-R09. A scanner answered for some of the calls that could have brought
+# untrusted content in, and nothing answered for the rest.
+R_SCANNER_PARTIAL = "INJECTION_SCANNER_PARTIAL_COVERAGE"
 R_FIELD_DEFECTS = "RECORD_FIELD_DEFECTS_PRESENT"
 # P1. The three absences that are now STATED rather than passed over.
 R_NO_APPROVAL_EVIDENCE = "NO_APPROVAL_EVIDENCE"
@@ -1747,6 +1750,91 @@ def _scanner_evidence(session: Session) -> bool:
     return any(scanner_reported(e.data) for e in session.events)
 
 
+@dataclass(frozen=True)
+class ScannerCoverage:
+    """How much of a session's untrusted-input surface a scanner actually saw.
+
+    COH-R09. COH-R03 fixed the TYPE half of this -- a malformed claim is not a
+    scanner's answer and cannot buy coverage. What it left was the BINDING: a
+    single well-formed answer anywhere in the session was read as "a scanner
+    ran here", and CH03's coverage then charged nothing for the other reads.
+    Ten pages fetched, one of them scanned, and the contract said CH03 was
+    running at full strength over a session with nine unexamined entry points.
+
+    The surface that matters is the calls that can bring somebody else's text
+    into the session -- reads, and calls Cohaera could not classify, because
+    `unknown` is the absence of a classification rather than a statement that
+    nothing came back. Consequential calls are excluded: they are what CH03
+    orders the markers AGAINST, not where the markers come from.
+
+    Answers are bound to a call by span where the span names one, and by tool
+    name otherwise -- observra's scanner events carry the read's tool name and
+    a span of their own, so span-only binding would attribute nothing at all.
+    An answer that binds to no call in the session is counted separately rather
+    than dropped: it is a scanner reporting on something this session cannot
+    see, which is its own provenance gap.
+    """
+
+    scanned: int
+    scannable: int
+    unbound: int
+
+    @property
+    def share(self) -> float:
+        """1.0 when there is nothing to scan: vacuous, not blind."""
+        if not self.scannable:
+            return 1.0
+        return min(1.0, self.scanned / self.scannable)
+
+    @property
+    def complete(self) -> bool:
+        return self.share >= 1.0 and not self.unbound
+
+
+def _scanner_coverage(session: Session) -> ScannerCoverage:
+    calls = session.tool_calls
+    by_span = {c.span_id: c for c in calls if c.span_id}
+    by_name: dict[str, ToolCall] = {}
+    for c in calls:
+        by_name.setdefault(c.name, c)
+
+    scanned: set[int] = set()
+    unbound = 0
+    for e in session.events:
+        if not scanner_reported(e.data):
+            continue
+        call = by_span.get(e.span_id) if e.span_id else None
+        if call is None:
+            call = by_name.get(e.tool_name) if e.tool_name else None
+        if call is None:
+            unbound += 1
+            continue
+        scanned.add(id(call))
+
+    scannable = [c for c in calls if not c.consequential]
+    return ScannerCoverage(
+        scanned=sum(1 for c in scannable if id(c) in scanned),
+        scannable=len(scannable),
+        unbound=unbound)
+
+
+def _result_share(session: Session) -> float:
+    """The share of the untrusted-input surface whose content Cohaera can see.
+
+    COH-R09, second half. This was ``any(c.had_result for c in calls)``, so one
+    captured ``tool_result`` anywhere in the session satisfied the whole of
+    CH03's result coverage -- capture it on one trivial read, strip it from the
+    nine that returned attacker-controlled text, and the contract charged
+    nothing. Measured over the same surface as the scanner share, for the same
+    reason: a result on a consequential call is not the content a marker claim
+    would have been about.
+    """
+    scannable = [c for c in session.tool_calls if not c.consequential]
+    if not scannable:
+        return 1.0
+    return sum(1 for c in scannable if c.had_result) / len(scannable)
+
+
 def coverage(session: Session, grammar: SequenceGrammar | None,
              limits: Limits = DEFAULT_LIMITS) -> dict[str, Any]:
     """Report Cohaera's own blind spots for this session, per check.
@@ -1768,7 +1856,6 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
     clock_conf = _clock_quality(session)
     corr_conf = session.correlation_confidence
     corr_kind = session.correlation.kind if session.correlation else "session_id"
-    has_result = any(c.had_result for c in calls)
     scanner = _scanner_evidence(session)
     has_policy = bool(session.policy_events)
     baseline_ok = grammar is not None and grammar.fitted
@@ -1920,10 +2007,25 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
             assumptions=["No marker field in the stream means no scanner ran, not "
                          "that nothing was found; see EVASION.md E09."]))
     else:
-        conf = corr_conf * class_conf * clock_conf * (1.0 if has_result else 0.8)
+        # COH-R09. Both of these were all-or-nothing over the whole session and
+        # both were satisfied by a single event. They are now shares over the
+        # calls that can bring untrusted content in.
+        #
+        # The scanner share multiplies directly, as CH07's receipt share does,
+        # because it is the same quantity: how much of the surface this check
+        # exists to watch was actually watched. The result share keeps the
+        # endpoints the boolean had -- 1.0 with every read captured, 0.8 with
+        # none -- and grades between them, because a missing tool_result costs
+        # CH03 provenance rather than the ability to run.
+        scan = _scanner_coverage(session)
+        result_share = _result_share(session)
+        conf = (corr_conf * class_conf * clock_conf
+                * scan.share * (0.8 + 0.2 * result_share))
         reasons = common_reasons + class_reasons()
-        if not has_result:
+        if result_share < 1.0:
             reasons.append(R_NO_TOOL_RESULT)
+        if not scan.complete:
+            reasons.append(R_SCANNER_PARTIAL)
         # COH-R11. This check IS an ordering, so a call whose order against the
         # marker cannot be established is a call it has not checked. Scored the
         # same way E16's ambiguity is scored for CH02: the share of the
@@ -1937,11 +2039,19 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
             status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
             confidence=conf, required_surfaces=required,
             present_surfaces=required,
-            missing_surfaces=[] if has_result else [SURFACE_TOOL_RESULT],
+            missing_surfaces=([] if result_share >= 1.0
+                              else [SURFACE_TOOL_RESULT]),
             reasons=reasons,
-            remedies=(["Set capture_tool_data=True in a controlled environment so "
-                       "marker provenance can be checked against the content."]
-                      if not has_result else [])
+            remedies=([f"{scan.scannable - scan.scanned} of {scan.scannable} "
+                       "call(s) that could return untrusted content carry no "
+                       "scanner answer, so CH03 has no view of what came back "
+                       "through them."] if scan.scanned < scan.scannable else [])
+            + ([f"{scan.unbound} scanner answer(s) name no call in this "
+                "session, so what they examined cannot be established."]
+               if scan.unbound else [])
+            + (["Set capture_tool_data=True in a controlled environment so "
+                "marker provenance can be checked against the content."]
+               if result_share < 1.0 else [])
             + ([f"{len(unordered)} consequential call(s) share the marker's "
                 "tick and carry no cohaera.integrity:1 sequence, so their "
                 "order against it is not established. Emit the integrity "
@@ -1950,7 +2060,10 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
                          "read and the action defeats it; see EVASION.md E07.",
                          "Equal timestamps are not an ordering. Where a signed "
                          "collector sequence is absent, a tie is reported "
-                         "rather than resolved; see COH-R11."]))
+                         "rather than resolved; see COH-R11.",
+                         "A scanner answer is evidence about the call it names "
+                         "and no other; an unscanned read is unexamined, not "
+                         "clean. See COH-R09."]))
 
     # ---- CH04 -----------------------------------------------------------
     required = [SURFACE_TOOL_CLASS, SURFACE_EVENT_CLOCK, SURFACE_CORRELATION_KEY]
