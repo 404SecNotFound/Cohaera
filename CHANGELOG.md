@@ -104,6 +104,23 @@ any diff, so the numbers below are derived rather than claimed.
   floats that overflow to `inf`. All five parse sites now use a strict loader.
   Also: an integer too long for CPython to stringify raised a bare `ValueError`
   that the manifest and trust-store loaders did not catch, and ended the run.
+- **COH-R11** — CH03 and CH04 each decided "did this call run after that
+  event?" with one comparison against the wall clock, and they disagreed with
+  each other: CH03 used `>=` so a tie was *after*, CH04 used `>` so a tie was
+  *before* and the call was dropped. CH04's reading was purchasable — the
+  producer emits both timestamps, so stamping a consequential call on the
+  guardrail's own tick silenced the check with no other change to the session,
+  and a collector stamping at millisecond resolution reaches the same tie by
+  accident. Ordering is now three-valued and shared by both checks: the
+  `cohaera.integrity:1` sequence decides it where both records carry one from
+  the same stream, because that sequence is covered by the hash chain and the
+  signature over its head; the clock decides it where it is strictly unequal;
+  and a tie with neither is **indeterminate**, counted in the finding's
+  evidence and charged against the check's coverage as
+  `EVENT_ORDER_INDETERMINATE`, rather than resolved in either direction.
+  Catalogued as **E23**, because the finding is still suppressed by a tie — a
+  tie genuinely does not establish an order — and what changed is that the
+  silence is now visible. Emitting the integrity sidecar closes it outright.
 - **COH-R12** — two ratios whose halves counted different populations. CH02
   counts a call as concealed only if it *executed*, but printed that count
   against every consequential call including the ones that failed, so one
@@ -149,7 +166,7 @@ any diff, so the numbers below are derived rather than claimed.
   of COH-R12 is the one exception, and it reached the card only as a side
   effect of the `producer_flag` ablation rather than by design; see
   `eval/README.md`.
-- **20 constructed evasions are catalogued and 19 still work**, on purpose:
+- **21 constructed evasions are catalogued and 20 still work**, on purpose:
   `tests/test_evasion.py` asserts they do, so that closing one without updating
   the catalogue fails the build.
 - **Cohaera still holds the whole run in memory.** `load` materialises every

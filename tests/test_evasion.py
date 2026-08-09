@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from cohaera import ed25519
 from cohaera.capabilities import CapabilityManifest
 from cohaera.checks import (
+    R_ORDER_INDETERMINATE,
     SequenceGrammar,
     ambiguous_disclosures,
     ch01_sequence_order,
@@ -879,6 +880,56 @@ def test_evasion_22_delete_the_ledger_then_replay():
     path.unlink()                                    # the whole attack
     assert R_STREAM_REPLAYED not in score().codes, (
         "deleting the ledger no longer defeats replay detection")
+
+
+def test_evasion_23_stamp_the_call_on_the_controls_own_tick():
+    """E23. One field, and CH04 has no candidates.
+
+    The producer emits both timestamps, so it emits them equal. Nothing else
+    about the session changes -- no padding, no renaming, no fabricated event,
+    nothing in the record that looks wrong. A collector stamping at millisecond
+    resolution reaches the same tie by accident under load.
+
+    Still an evasion after COH-R11: the FINDING is still gone, because a tie
+    genuinely does not establish an order and inventing one would be the
+    opposite defect. What changed is that the silence is now visible.
+    """
+    guardrail = ev("cost_threshold_exceeded", 5.0, session_cost_usd=0.9)
+    on_the_tick = call("s1", 5.0, "delete_record", reversible=False)
+    evaded = sess([guardrail, *on_the_tick])
+
+    assert ch04_guardrail_overrun(evaded) == [], "E23 no longer evades"
+
+    # One second later is the same session with one digit changed.
+    caught = sess([guardrail, *call("s1", 6.0, "delete_record", reversible=False)])
+    assert ch04_guardrail_overrun(caught), (
+        "the fixture must be one that fires when the tie is broken, or this "
+        "test is measuring something else")
+
+    # The blind spot must be visible, or this fix traded an alarm for silence.
+    ch04 = next(c for c in coverage(evaded, None)["checks"]
+                if c["check"] == "CH04_guardrail_overrun")
+    assert R_ORDER_INDETERMINATE in ch04["reasons"]
+    assert ch04["confidence"] == 0.0
+
+
+def test_evasion_23b_the_collector_sequence_does_take_the_tie_back():
+    """The remedy, exercised. Inside one stream the sequence is covered by the
+    hash chain and the signature over its head, so the tie is settled by
+    something the producer cannot restamp."""
+    def integrity(seq):
+        return {"scheme": "cohaera.integrity:1", "stream_id": "c1", "seq": seq}
+
+    guardrail = ev("cost_threshold_exceeded", 5.0, session_cost_usd=0.9)
+    guardrail = Event(raw={**guardrail.raw, "integrity": integrity(10)})
+    start, end = call("s1", 5.0, "delete_record", reversible=False)
+    start = Event(raw={**start.raw, "integrity": integrity(11)})
+
+    settled = sess([guardrail, start, end])
+    assert ch04_guardrail_overrun(settled), "the sequence must settle the tie"
+    ch04 = next(c for c in coverage(settled, None)["checks"]
+                if c["check"] == "CH04_guardrail_overrun")
+    assert R_ORDER_INDETERMINATE not in ch04["reasons"]
 
 
 if __name__ == "__main__":

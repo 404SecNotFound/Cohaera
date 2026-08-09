@@ -11,7 +11,7 @@ later closes one, the test fails and this file gets updated.
 
 Run it: `PYTHONPATH=src python3 tests/test_evasion.py`
 
-**Current state: 19 of 20 constructed evasions still work.** Two, E02 and E21,
+**Current state: 20 of 21 constructed evasions still work.** Two, E02 and E21,
 are **closed** — and closing E02 opened two narrower ones, E18 and E19, while
 the P1 evidence-trust work opened E20 and E22. All four are in the table, because
 a fix that quietly relocates a weakness is worse than no fix. E22 is the clearest
@@ -32,8 +32,12 @@ about the half that gives the evasion its name: an attacker who influences which
 sessions are *collected as benign* defines normal, and a signature over the
 resulting file says only that nobody edited it afterwards.
 
-The count goes up when a weakness is found, not only when one is fixed. Twenty
-working evasions is a worse-looking number than sixteen and a more honest one.
+The count goes up when a weakness is found, not only when one is fixed. 20
+working evasions is a worse-looking number than the 16 this file started with,
+and a more honest one. (That sentence used to spell the number in words, and it
+read "Twenty" for a revision in which the tracked count was 19 — the same drift
+COH-R19 found in `SECURITY.md`, for the same reason: a number nothing checks.
+It is a digit now, and `tools/readme_facts.py` checks it.)
 
 There is also a **denial-of-service class that is not in this table**, because
 crashing the detector is not an evasion of a check, it is an evasion of the whole
@@ -72,6 +76,7 @@ of this file under [Defects found by external review](#defects-found-by-external
 | E21 | CH06 | Strip the integrity sidecar from the record you edited | — | **CLOSED**, reported as partial attestation |
 | E22 | CH06 | Delete the seen-stream ledger, then replay the stream | Write access to one local file | Half closed, the ledger is unsigned by necessity |
 | E22b | CH06 | Replay the stream to a *different* Cohaera host | A second collector | Open, the ledger is per-host |
+| E23 | CH03, CH04 | Stamp the consequential call on the control's own tick | Free, one field | Half closed, coverage sees it |
 
 ---
 
@@ -255,6 +260,47 @@ boundary rather than a bigger file.
 
 Stated because the alternative is an operator assuming a fleet is covered when
 each member is only covering itself.
+
+## E23. Stamp the consequential call on the control's own tick
+
+**Found while fixing COH-R11, which is the review finding that the two checks
+disagreed about what a tie meant.** CH03 compared with `>=`, so a call sharing
+the marker's timestamp counted as afterwards. CH04 compared with `>`, so a call
+sharing the guardrail's timestamp counted as before it, and was dropped from
+the candidate list. Two checks, the same pair of timestamps, opposite answers —
+and CH04's answer is the one worth buying.
+
+The attack is one field. The producer emits the timestamps, so it emits them
+equal: `cost_threshold_exceeded` at t, `tool_start` at t. Nothing else about
+the session changes. No padding, no renaming, no fabricated event, nothing that
+looks wrong in the record. CH04 simply had no candidates and returned nothing.
+
+It is also reached **by accident**, which is why it is not merely a hardening
+note. A collector stamping at millisecond resolution puts a whole burst of
+events on one tick, so an honest producer under load produces the same tie and
+the same silence.
+
+**Half closed, and the honest description of what changed is that the silence
+became visible rather than that the evasion stopped working.** Ordering is now
+three-valued: after, not-after, and *indeterminate*. A tie with nothing to
+break it is indeterminate, both checks treat it the same way, and the calls
+that could not be placed are counted in the finding's evidence, charged against
+the check's coverage confidence, and named by `EVENT_ORDER_INDETERMINATE` in
+the contract. A session where every consequential call shares the control's
+tick now reports CH04 confidence 0.0 instead of looking clean.
+
+**Closed outright where the collector signs.** Inside one `stream_id` the
+`cohaera.integrity:1` sequence is covered by the hash chain and by the
+signature over its head, so it cannot be reordered without breaking a
+verification Cohaera already performs. Where both records carry one, the
+sequence decides and the clock is not consulted at all — a call with a *later*
+timestamp and a *lower* sequence is not afterwards. Emitting the integrity
+sidecar therefore closes this completely, which makes it the second concrete
+thing that sidecar buys after CH07.
+
+Sequences are compared only within a stream. Two collectors number
+independently, so seq 11 on one is not after seq 10 on another, and a
+cross-stream pair falls back to the clock.
 
 ## E21. Strip the sidecar from the record you edited — CLOSED
 
@@ -837,8 +883,8 @@ regression tests.
 | CH05 | Orphan terminal events were constructed with `result="success"` and never flagged. | An irreversible action appearing from nowhere was invisible | **Fixed.** `orphan_end` state, reported by CH05. |
 
 The review's C-05 finding, no executable test suite, was accurate at revision
-`45d3bf8`. There are now 627 tests: unit, hostile-input, content conformance and
-25 evasion characterizations, plus a seeded fuzz smoke test in CI.
+`45d3bf8`. There are now 638 tests: unit, hostile-input, content conformance and
+26 evasion characterizations, plus a seeded fuzz smoke test in CI.
 
 ### What is still open from the third review
 

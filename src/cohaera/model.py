@@ -484,6 +484,14 @@ class ToolCall:
     # contradicting itself about its own call, which no honest emitter does.
     arg_digest_disagrees: bool = False
     receipt: EffectReceipt | None = None
+    # ---- ordering (COH-R11) ---------------------------------------------
+    # The collector sequence this call STARTED at, when the start event carried
+    # a cohaera.integrity:1 sidecar. Wall clock is the producer's to choose and
+    # ties in it are both accidental (coarse clocks) and forgeable; a sequence
+    # inside a stream is covered by the hash chain and the signature over its
+    # head, so it cannot be reordered without detection. See checks._ordering.
+    start_stream: str | None = None
+    start_seq: int | None = None
 
     @property
     def capability(self):
@@ -885,6 +893,8 @@ class Session:
                     arg_digest=adigest,
                     arg_digest_source=asource,
                     arg_digest_disagrees=adisagrees,
+                    start_stream=e.integrity.stream_id if e.integrity else None,
+                    start_seq=e.integrity.seq if e.integrity else None,
                 )
                 idx = len(calls)
                 calls.append(tc)

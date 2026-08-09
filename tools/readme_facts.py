@@ -320,6 +320,11 @@ CLAIMS = (
     # that silently stops being checked.
     Claim("README working evasions", README,
           re.compile(r"(\d+) of them still\s+working"), count_working_evasions),
+    # COH-R19 again, in the file that is most about being honest. This sentence
+    # spelled its number in words and read "Twenty" against a real count of 19.
+    Claim("EVASION.md working evasions in prose", EVASION,
+          re.compile(r"(\d+)\s+working evasions is a worse-looking number"),
+          count_working_evasions),
     Claim("README evasion test count", README,
           re.compile(r"test_evasion\.py\s+(\d+) adversarial tests"),
           count_evasion_tests),

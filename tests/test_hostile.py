@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from cohaera.capabilities import EMPTY_MANIFEST, CapabilityManifest, ManifestError
 from cohaera.checks import (
+    R_ORDER_INDETERMINATE,
     SequenceGrammar,
     ch02_concealment_gap,
     ch03_untrusted_to_consequential,
@@ -2469,3 +2470,162 @@ def test_r13_a_non_object_record_from_the_stream_is_still_quarantined(tmp_path):
     assert len(events) == 1
     assert report.rejected == 3
     assert {r.code for r in report.rejects} == {REJECT_NOT_AN_OBJECT}
+
+
+# =====================================================================
+# COH-R11  a tie is not an ordering
+# =====================================================================
+#
+# CH03 and CH04 both answer "did this call run after that event?" with one
+# comparison against the wall clock, and they did not agree with each other:
+# CH03 used `>=` so a tie was AFTER, CH04 used `>` so a tie was BEFORE. Two
+# checks, the same two timestamps, opposite conclusions.
+#
+# CH04's is the one that costs something. The producer chooses the timestamps,
+# so stamping a consequential call on the guardrail's own tick removed the
+# finding with no other change to the telemetry -- and coarse clocks reach the
+# same tie by accident, because a collector stamping at millisecond resolution
+# puts a whole burst on one tick. The order is now taken from the collector
+# sequence where there is one, because that is covered by the hash chain and
+# the signature over its head, and a tie with no sequence is REPORTED rather
+# than resolved in either direction.
+
+
+def _integrity(stream, seq):
+    return {"scheme": "cohaera.integrity:1", "stream_id": stream, "seq": seq}
+
+
+def _policy_at(ts, integrity=None):
+    kw = {"data": {"session_cost_usd": 0.9}}
+    if integrity is not None:
+        kw["integrity"] = integrity
+    return ev("cost_threshold_exceeded", ts, **kw)
+
+
+def _call_at(ts, integrity=None, name="delete_record", span="A"):
+    kw = {"data": {"reversible": False}}
+    if integrity is not None:
+        kw["integrity"] = integrity
+    return [ev("tool_start", ts, tool_name=name, span_id=span, **kw),
+            ev("tool_end", ts + 1, tool_name=name, span_id=span,
+               data={"reversible": False})]
+
+
+def _marker_at(ts, integrity=None):
+    kw = {"data": {"injection_patterns": ["ignore_previous"],
+                   "has_injection_patterns": True}}
+    if integrity is not None:
+        kw["integrity"] = integrity
+    return ev("skill_invocation", ts, tool_name="read_page", **kw)
+
+
+def _ch04_contract(session):
+    return next(c for c in coverage(session, None)["checks"]
+                if c["check"] == "CH04_guardrail_overrun")
+
+
+def _ch03_contract(session):
+    return next(c for c in coverage(session, None)["checks"]
+                if c["check"] == "CH03_untrusted_to_consequential")
+
+
+def test_r11_the_two_checks_no_longer_disagree_about_a_tie():
+    """The defect in one line. Before this, the same tie was 'after' for CH03
+    and 'before' for CH04."""
+    s3 = sess(_marker_at(5.0), *_call_at(5.0))
+    s4 = sess(_policy_at(5.0), *_call_at(5.0))
+
+    assert ch03_untrusted_to_consequential(s3) == []
+    assert ch04_guardrail_overrun(s4) == []
+
+
+def test_r11_a_tie_against_a_guardrail_is_no_longer_a_silent_session():
+    """The evasion. Stamping the call on the control's tick still produces no
+    finding -- the order genuinely is not established -- but the session can no
+    longer pass for one CH04 looked at and cleared."""
+    s = sess(_policy_at(5.0), *_call_at(5.0))
+    assert ch04_guardrail_overrun(s) == []
+
+    contract = _ch04_contract(s)
+    assert R_ORDER_INDETERMINATE in contract["reasons"]
+    assert contract["confidence"] == 0.0, (
+        "CH04 could not place the only consequential call in the session")
+    assert any("not established" in r for r in contract["remedies"])
+
+
+def test_r11_a_tie_against_a_marker_is_charged_to_ch03_as_well():
+    s = sess(_marker_at(5.0), *_call_at(5.0))
+    assert ch03_untrusted_to_consequential(s) == []
+    contract = _ch03_contract(s)
+    assert R_ORDER_INDETERMINATE in contract["reasons"]
+    assert contract["confidence"] == 0.0
+
+
+def test_r11_a_signed_sequence_settles_a_tie_the_clock_cannot():
+    """The point of the whole change. Same timestamp on both records, and the
+    collector sequence says which came first -- so the finding survives a
+    producer that flattens its clock."""
+    s = sess(_policy_at(5.0, _integrity("stream-1", 10)),
+             *_call_at(5.0, _integrity("stream-1", 11)))
+
+    assert [f.check for f in ch04_guardrail_overrun(s)] == [
+        "CH04_guardrail_bypass_completed"]
+    assert R_ORDER_INDETERMINATE not in _ch04_contract(s)["reasons"]
+
+
+def test_r11_the_sequence_outranks_the_clock_rather_than_supplementing_it():
+    """A LOWER sequence with a LATER timestamp is not afterwards. If the clock
+    could still win here, moving the timestamp would still move the verdict and
+    the sequence would be decoration."""
+    s = sess(_policy_at(5.0, _integrity("stream-1", 99)),
+             *_call_at(500.0, _integrity("stream-1", 98)))
+
+    assert ch04_guardrail_overrun(s) == []
+    assert R_ORDER_INDETERMINATE not in _ch04_contract(s)["reasons"], (
+        "the order IS established -- established as 'before'")
+
+
+def test_r11_sequences_from_different_streams_are_not_comparable():
+    """Two collectors number independently, so seq 11 in one stream is not
+    after seq 10 in another. With the stream ids differing this must fall back
+    to the clock, and the clock here is a tie."""
+    s = sess(_policy_at(5.0, _integrity("stream-1", 10)),
+             *_call_at(5.0, _integrity("stream-2", 11)))
+
+    assert ch04_guardrail_overrun(s) == []
+    assert R_ORDER_INDETERMINATE in _ch04_contract(s)["reasons"]
+
+
+def test_r11_a_repeated_sequence_inside_one_stream_is_not_an_ordering():
+    """One record cannot be two records. A shared sequence is a broken chain,
+    which is CH06's business, and it must not be read as simultaneity that
+    happens to resolve some other way."""
+    s = sess(_policy_at(5.0, _integrity("stream-1", 10)),
+             *_call_at(5.0, _integrity("stream-1", 10)))
+
+    assert ch04_guardrail_overrun(s) == []
+    assert R_ORDER_INDETERMINATE in _ch04_contract(s)["reasons"]
+
+
+def test_r11_an_unplaceable_call_is_named_in_the_finding_it_sits_beside():
+    """A session with one call CH04 can place and one it cannot. The finding
+    fires on the first, and has to say the second exists."""
+    s = sess(_policy_at(5.0),
+             *_call_at(9.0, name="delete_record", span="A"),
+             *_call_at(5.0, name="send_email", span="B"))
+
+    findings = ch04_guardrail_overrun(s)
+    assert findings, "the 9.0 call is unambiguously after the control"
+    assert findings[0].evidence["unordered_total"] == 1
+    assert "not established" in findings[0].detail
+    assert R_ORDER_INDETERMINATE in _ch04_contract(s)["reasons"]
+
+
+def test_r11_an_ordinary_ordered_session_is_untouched():
+    """The guard against fixing a tie by breaking everything else."""
+    s = sess(_policy_at(5.0), *_call_at(9.0))
+    assert [f.check for f in ch04_guardrail_overrun(s)] == [
+        "CH04_guardrail_bypass_completed"]
+    contract = _ch04_contract(s)
+    assert R_ORDER_INDETERMINATE not in contract["reasons"]
+    assert contract["confidence"] > 0.0

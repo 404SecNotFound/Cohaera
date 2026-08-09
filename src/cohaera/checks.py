@@ -34,7 +34,7 @@ import re
 from bisect import bisect_right
 from collections import Counter
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import pairwise
 from typing import Any
 
@@ -77,6 +77,7 @@ from .limits import DEFAULT_LIMITS, Limits
 from .model import (
     POLICY_EVENTS,
     SOURCE_MANIFEST,
+    Event,
     Finding,
     Session,
     ToolCall,
@@ -500,6 +501,62 @@ AMBIGUOUS = "ambiguous"      # mentioned, but indistinguishably from a sibling
 ABSENT = "absent"
 
 
+# The three answers to "did this call start after that event?", because two was
+# one too few here as well. COH-R11.
+ORDER_AFTER = "after"
+ORDER_NOT_AFTER = "not_after"
+ORDER_INDETERMINATE = "indeterminate"
+
+
+def _ordering(call: ToolCall, event: Event) -> str:
+    """Did ``call`` start after ``event``, and can that be established at all?
+
+    COH-R11. CH03 and CH04 each answered this with a single comparison against
+    the wall clock, and they did not even agree with each other: CH03 used
+    ``>=`` so a tie was AFTER, CH04 used ``>`` so a tie was BEFORE. Two checks
+    reading the same two timestamps reached opposite conclusions, and the one
+    that mattered was CH04's -- stamping a consequential call at exactly the
+    guardrail's timestamp removed the finding, with no other change to the
+    telemetry and nothing anywhere saying the ordering had been decided by a
+    tie-break.
+
+    Wall clock is the wrong instrument to settle it with. The producer chooses
+    those numbers, so equality is forgeable; and it is reached by accident too,
+    because a collector stamping at millisecond resolution puts a whole burst
+    of events on the same tick. A tie is therefore not evidence of ordering in
+    either direction.
+
+    The collector sequence is the right instrument where it exists. Inside one
+    ``stream_id`` the sequence is covered by the hash chain and by the
+    signature over its head, so a producer cannot reorder two records without
+    breaking a verification Cohaera already performs. It is only comparable
+    WITHIN a stream: two streams have unrelated numbering and no relative order
+    at all, which is why the stream ids must match before the sequences are
+    compared.
+
+    So: sequence when both records carry one from the same stream, wall clock
+    when it is strictly unequal, and INDETERMINATE otherwise -- reported, never
+    silently resolved.
+    """
+    seq_a, seq_b = call.start_seq, event.integrity.seq if event.integrity else None
+    stream_a = call.start_stream
+    stream_b = event.integrity.stream_id if event.integrity else None
+    if (seq_a is not None and seq_b is not None
+            and stream_a is not None and stream_a == stream_b):
+        if seq_a == seq_b:
+            # One record cannot be two records. A shared sequence inside a
+            # stream is a broken chain, which CH06 reports; it is not an
+            # ordering.
+            return ORDER_INDETERMINATE
+        return ORDER_AFTER if seq_a > seq_b else ORDER_NOT_AFTER
+
+    if not call.clock_valid or not event.timestamp_valid:
+        return ORDER_INDETERMINATE
+    if call.started_at == event.timestamp:
+        return ORDER_INDETERMINATE
+    return ORDER_AFTER if call.started_at > event.timestamp else ORDER_NOT_AFTER
+
+
 def _shared_name_tokens(calls: list[ToolCall]) -> frozenset[str]:
     """Tokens that appear in the names of two or more DISTINCT tools here.
 
@@ -720,26 +777,41 @@ def ch03_untrusted_to_consequential(session: Session,
     # opposite. `scanner_marked` requires the exact types and treats anything
     # else as no claim at all; the defect is recorded on the Event and charged
     # to this check's coverage.
-    marker_times = [
-        e.timestamp for e in session.events
-        if scanner_marked(e.data) and e.timestamp_valid
-    ]
-    if not marker_times:
+    marker_events = [e for e in session.events
+                     if scanner_marked(e.data) and e.timestamp_valid]
+    if not marker_events:
         return []
 
-    first_marker = min(marker_times)
-    cand = [c for c in session.consequential_calls
-            if c.clock_valid and c.started_at >= first_marker]
+    # COH-R11. The earliest marker EVENT, not just its timestamp, because the
+    # ordering question is now asked against a record rather than a number: the
+    # record is what carries the collector sequence. `>=` used to decide this,
+    # so a call sharing the marker's tick was treated as afterwards -- the
+    # opposite of what CH04 did with the same tie.
+    first_marker_event = min(marker_events, key=lambda e: e.timestamp)
+    first_marker = first_marker_event.timestamp
+    verdicts = [(c, _ordering(c, first_marker_event))
+                for c in session.consequential_calls]
+    cand = [c for c, o in verdicts if o == ORDER_AFTER]
+    unordered = [c for c, o in verdicts if o == ORDER_INDETERMINATE]
     completed = [c for c in cand if c.executed]
     attempted = [c for c in cand if not c.executed]
 
     markers, markers_dropped = cap_list(session.injection_markers,
                                         limits.max_evidence_items)
+    unordered_shown, unordered_dropped = cap_list(
+        [c.brief(limits) for c in unordered], limits.max_evidence_items)
     base_evidence = {
         "markers": markers,
         "markers_truncated": markers_dropped,
         "first_marker_ts": first_marker,
-        "marker_event_count": len(marker_times),
+        "marker_event_count": len(marker_events),
+        # Reported whether or not the check fires, because a call whose order
+        # relative to the marker cannot be established is exactly the call an
+        # analyst needs to know about, and silently dropping it is how the tie
+        # became an evasion in the first place.
+        "unordered_calls": unordered_shown,
+        "unordered_calls_truncated": unordered_dropped,
+        "unordered_total": len(unordered),
     }
 
     findings: list[Finding] = []
@@ -793,7 +865,35 @@ def ch03_untrusted_to_consequential(session: Session,
                       "also_completed": len(completed)},
         ))
 
+    if findings and unordered:
+        note = (
+            f" A further {len(unordered)} consequential call(s) share the "
+            "marker's tick with no collector sequence to separate them, so "
+            "whether they ran before or after it is not established here "
+            "(COH-R11)."
+        )
+        findings = [replace(f, detail=f.detail + note) for f in findings]
+
     return findings
+
+
+def unordered_after_marker(session: Session) -> list[ToolCall]:
+    """Consequential calls whose order against the first marker is unknown.
+
+    Separate from :func:`ch03_untrusted_to_consequential` for the reason
+    :func:`ambiguous_disclosures` is separate from CH02: coverage needs the
+    answer on sessions where the check produces no finding at all, and that is
+    precisely the interesting case. A producer that stamps every consequential
+    call on the marker's tick empties the finding and leaves the session
+    looking clean, so the emptiness has to be reported by something.
+    """
+    marker_events = [e for e in session.events
+                     if scanner_marked(e.data) and e.timestamp_valid]
+    if not marker_events:
+        return []
+    first = min(marker_events, key=lambda e: e.timestamp)
+    return [c for c in session.consequential_calls
+            if _ordering(c, first) == ORDER_INDETERMINATE]
 
 
 # ---------------------------------------------------------------------------
@@ -978,9 +1078,16 @@ def ch04_guardrail_overrun(session: Session,
 
     for etype in sorted(earliest):
         e = earliest[etype]
+        first_for_this_policy = len(findings)
         enforcement, source = _resolved_enforcement(e, session.manifest)
-        cand = [c for c in consequential
-                if c.clock_valid and c.started_at > e.timestamp]
+        # COH-R11. This was `c.started_at > e.timestamp`, so a call stamped on
+        # the guardrail's own tick was excluded and the check went silent --
+        # the cheapest evasion in the file, one field of the producer's own
+        # choosing. It is now the shared three-valued ordering, and a tie with
+        # no collector sequence to break it is reported rather than resolved.
+        ordering = [(c, _ordering(c, e)) for c in consequential]
+        cand = [c for c, o in ordering if o == ORDER_AFTER]
+        unordered = [c for c, o in ordering if o == ORDER_INDETERMINATE]
         # Partition the completed calls by whether an approval actually fits
         # them. This is the whole of P1.3: before it, "a call happened after a
         # control fired" was the entire finding, and a deployment that approves
@@ -1001,11 +1108,17 @@ def ch04_guardrail_overrun(session: Session,
         if not completed and not attempted:
             continue
 
+        unordered_shown, unordered_dropped = cap_list(
+            [c.brief(limits) for c in unordered], limits.max_evidence_items)
         base = {
             "policy_event": etype,
             "policy_event_first_ts": e.timestamp,
             "policy_event_count": counts[etype],
             "policy_events_with_invalid_clock": unusable_clock,
+            # COH-R11: stated, not dropped. See the ordering note below.
+            "unordered_calls": unordered_shown,
+            "unordered_calls_truncated": unordered_dropped,
+            "unordered_total": len(unordered),
             "policy_event_data": _policy_evidence(e.data, limits),
             "policy_semantics_declared": enforcement != ENFORCEMENT_UNDECLARED,
             "policy_enforcement": enforcement,
@@ -1121,8 +1234,40 @@ def ch04_guardrail_overrun(session: Session,
                           "also_completed": len(completed)},
             ))
 
+        if unordered and len(findings) > first_for_this_policy:
+            note = (
+                f" A further {len(unordered)} consequential call(s) share this "
+                "control's tick with no collector sequence to separate them, "
+                "so whether they ran before or after it is not established "
+                "here (COH-R11)."
+            )
+            findings[first_for_this_policy:] = [
+                replace(f, detail=f.detail + note)
+                for f in findings[first_for_this_policy:]]
+
     shown, dropped = cap_list(findings, limits.max_findings_per_check)
     return shown
+
+
+def unordered_after_policy(session: Session) -> list[ToolCall]:
+    """Consequential calls whose order against a policy event is unknown.
+
+    The coverage counterpart to CH04, and the case it exists for is the one
+    where CH04 says nothing at all: a producer that stamps every consequential
+    call on the guardrail's own tick empties the candidate list, and the check
+    that used to fire falls silent with no trace. That silence is now a
+    reported blind spot rather than a clean session.
+    """
+    out: list[ToolCall] = []
+    seen: set[int] = set()
+    for e in session.events:
+        if e.event_type not in POLICY_EVENTS or not e.timestamp_valid:
+            continue
+        for c in session.consequential_calls:
+            if id(c) not in seen and _ordering(c, e) == ORDER_INDETERMINATE:
+                seen.add(id(c))
+                out.append(c)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1481,6 +1626,10 @@ R_WEAK_CORRELATION = "CORRELATION_KEY_NOT_PRODUCER_SUPPLIED"
 R_INVALID_CLOCK = "EVENT_CLOCK_INVALID"
 R_NO_POLICY_SEMANTICS = "POLICY_SEMANTICS_UNDECLARED"
 R_AMBIGUOUS_DISCLOSURE = "DISCLOSURE_AMBIGUOUS_SHARED_TOKENS"
+# COH-R11. Two records share a tick and carry no collector sequence, so their
+# order is not a fact this telemetry contains. Charged to whichever check
+# needed the order.
+R_ORDER_INDETERMINATE = "EVENT_ORDER_INDETERMINATE"
 R_FIELD_DEFECTS = "RECORD_FIELD_DEFECTS_PRESENT"
 # P1. The three absences that are now STATED rather than passed over.
 R_NO_APPROVAL_EVIDENCE = "NO_APPROVAL_EVIDENCE"
@@ -1775,6 +1924,14 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
         reasons = common_reasons + class_reasons()
         if not has_result:
             reasons.append(R_NO_TOOL_RESULT)
+        # COH-R11. This check IS an ordering, so a call whose order against the
+        # marker cannot be established is a call it has not checked. Scored the
+        # same way E16's ambiguity is scored for CH02: the share of the
+        # consequential calls the check could not place.
+        unordered = unordered_after_marker(session)
+        if unordered:
+            conf *= 1.0 - len(unordered) / len(session.consequential_calls)
+            reasons.append(R_ORDER_INDETERMINATE)
         contracts.append(CheckContract(
             check=CH03_FAMILY,
             status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
@@ -1784,9 +1941,16 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
             reasons=reasons,
             remedies=(["Set capture_tool_data=True in a controlled environment so "
                        "marker provenance can be checked against the content."]
-                      if not has_result else []),
+                      if not has_result else [])
+            + ([f"{len(unordered)} consequential call(s) share the marker's "
+                "tick and carry no cohaera.integrity:1 sequence, so their "
+                "order against it is not established. Emit the integrity "
+                "sidecar, or stamp at finer resolution."] if unordered else []),
             assumptions=["Temporal order, not information flow. Reordering the "
-                         "read and the action defeats it; see EVASION.md E07."]))
+                         "read and the action defeats it; see EVASION.md E07.",
+                         "Equal timestamps are not an ordering. Where a signed "
+                         "collector sequence is absent, a tie is reported "
+                         "rather than resolved; see COH-R11."]))
 
     # ---- CH04 -----------------------------------------------------------
     required = [SURFACE_TOOL_CLASS, SURFACE_EVENT_CLOCK, SURFACE_CORRELATION_KEY]
@@ -1846,6 +2010,23 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
                 "prevent.")
         if session.dangling_approvals:
             reasons.append(R_DANGLING_APPROVAL)
+        # COH-R11. The tie that used to be silent. A producer stamping its
+        # consequential calls on the guardrail's own tick emptied CH04's
+        # candidate list and the check said nothing at all; the share it could
+        # not place now costs it confidence and names itself.
+        unordered = unordered_after_policy(session)
+        if unordered:
+            conf *= 1.0 - len(unordered) / len(session.consequential_calls)
+            reasons.append(R_ORDER_INDETERMINATE)
+            remedies.append(
+                f"{len(unordered)} consequential call(s) share a policy "
+                "event's tick and carry no cohaera.integrity:1 sequence, so "
+                "whether they ran after the control is not established. Emit "
+                "the integrity sidecar, or stamp at finer resolution.")
+            assumptions.append(
+                "Equal timestamps are not an ordering. A call sharing the "
+                "control's tick is neither a continuation nor a precursor; "
+                "see COH-R11.")
     contracts.append(CheckContract(
         check=CH04_FAMILY,
         status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
