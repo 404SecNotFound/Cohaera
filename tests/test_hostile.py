@@ -40,6 +40,7 @@ from cohaera.checks import (
     ch02_concealment_gap,
     ch03_untrusted_to_consequential,
     ch04_guardrail_overrun,
+    ch07_effect_contradiction,
     coverage,
     run_all,
 )
@@ -53,7 +54,7 @@ from cohaera.cli import (
     _write_reject_log_atomic,
     main,
 )
-from cohaera.evidence import TrustStore, TrustStoreError
+from cohaera.evidence import RECEIPT_SCHEMA, TrustStore, TrustStoreError
 from cohaera.identity import (
     KIND_ISOLATED_ANON,
     KIND_SCOPED_ANON,
@@ -2155,3 +2156,183 @@ def test_the_memory_budget_is_validated_like_every_other_bound():
         DEFAULT_LIMITS.with_overrides(max_resident_bytes=0)
     with pytest.raises(LimitsError):
         DEFAULT_LIMITS.with_overrides(max_resident_bytes=-1)
+
+
+# =====================================================================
+# COH-R12  a ratio whose two halves count different populations
+# =====================================================================
+#
+# CH02 counts a call as concealed only if it EXECUTED -- a failed attempt was
+# never a concealed effect, and C-04 is the note that says so. The denominator
+# it was printed against counted every consequential call including the failed
+# ones, so the two halves of the ratio were drawn from different populations.
+# One executed hidden egress among nine failed attempts read as "1 of 10".
+#
+# The same disagreement, found while reproducing that one, was live in CH07's
+# coverage share -- and there it did not merely misreport, it bought coverage.
+# The numerator was every call carrying a receipt, the denominator only the
+# CONSEQUENTIAL calls, so read-only receipts paid for consequential ones and a
+# share above 1.0 was clamped back to "fully covered".
+
+
+def _rcall(span, name, ts, result="success", reversible=False, receipt=None):
+    """One complete tool call, optionally carrying an effect receipt.
+
+    ``reversible=None`` omits the field, which is how a call reaches Cohaera
+    unclassified rather than classified as a state change."""
+    end_data = {"action": "invoke_tool", "result": result}
+    if receipt is not None:
+        end_data["effect_receipt"] = receipt
+    start_data = {"action": "invoke_tool", "tool_args": {"a": 1}}
+    if reversible is not None:
+        start_data["reversible"] = reversible
+    return [
+        ev("tool_start", ts, tool_name=name, span_id=span, data=start_data),
+        ev("tool_end" if result == "success" else "tool_error", ts + 1,
+           tool_name=name, span_id=span, data=end_data),
+    ]
+
+
+def _receipt_on(span, name):
+    return {"scheme": RECEIPT_SCHEMA, "authority": "eval:ledger",
+            "kind": "resource_id", "identifier": f"r-{span}",
+            "binding": {"span_id": span, "tool_id": name}}
+
+
+def _final(text, ts=90.0):
+    return ev("model_response", ts, data={"response_text": text})
+
+
+def test_r12_the_concealment_denominator_counts_only_concealable_calls():
+    """One executed hidden egress, nine failed attempts. The failures were
+    never candidates for concealment, so counting them in the denominator
+    understates the finding by an order of magnitude."""
+    events = _rcall("sp-1", "send_email", 10.0)
+    for i in range(9):
+        events += _rcall(f"sp-f{i}", "delete_record", 20.0 + i, result="failure")
+    events.append(_final("I checked your calendar and did nothing else."))
+
+    s = sess(*events)
+    finding = ch02_concealment_gap(s)[0]
+
+    assert finding.evidence["unreported_total"] == 1
+    assert finding.evidence["concealable_total"] == 1, (
+        "the denominator must count executed consequential calls -- the ones "
+        "that could possibly have been concealed")
+    assert "1 of 1" in finding.detail
+    assert "1 of 10" not in finding.detail
+
+
+def test_r12_the_attempts_are_still_reported_just_not_in_the_ratio():
+    """Dropping them from the denominator must not drop them from the
+    evidence: an analyst reconciling the two counts needs to see where the
+    difference went."""
+    events = _rcall("sp-1", "send_email", 10.0)
+    for i in range(9):
+        events += _rcall(f"sp-f{i}", "delete_record", 20.0 + i, result="failure")
+    events.append(_final("Nothing to report."))
+
+    ev_ = ch02_concealment_gap(sess(*events))[0].evidence
+    assert ev_["consequential_total"] == 10
+    assert ev_["concealable_total"] == 1
+    assert ev_["not_executed_total"] == 9
+    assert (ev_["concealable_total"] + ev_["not_executed_total"]
+            == ev_["consequential_total"])
+
+
+def _receipt_coverage(session):
+    return next(c for c in coverage(session, None)["checks"]
+                if c["check"] == "CH07_effect_contradiction")
+
+
+def _classified_session(*events):
+    """Classes from a manifest, so classification confidence is 1.0 and the
+    only thing left moving CH07's number is receipt coverage."""
+    manifest = CapabilityManifest.from_obj({
+        "producer": "test", "manifest_version": "1",
+        "tools": {"send_email": {"effects": ["egress"], "reversible": False,
+                                 "destination": "external:smtp"},
+                  "read_rows": {"effects": ["read"], "reversible": True}}})
+    s = Session(session_id="s1", manifest=manifest, events=list(events))
+    s.seal()
+    return s
+
+
+def test_r12_read_only_receipts_cannot_buy_coverage_for_a_consequential_call():
+    """The one that is not merely cosmetic. A session whose single egress call
+    carries no receipt at all was reported as fully receipt-covered, because
+    three read-only calls carried receipts and 3/1 clamps to 1.0."""
+    events = _rcall("sp-c", "send_email", 10.0)
+    for i in range(3):
+        events += _rcall(f"sp-r{i}", "read_rows", 20.0 + i, reversible=True,
+                         receipt=_receipt_on(f"sp-r{i}", "read_rows"))
+
+    contract = _receipt_coverage(_classified_session(*events))
+
+    assert contract["status"] == "not_evaluated", (
+        "no consequential call carries a receipt, so CH07 could not check "
+        "anything it exists to check")
+    assert "NO_EFFECT_RECEIPT" in contract["reasons"]
+    assert contract["confidence"] == 0.0
+
+
+def test_r12_partial_receipt_coverage_is_measured_over_consequential_calls():
+    """One egress of two receipted, plus read-only noise that must not count
+    towards either half of the share."""
+    events = _rcall("sp-c1", "send_email", 10.0,
+                    receipt=_receipt_on("sp-c1", "send_email"))
+    events += _rcall("sp-c2", "send_email", 12.0)
+    for i in range(5):
+        events += _rcall(f"sp-r{i}", "read_rows", 20.0 + i, reversible=True,
+                         receipt=_receipt_on(f"sp-r{i}", "read_rows"))
+
+    contract = _receipt_coverage(_classified_session(*events))
+
+    assert contract["status"] == "degraded"
+    assert contract["confidence"] == 0.5, (
+        "one of two consequential calls carries a receipt; the five read-only "
+        "receipts are not evidence about the consequential surface")
+    assert "NO_EFFECT_RECEIPT" in contract["reasons"]
+
+# A fifth test asserted the remedy line could not print a negative count of
+# missing receipts. It passed before the fix and could not have failed: the
+# line is guarded by `share < 1.0`, and a share under one already means the
+# numerator is the smaller number. Removed rather than kept as decoration.
+
+
+def test_r12_an_unclassified_receipted_call_is_still_covered():
+    """The regression the first version of this fix introduced.
+
+    Scoping CH07's population to `consequential_calls` reads `unknown` as "not
+    consequential", but unknown means Cohaera could not tell. Under name_only
+    every receipted call is unclassified, and that version reported CH07
+    not_evaluated on sessions where CH07 had just produced a finding."""
+    receipt = _receipt_on("sp-1", "frobnicate")
+    receipt["binding"] = {"span_id": "sp-1", "tool_id": "frobnicate"}
+    # Reported failure, receipt says the effect reached the authority.
+    events = _rcall("sp-1", "frobnicate", 10.0, result="failure",
+                    reversible=None, receipt=receipt)
+    s = sess(*events)
+
+    assert s.tool_calls[0].klass == "unknown"
+    fired = ch07_effect_contradiction(s)
+    assert fired, "the contradiction is the whole point of the fixture"
+
+    contract = _receipt_coverage(s)
+    assert contract["status"] != "not_evaluated", (
+        "CH07 produced a finding; a contract saying it could not be evaluated "
+        "contradicts the finding in the same verdict")
+
+
+def test_r12_a_known_read_only_receipt_is_not_in_the_population():
+    """The other side of the same line. `read_only` is a positive
+    classification and `unknown` is the absence of one, so they cannot both
+    count towards what CH07 was able to look at."""
+    events = _rcall("sp-c", "send_email", 10.0)
+    for i in range(3):
+        events += _rcall(f"sp-r{i}", "read_rows", 20.0 + i, reversible=True,
+                         receipt=_receipt_on(f"sp-r{i}", "read_rows"))
+
+    contract = _receipt_coverage(_classified_session(*events))
+    assert contract["status"] == "not_evaluated"
+    assert contract["confidence"] == 0.0

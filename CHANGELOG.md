@@ -104,6 +104,20 @@ any diff, so the numbers below are derived rather than claimed.
   floats that overflow to `inf`. All five parse sites now use a strict loader.
   Also: an integer too long for CPython to stringify raised a bare `ValueError`
   that the manifest and trust-store loaders did not catch, and ended the run.
+- **COH-R12** — two ratios whose halves counted different populations. CH02
+  counts a call as concealed only if it *executed*, but printed that count
+  against every consequential call including the ones that failed, so one
+  hidden egress among nine failed attempts read as "1 of 10". The attempts are
+  still reported; they are no longer the denominator of a rate they could not
+  contribute to. The same disagreement was live in CH07's coverage share and
+  there it bought coverage rather than merely misreporting: the numerator was
+  every call carrying a receipt, the denominator only the consequential ones,
+  so a share above 1.0 clamped back to "fully covered" and a session whose only
+  egress call had no receipt at all was reported evaluated at confidence 1.0.
+  CH07's population is now every call that is consequential **or unclassified**
+  — `read_only` is a positive classification, `unknown` is the absence of one,
+  and scoping it to consequential calls alone made CH07 declare itself blind on
+  64 corpus sessions where it had just produced a finding.
 - **COH-R14 / COH-R16** — the direct evasion runner missed a test defined after
   its `__main__` block, and CI actions were not pinned to commit SHAs.
 - **E02** — a diluted attack is no longer a quiet session; **E16** — a
@@ -116,7 +130,10 @@ any diff, so the numbers below are derived rather than claimed.
 - The corpus grades the *checks*. It does not grade the schema firewall, the
   coverage arithmetic or the manifest loader — two real defects (COH-R03,
   COH-R07) were fixed in this cycle with the card unmoved, because every corpus
-  session is well-formed and homogeneous in the ways those defects needed.
+  session is well-formed and homogeneous in the ways those defects needed. Half
+  of COH-R12 is the one exception, and it reached the card only as a side
+  effect of the `producer_flag` ablation rather than by design; see
+  `eval/README.md`.
 - **20 constructed evasions are catalogued and 19 still work**, on purpose:
   `tests/test_evasion.py` asserts they do, so that closing one without updating
   the catalogue fails the build.

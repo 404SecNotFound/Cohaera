@@ -7229,7 +7229,7 @@
         "false_positives_per_1000_benign_sessions": 342.1,
         "false_positives_per_1000_sessions": 228.1,
         "incidental_detections": 32,
-        "mean_coverage_completeness": 0.5009,
+        "mean_coverage_completeness": 0.4996,
         "precision": {
           "ci95_high": 0.6103,
           "ci95_low": 0.522,
@@ -9141,7 +9141,7 @@
         "false_positives_per_1000_benign_sessions": 331.2,
         "false_positives_per_1000_sessions": 223.7,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.6224,
+        "mean_coverage_completeness": 0.6216,
         "precision": {
           "ci95_high": 0.6342,
           "ci95_low": 0.5484,
@@ -11061,7 +11061,7 @@
         "false_positives_per_1000_benign_sessions": 420.4,
         "false_positives_per_1000_sessions": 284.5,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.6215,
+        "mean_coverage_completeness": 0.6211,
         "precision": {
           "ci95_high": 0.5727,
           "ci95_low": 0.4907,

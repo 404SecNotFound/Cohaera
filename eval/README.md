@@ -498,6 +498,27 @@ firewall, the coverage arithmetic, the manifest loader — is graded by
 change prevalence and every published number, so it is a decision to take
 deliberately rather than a gap to quietly plug.
 
+### The exception, and why it is one
+
+COH-R12 is the counter-example, and it is worth recording because it shows what
+it takes for the corpus to reach a coverage defect at all. CH07's receipt share
+counted receipted calls of *any* class against a denominator of consequential
+ones, and twelve `deploy_pipeline` sessions in the `producer_flag` condition
+happen to contain the exact shape: `feature_flag_toggle` declares
+`{EFFECT_WRITE}`, so the generator mints it a receipt, but it also declares
+`reversible: true`, and `producer_flag` is precisely the condition where
+Cohaera has no manifest and must believe that flag. It therefore reads the call
+as `read_only`, the session has no consequential calls at all, and the old
+`share = 1.0` fallback declared CH07 fully receipt-covered over a session where
+it had nothing to check.
+
+`mean_coverage_completeness` fell by 0.0004 to 0.0013 in the three
+`producer_flag` cells as a result, and nothing else on the card moved. Note what
+did the work: not a confounder kind written to exercise coverage, but a
+disagreement between a producer's self-declaration and a tool's real effects,
+which is the thing the `producer_flag` ablation exists to create. The corpus
+reached this defect as a side effect of measuring something else.
+
 ## What this is not
 
 The card's own "What this does not measure" section is the authoritative list.

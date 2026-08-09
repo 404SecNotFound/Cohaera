@@ -412,6 +412,17 @@ one that pays for the whole mechanism:
    (`NO_EFFECT_RECEIPT`). Reported through coverage, not as a finding, because
    in any real deployment most tools will not have receipts for a long time and
    a finding per receiptless call is a pager storm on day one.
+
+   The population that gap is measured against is every call that is
+   consequential **or unclassified**, and both halves are load-bearing
+   (COH-R12). Measuring it against receipted calls of *any* class let a
+   read-only receipt pay for a consequential call that had none, and a session
+   whose only egress carried no receipt at all was reported fully covered.
+   Measuring it against consequential calls alone is the opposite error:
+   `unknown` is not a statement that a call was harmless, it is the absence of
+   one, and excluding it made CH07 declare itself blind on sessions where it
+   had just produced a finding. `read_only` is excluded because it is a
+   positive classification.
 3. **Contradiction.** A call whose terminal event says `failure` or `error`
    while carrying a valid receipt bound to it **is a new detection**: an effect
    occurred and the telemetry reported that it did not. That is the first thing
