@@ -190,6 +190,24 @@ any diff, so the numbers below are derived rather than claimed.
   closure must be empty. That second assertion re-derives the zero-dependency
   claim from the installed closure, independently of the distribution metadata
   the test job reads.
+- **COH-R18** — the lab's isolation was asserted in prose and tested by nobody.
+  Three things that looked like checks and were not. `Invoke-Tool` declared a
+  `-TimeoutSec` parameter its body never read, so the call sites that passed one
+  got no deadline while the signature said otherwise — and packer, vmrun and
+  vnetlib64 are tools that *hang* rather than fail. A missing ISO checksum was a
+  warning, so the build proceeded from an unverified image, which makes every
+  isolation property downstream unfalsifiable; it now fails closed with an
+  `-AllowUnverifiedIso` escape, on the COH-R04 pattern, and a checksum that *is*
+  set is compared against the file at preflight rather than by Packer forty
+  minutes in. And the `verify` stage printed the isolation checks for the
+  operator to run by hand: they are now a declarative `Reachability` matrix in
+  `lab.config.psd1`, executed on the guests over SSH, failing the run on any
+  disagreement — with a probe that could not run counted as a failure rather
+  than a pass, and `collector-01` separately checked not to forward between its
+  segments. `tests/test_lab.py` pins all of it. **The script itself is still
+  unexecuted**: it is PowerShell for VMware Workstation, there is no interpreter
+  or hypervisor in the environment it was authored in, and those tests read it
+  as text. Weaker than running it; stronger than nothing.
 - **COH-R14 / COH-R16** — the direct evasion runner missed a test defined after
   its `__main__` block, and CI actions were not pinned to commit SHAs.
 - **E02** — a diluted attack is no longer a quiet session; **E16** — a

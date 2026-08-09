@@ -263,6 +263,13 @@ ping -c1 -W2 10.10.10.10 ; echo "exit=$?"
 
 Do not proceed until the blocked case is actually blocked and actually logged.
 
+These are the same properties the builder's `verify` stage now asserts from the
+`Reachability` matrix in `lab.config.psd1` (COH-R18), so once phase 2 is done
+`.\Build-CohaeraLab.ps1 -Stage verify` should come back clean — and will fail
+the run if it does not. Run it by hand here anyway: the kernel-log half above
+is the part the probes do not check, and a blocked packet nobody logged is a
+control you cannot audit after the fact.
+
 ---
 
 ## Phase 2 · Instrument and smoke test

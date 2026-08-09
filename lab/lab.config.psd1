@@ -114,6 +114,58 @@
     )
 
     # ---------------------------------------------------------------------
+    # Isolation, as assertions rather than prose
+    # ---------------------------------------------------------------------
+    # COH-R18. The lab's whole reason for existing is that the segments are
+    # separated, and that separation used to be checked by printing a list of
+    # commands for the operator to run by hand. A property nobody runs is a
+    # property nobody has, and the negative ones are the load-bearing half:
+    # "analysis-01 cannot reach agent-01" is what makes an egress finding in
+    # Cohaera mean something, and it is exactly the sort of thing a stray route
+    # or a helpful DHCP server breaks silently months later.
+    #
+    # The verify stage runs every row over SSH and fails the build on any
+    # disagreement. Expect is what the lab DESIGN says, so a row that fails is
+    # either a broken lab or a design that changed without this table.
+    #
+    #   From     the VM the probe runs on, by name
+    #   Kind     tcp | ping | dns | https
+    #   Target   host, or host:port for tcp
+    #   Expect   reach | blocked
+    #   Why      shown when the probe disagrees; say what it protects
+    #
+    # Advisory rows do not fail the build. Exactly one thing here depends on
+    # the outside world -- the LLM API -- and a lab that fails verification
+    # because somebody's WAN is down is a lab that gets verified with -Stage
+    # skipping this. It still prints, loudly.
+    Reachability = @(
+        @{ From = 'analysis-01'; Kind = 'ping';  Target = '10.10.10.10';      Expect = 'blocked'
+           Why  = 'analysis must have NO route to the agent host. If it does, telemetry and the thing producing it share a failure domain and an egress finding proves nothing.' }
+        @{ From = 'analysis-01'; Kind = 'tcp';   Target = '10.10.10.10:22';   Expect = 'blocked'
+           Why  = 'as above, and ICMP alone can be filtered while TCP is open.' }
+        @{ From = 'analysis-01'; Kind = 'https'; Target = 'https://example.com'; Expect = 'blocked'
+           Why  = 'analysis-01 has no default route by design. Reaching the internet means one was added, and the scoring host is no longer offline.' }
+        @{ From = 'analysis-01'; Kind = 'dns';   Target = 'example.com';      Expect = 'blocked'
+           Why  = 'DNS is the resolution path that survives a missing default route and the first one to leak.' }
+        @{ From = 'analysis-01'; Kind = 'tcp';   Target = '10.10.20.10:22';   Expect = 'reach'
+           Why  = 'analysis PULLS from the collector. If this fails the lab is not merely isolated, it is broken.' }
+        @{ From = 'collector-01'; Kind = 'tcp';  Target = '10.10.10.10:22';   Expect = 'reach'
+           Why  = 'the collector has a foot in the generation segment on purpose.' }
+        @{ From = 'agent-01';    Kind = 'tcp';   Target = '10.10.20.10:22';   Expect = 'reach'
+           Why  = 'the agent must be able to ship telemetry to the collector.' }
+        @{ From = 'agent-01';    Kind = 'https'; Target = 'https://api.anthropic.com/v1/messages'; Expect = 'reach'; Advisory = $true
+           Why  = 'the agent needs the LLM API. Advisory: this is the one row that depends on the outside world.' }
+        @{ From = 'agent-01';    Kind = 'https'; Target = 'https://example.com'; Expect = 'blocked'
+           Why  = 'LAB.md phase 2 replaces the permissive first-boot nftables output chain with deny-all plus a pinned API allowlist. Until this row passes, the egress class in Cohaera has no boundary to mean anything against.' }
+    )
+
+    # collector-01 must not forward between its two segments: analysis pulls
+    # from it rather than reaching through it. Checked directly on the guest,
+    # because a router in the middle silently converts the two negative rows
+    # above into an accident of routing tables.
+    NoForwarding = @('collector-01')
+
+    # ---------------------------------------------------------------------
     # Behaviour
     # ---------------------------------------------------------------------
     SnapshotAfterBuild = $true
