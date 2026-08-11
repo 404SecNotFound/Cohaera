@@ -582,13 +582,14 @@ class _References:
     excludes at most one stream from that comparison: its own.
     """
 
-    __slots__ = ("_best", "_next", "count", "earliest_ts", "min_seq")
+    __slots__ = ("_best", "_next", "count", "earliest_ts", "min_seq", "unclocked")
 
     def __init__(self, events: Iterable[Event]) -> None:
         self.min_seq: dict[str, int] = {}
         self._best: tuple[float, str | None] | None = None
         self._next: tuple[float, str | None] | None = None
         self.count = 0
+        self.unclocked = 0
         self.earliest_ts = 0.0
         for event in events:
             self.count += 1
@@ -599,7 +600,15 @@ class _References:
                 low = self.min_seq.get(stream)
                 if low is None or seq < low:
                     self.min_seq[stream] = seq
-            self._note_clock(event.timestamp, stream)
+            # A reference with an unusable clock still counts, and its SEQUENCE
+            # still orders: a NaN timestamp compares false against everything,
+            # so letting one into the clock reduction would poison it silently.
+            # Callers used to drop these records entirely, which is the defect
+            # this excludes them from rather than repeats.
+            if event.timestamp_valid:
+                self._note_clock(event.timestamp, stream)
+            else:
+                self.unclocked += 1
         if self._best is not None:
             self.earliest_ts = self._best[0]
 
@@ -650,6 +659,12 @@ class _References:
             if call.started_at == clock[0]:
                 tie = True
         elif clock is not None:
+            tie = True
+
+        if self.unclocked and not (stream is not None and stream in self.min_seq):
+            # References this call shares no stream with, and whose clocks are
+            # unusable. Nothing orders them against it, and saying NOT_AFTER
+            # would be inventing the answer the clock refused to give.
             tie = True
 
         return ORDER_INDETERMINATE if tie else ORDER_NOT_AFTER
@@ -875,8 +890,13 @@ def ch03_untrusted_to_consequential(session: Session,
     # opposite. `scanner_marked` requires the exact types and treats anything
     # else as no claim at all; the defect is recorded on the Event and charged
     # to this check's coverage.
-    marker_events = [e for e in session.events
-                     if scanner_marked(e.data) and e.timestamp_valid]
+    # A marker is dropped only if it is not a marker. It used to be dropped for
+    # carrying an unusable CLOCK as well, so a single marked read with a
+    # malformed timestamp emptied the check outright -- the producer choosing
+    # whether the evidence exists, which is the thing the collector sequence
+    # was introduced to take away from it. _References orders by sequence where
+    # one exists and reports the rest as indeterminate.
+    marker_events = [e for e in session.events if scanner_marked(e.data)]
     if not marker_events:
         return []
 
@@ -986,8 +1006,7 @@ def unordered_after_marker(session: Session) -> list[ToolCall]:
     call on the marker's tick empties the finding and leaves the session
     looking clean, so the emptiness has to be reported by something.
     """
-    marker_events = [e for e in session.events
-                     if scanner_marked(e.data) and e.timestamp_valid]
+    marker_events = [e for e in session.events if scanner_marked(e.data)]
     if not marker_events:
         return []
     markers_ref = _References(marker_events)
@@ -1170,13 +1189,27 @@ def ch04_guardrail_overrun(session: Session,
         if e.event_type not in POLICY_EVENTS:
             continue
         counts[e.event_type] += 1
+        by_type.setdefault(e.event_type, []).append(e)
         if not e.timestamp_valid:
             unusable_clock += 1
             continue
-        by_type.setdefault(e.event_type, []).append(e)
         cur = earliest.get(e.event_type)
         if cur is None or e.timestamp < cur.timestamp:
             earliest[e.event_type] = e
+    # A control that fired is a control that fired, and whether Cohaera can read
+    # the clock on the record is not the producer's decision to make. Every type
+    # that fired gets a NAMED event: the clock-earliest where any firing has a
+    # usable clock, and otherwise the lowest collector sequence -- which orders
+    # even when the timestamp does not. `return []` here used to be reachable by
+    # emitting one malformed timestamp.
+    for etype, events in by_type.items():
+        if etype in earliest:
+            continue
+        # Keyed on the sequence pulled out first, so the comparison key cannot
+        # be a narrowing mypy has already lost by the time the lambda runs.
+        sequenced = [(e.integrity.seq, e) for e in events
+                     if e.integrity is not None and e.integrity.seq is not None]
+        earliest[etype] = min(sequenced)[1] if sequenced else events[0]
     if not earliest:
         return []
 
@@ -1220,7 +1253,9 @@ def ch04_guardrail_overrun(session: Session,
             [c.brief(limits) for c in unordered], limits.max_evidence_items)
         base = {
             "policy_event": etype,
-            "policy_event_first_ts": e.timestamp,
+            # None, not NaN: the CLI serialises with allow_nan=False, and a
+            # named firing whose clock is unreadable has no timestamp to give.
+            "policy_event_first_ts": e.timestamp if e.timestamp_valid else None,
             "policy_event_count": counts[etype],
             "policy_events_with_invalid_clock": unusable_clock,
             # COH-R11: stated, not dropped. See the ordering note below.

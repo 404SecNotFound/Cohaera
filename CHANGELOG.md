@@ -68,6 +68,33 @@ any diff, so the numbers below are derived rather than claimed.
   re-assembling the same corpus once per regime.
 
 ### Fixed
+- **A signature forgery in the bundled Ed25519 verifier, reported by a seventh
+  review and reproduced here.** Verification checks `[s]G == R + [k]A`. Supply
+  the identity point as `A` and the `[k]A` term vanishes, so any `R = [s]G`
+  satisfies the equation **for every message** — one 64-byte string that
+  verifies anything, under a key that has never signed anything. Three of the
+  eight canonical small-order encodings reached that outcome. RFC 8032 does not
+  require rejecting these; every serious implementation does it anyway.
+  Two layers now do: `verify` rejects small-order `A` and `R` for three point
+  doublings, and the trust store refuses any key that is not a canonical point
+  of order L, which is the full check and is affordable once per key at load
+  rather than once per signature. The subgroup test alone is *not* sufficient —
+  `[L]·identity == identity`, so a check that forgets to exclude the torsion
+  subgroup readmits the exact key the forgery used.
+  The review's wider recommendation — drop the hand-written verifier for
+  libsodium or `cryptography` — is a live question this does not settle. It
+  trades the zero-dependency commitment for not owning cryptographic code, and
+  that is a project decision rather than a defect fix.
+- **The clock could decide whether the evidence existed at all.** CH03 dropped
+  a marked read whose timestamp was unparseable before any ordering ran, so one
+  malformed field on the only marked read emptied the check; CH04 returned
+  nothing when every firing of a control had one. Both are the producer
+  deciding what Cohaera may look at, which is what the collector sequence
+  exists to take away from it. Markers and firings are now kept regardless of
+  their clock and ordered by sequence where one exists; a reference nothing can
+  order is reported as indeterminate rather than dropped. A named firing with
+  no readable clock reports `policy_event_first_ts: null` — not `NaN`, which
+  the CLI's `allow_nan=False` would refuse to serialise.
 
 - **COH-R01** — the input byte budget was checked after a whole physical record
   had been read and hashed, so a record with no newline could not be stopped

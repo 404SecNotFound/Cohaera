@@ -219,6 +219,118 @@ def test_verify_never_raises_on_rubbish():
 
 
 # ---------------------------------------------------------------------------
+# 1a. Small-order keys: the forgery
+# ---------------------------------------------------------------------------
+#
+# Verification checks [s]G == R + [k]A. Hand it the identity point as A, the
+# identity point as R and S = 0, and both sides are the identity FOR EVERY
+# MESSAGE -- one 64-byte string that verifies anything, under a key that has
+# never signed anything. RFC 8032 does not require rejecting these and every
+# serious implementation does it anyway.
+#
+# The eight canonical small-order encodings: the identity, the order-2 point,
+# two of order 4 and four of order 8.
+
+SMALL_ORDER = [
+    "0100000000000000000000000000000000000000000000000000000000000000",
+    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000080",
+    "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+    "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+    "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+    "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+]
+IDENTITY_POINT = (1).to_bytes(32, "little")
+
+
+@pytest.mark.parametrize("message", [b"hello", b"completely different", b"",
+                                     b"\xff" * 100])
+def test_the_identity_key_does_not_verify_every_message(message):
+    """The reported reproduction, verbatim. This returned True for all four."""
+    signature = IDENTITY_POINT + (0).to_bytes(32, "little")
+    assert not ed25519.verify(IDENTITY_POINT, message, signature)
+
+
+@pytest.mark.parametrize("encoded", SMALL_ORDER)
+def test_no_small_order_key_verifies_anything(encoded):
+    key = bytes.fromhex(encoded)
+    for sig_r in (key, IDENTITY_POINT):
+        for scalar in (0, 1, 8):
+            signature = sig_r + scalar.to_bytes(32, "little")
+            assert not ed25519.verify(key, b"arbitrary message", signature)
+
+
+@pytest.mark.parametrize("encoded", SMALL_ORDER)
+def test_no_small_order_point_is_an_admissible_key(encoded):
+    """`[L]A == identity` holds for the IDENTITY too, because the identity times
+    anything is the identity. A subgroup check that forgets to exclude the
+    torsion subgroup readmits the exact key the forgery used."""
+    assert not ed25519.admissible_public_key(bytes.fromhex(encoded))
+
+
+def test_a_small_order_key_forges_even_with_a_well_formed_r():
+    """The A guard, isolated.
+
+    The first version of these tests used R = identity as well as A = identity,
+    so the R guard and the A guard each caught the case and a mutation removing
+    EITHER still passed. That is a test suite agreeing with itself. Here R is
+    ``[s]G`` for a chosen s -- an ordinary point of full order -- and A is the
+    identity, so the ``[k]A`` term vanishes and ``[s]G == R`` holds for every
+    message. Only the check on A stops it.
+    """
+    scalar = 12345
+    r_bytes = ed25519._compress(ed25519._mul(ed25519._G, scalar))
+    signature = r_bytes + scalar.to_bytes(32, "little")
+    assert not ed25519._is_small_order(ed25519._decompress(r_bytes)), (
+        "R must NOT be small order here, or this stops isolating the A guard")
+    for message in (b"hello", b"completely different", b"third"):
+        assert not ed25519.verify(IDENTITY_POINT, message, signature)
+
+
+def test_a_small_order_r_does_not_verify_under_a_real_key():
+    """The other half, and DEFENCE IN DEPTH rather than a demonstrated forgery.
+
+    Under the cofactorless equation this file uses, a small-order R does not by
+    itself produce a signature that verifies -- so unlike the check on A, a
+    mutation removing this one does not fail a test, and saying otherwise would
+    be claiming a proof there is not. It is here because libsodium rejects it,
+    because a legitimate R lands in the torsion subgroup with probability about
+    2^-252 so refusing it costs no honest signature, and because it removes the
+    family of tricks that adds a small-order component to a valid point.
+    """
+    secret = bytes(range(32))
+    public = ed25519.public_key(secret)
+    for encoded in SMALL_ORDER:
+        signature = bytes.fromhex(encoded) + (0).to_bytes(32, "little")
+        assert not ed25519.verify(public, b"m", signature)
+
+
+def test_a_real_key_and_signature_are_untouched_by_the_guard():
+    """A rejection that also rejects honest input is an outage, not a fix."""
+    secret = bytes(range(1, 33))
+    public = ed25519.public_key(secret)
+    assert ed25519.admissible_public_key(public)
+    assert ed25519.verify(public, b"legitimate", ed25519.sign(secret, b"legitimate"))
+
+
+@pytest.mark.parametrize("sk,pk,msg,sig", RFC8032)
+def test_the_rfc_keys_are_all_admissible(sk, pk, msg, sig):
+    assert ed25519.admissible_public_key(bytes.fromhex(pk))
+
+
+def test_the_trust_store_refuses_a_key_nobody_could_have_generated():
+    """End to end: the forgery needs such a key in the store, and the store is
+    where it is refused by name rather than carried and hoped about."""
+    doc = {"scheme": TRUST_STORE_SCHEMA,
+           "keys": {"ed25519:forged": {
+               "key": base64.b64encode(IDENTITY_POINT).decode("ascii"),
+               "roles": [ROLE_POLICY]}}}
+    with pytest.raises(TrustStoreError, match="usable Ed25519 public key"):
+        TrustStore.from_obj(doc)
+
+
+# ---------------------------------------------------------------------------
 # 1b. The fixed-base comb
 # ---------------------------------------------------------------------------
 #

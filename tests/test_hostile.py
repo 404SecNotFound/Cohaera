@@ -2949,3 +2949,66 @@ def test_ordering_against_many_references_does_not_go_quadratic():
         "ordering 300 calls against 300 references took too long; the "
         "reduction has probably become a nested loop")
     assert findings
+
+
+# -- the clock deciding whether the evidence exists at all -------------------
+#
+# Found while fixing the reference-selection regression above, and it is the
+# same defect one step earlier: CH03 dropped a marker whose TIMESTAMP was
+# unusable before any ordering ran, and CH04 returned no findings at all when
+# every firing of a control had one. A single malformed timestamp emptied the
+# check, which hands the producer the decision the collector sequence exists to
+# take away from it.
+
+
+def _unclocked(etype, seq, **kw):
+    """A record with an authoritative sequence and an unreadable clock."""
+    data = kw.pop("data", {})
+    return Event(raw={"timestamp": "not-a-clock", "event_type": etype,
+                      "session_id": "s", "span_id": kw.pop("span_id", f"u{seq}"),
+                      "tool_name": kw.pop("tool_name", None), "host": "h",
+                      "user": "u", "agent_name": "a", "data": data,
+                      "integrity": {"scheme": "cohaera.integrity:1",
+                                    "stream_id": _SEQ_STREAM, "seq": seq,
+                                    "prev": "ab" * 32, "chain": "cd" * 32}})
+
+
+def test_a_marker_with_an_unreadable_clock_is_still_ordered_by_its_sequence():
+    session = sess(
+        _unclocked("tool_end", 1, tool_name="fetch",
+                   data={"has_injection_patterns": True}),
+        _seq_ev("tool_start", 60, 5, tool_name="send_email", span_id="X",
+                data={"reversible": False}),
+        _seq_ev("tool_end", 61, 6, tool_name="send_email", span_id="X",
+                data={"reversible": False}))
+    assert ch03_untrusted_to_consequential(session), (
+        "one malformed timestamp on the only marked read emptied CH03")
+
+
+def test_a_control_with_an_unreadable_clock_is_still_a_control_that_fired():
+    session = sess(
+        _unclocked("cost_threshold_exceeded", 1,
+                   data={"session_cost_usd": 0.9, "threshold_usd": 0.5}),
+        _seq_ev("tool_start", 60, 5, tool_name="send_email", span_id="X",
+                data={"reversible": False}),
+        _seq_ev("tool_end", 61, 6, tool_name="send_email", span_id="X",
+                data={"reversible": False}))
+    findings = ch04_guardrail_overrun(session)
+    assert findings, "every firing had a bad clock, so CH04 returned nothing"
+    assert findings[0].evidence["policy_event_first_ts"] is None, (
+        "a named firing with no readable clock must report no timestamp")
+    json.dumps(json_safe(findings[0].evidence), allow_nan=False)
+
+
+def test_a_marker_nothing_can_order_is_indeterminate_rather_than_silent():
+    """With no sidecar and no clock there is nothing to order against, and
+    saying NOT_AFTER would invent the answer the clock refused to give."""
+    session = sess(
+        ev("tool_end", 0, tool_name="fetch",
+           data={"has_injection_patterns": True}, timestamp="not-a-clock"),
+        ev("tool_start", 60, tool_name="send_email", span_id="X",
+           data={"reversible": False}),
+        ev("tool_end", 61, tool_name="send_email", span_id="X",
+           data={"reversible": False}))
+    assert ch03_untrusted_to_consequential(session) == []
+    assert len(unordered_after_marker(session)) == 1

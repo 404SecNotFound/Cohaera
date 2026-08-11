@@ -773,6 +773,19 @@ def _public_bytes(key_id: str, value: Any) -> bytes:
     if len(blob) != ed25519.KEY_BYTES:
         raise TrustStoreError(
             f"key {key_id!r} is {len(blob)} bytes, expected {ed25519.KEY_BYTES}")
+    if not ed25519.admissible_public_key(blob):
+        # The trust store is where a key becomes something Cohaera will believe,
+        # so it is where a key that nobody could have generated gets refused BY
+        # NAME rather than carried and hoped about. `verify` rejects the
+        # small-order points too -- it has to, since it is reachable without
+        # this parser -- but the cheap check there cannot afford the full
+        # prime-order test, and this can: it runs once per key at load, not once
+        # per signature.
+        raise TrustStoreError(
+            f"key {key_id!r} is not a usable Ed25519 public key: it is not a "
+            "canonical point of order L on the curve. A key of small order "
+            "cannot sign anything, and a verifier that accepts one can be made "
+            "to verify anything.")
     return blob
 
 
