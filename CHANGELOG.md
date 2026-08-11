@@ -144,6 +144,21 @@ any diff, so the numbers below are derived rather than claimed.
   Catalogued as **E23**, because the finding is still suppressed by a tie — a
   tie genuinely does not establish an order — and what changed is that the
   silence is now visible. Emitting the integrity sidecar closes it outright.
+
+  **A follow-up in the same cycle fixed a regression this first version
+  introduced.** Ordering became sequence-primary, but the *reference event* was
+  still chosen by `min(timestamp)` — the instrument the same change had just
+  declared forgeable. With markers at (seq 1, ts 100) and (seq 9, ts 50), the
+  clock picks the second, the sequence says a call at seq 5 ran after the
+  first, and the finding disappears; both CH03 and CH04 lost findings they had
+  produced before R11, and only on streams carrying `cohaera.integrity:1`, so
+  the regression was exclusive to deployments that had done the work to be
+  verifiable. The ordering question is existential — untrusted content was
+  read, or a control fired, and then a call ran — so it is now asked against
+  every reference, with AFTER winning. Kept O(M + N): comparing every call
+  against every reference is the O(N*M) shape documented on
+  `ch04_guardrail_overrun`, and trading a missed finding for an availability
+  fault is not a fix.
 - **COH-R12** — two ratios whose halves counted different populations. CH02
   counts a call as concealed only if it *executed*, but printed that count
   against every consequential call including the ones that failed, so one

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import gc
 import json
+import random
 import subprocess
 import sys
 import time
@@ -36,10 +37,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from cohaera.capabilities import EMPTY_MANIFEST, CapabilityManifest, ManifestError
 from cohaera.checks import (
+    ORDER_AFTER,
+    ORDER_INDETERMINATE,
+    ORDER_NOT_AFTER,
     R_NO_TOOL_RESULT,
     R_ORDER_INDETERMINATE,
     R_SCANNER_PARTIAL,
     SequenceGrammar,
+    _ordering,
+    _References,
     _scanner_coverage,
     ch02_concealment_gap,
     ch03_untrusted_to_consequential,
@@ -47,6 +53,7 @@ from cohaera.checks import (
     ch07_effect_contradiction,
     coverage,
     run_all,
+    unordered_after_marker,
 )
 from cohaera.cli import (
     EXIT_BUDGET,
@@ -2770,3 +2777,175 @@ def test_r09_a_session_with_nothing_to_scan_is_vacuous_not_blind():
     assert scan.scannable == 0
     assert scan.share == 1.0
     assert R_SCANNER_PARTIAL not in _ch03(s)["reasons"]
+
+
+# =====================================================================
+# COH-R11 follow-up: the reference was still chosen by the wall clock
+# =====================================================================
+#
+# R11 made the ORDERING sequence-primary because the producer picks the
+# timestamps and cannot pick the collector sequence. It left the SELECTION of
+# the reference event on `min(..., key=timestamp)`, which is the instrument it
+# had just declared forgeable. Two markers at (seq 1, ts 100) and (seq 9,
+# ts 50): the clock picks the second, the sequence says a call at seq 5 ran
+# after the first, and the finding disappears.
+#
+# Both checks lost findings they produced before R11 -- verified by running the
+# same session against 35bc467 -- and only on streams carrying
+# cohaera.integrity:1, so the regression was exclusive to the deployments that
+# had done the work to be verifiable.
+
+_SEQ_STREAM = "st1"
+
+
+def _seq_ev(etype, ts, seq, **kw):
+    """An event carrying a well-formed integrity sidecar."""
+    data = kw.pop("data", {})
+    raw = {"timestamp": BASE + ts, "event_type": etype, "session_id": "s",
+           "span_id": kw.pop("span_id", f"sp{seq}"),
+           "tool_name": kw.pop("tool_name", None),
+           "host": "h", "user": "u", "agent_name": "a", "data": data,
+           "integrity": {"scheme": "cohaera.integrity:1",
+                         "stream_id": _SEQ_STREAM, "seq": seq,
+                         "prev": "ab" * 32, "chain": "cd" * 32}}
+    return Event(raw=raw)
+
+
+def _shadowed_session(reference_type: str) -> Session:
+    """A call that the sequence puts after the first reference, and the clock
+    puts before a second one stamped earlier."""
+    marked = ({"has_injection_patterns": True}
+              if reference_type == "tool_end"
+              else {"session_cost_usd": 0.9, "threshold_usd": 0.5})
+    return sess(
+        _seq_ev(reference_type, 100, 1, tool_name="fetch_a", data=marked),
+        _seq_ev(reference_type, 50, 9, tool_name="fetch_b", data=marked),
+        _seq_ev("tool_start", 60, 5, tool_name="send_email", span_id="X",
+                data={"reversible": False}),
+        _seq_ev("tool_end", 61, 6, tool_name="send_email", span_id="X",
+                data={"reversible": False}),
+    )
+
+
+def test_ch03_is_not_blinded_by_a_marker_stamped_earlier_than_the_first():
+    findings = ch03_untrusted_to_consequential(_shadowed_session("tool_end"))
+    assert findings, (
+        "a consequential call the collector sequence puts after a marked read "
+        "produced no finding, because a second marker with a lower timestamp "
+        "was chosen as the reference")
+    assert findings[0].severity == "critical"
+
+
+def test_ch04_is_not_blinded_by_a_later_firing_stamped_earlier():
+    findings = ch04_guardrail_overrun(
+        _shadowed_session("cost_threshold_exceeded"))
+    assert findings, (
+        "a consequential call the collector sequence puts after a control "
+        "produced no finding, because a repeat firing with a lower timestamp "
+        "was chosen as the reference")
+
+
+def test_the_reduction_answers_exactly_what_comparing_them_all_would():
+    """The fix has to stay O(M + N) -- comparing every call against every
+    reference is the O(N*M) shape that produced a 6.3 MB verdict from 900
+    events, and trading a missed finding for an availability fault is not a
+    fix. So the reduction keeps two clock values and a per-stream minimum, and
+    this is what says that is enough.
+
+    Seeded, and across streams, ties, absent sidecars and mixed sequences,
+    because the two-value argument is the part most likely to be subtly wrong.
+    """
+    rng = random.Random(20260809)
+    streams = [None, "st1", "st2", "st3"]
+
+    def naive(call, events):
+        tie = False
+        for event in events:
+            order = _ordering(call, event)
+            if order == ORDER_AFTER:
+                return ORDER_AFTER
+            tie = tie or order == ORDER_INDETERMINATE
+        return ORDER_INDETERMINATE if tie else ORDER_NOT_AFTER
+
+    def make(ts, seq, stream, etype="tool_end", **kw):
+        raw = {"timestamp": BASE + ts, "event_type": etype, "session_id": "s",
+               "span_id": kw.pop("span_id", f"r{ts}-{seq}-{stream}"),
+               "tool_name": kw.pop("tool_name", None), "host": "h", "user": "u",
+               "agent_name": "a", "data": kw.pop("data", {})}
+        if stream is not None:
+            raw["integrity"] = {"scheme": "cohaera.integrity:1",
+                                "stream_id": stream, "seq": seq,
+                                "prev": "ab" * 32, "chain": "cd" * 32}
+        return Event(raw=raw)
+
+    for _ in range(1500):
+        refs = [make(rng.randint(0, 6), rng.randint(0, 6), rng.choice(streams))
+                for _ in range(rng.randint(1, 5))]
+        stream, seq, ts = rng.choice(streams), rng.randint(0, 6), rng.randint(0, 6)
+        session = sess(
+            make(ts, seq, stream, "tool_start", tool_name="send_email",
+                 span_id="X", data={"reversible": False}),
+            make(ts + 1, seq + 1, stream, "tool_end", tool_name="send_email",
+                 span_id="X", data={"reversible": False}))
+        call = session.consequential_calls[0]
+        assert _References(refs).verdict(call) == naive(call, refs), (
+            [(e.timestamp - BASE,
+              e.integrity.seq if e.integrity else None,
+              e.integrity.stream_id if e.integrity else None) for e in refs],
+            (ts, seq, stream))
+
+
+def test_the_sequence_still_outranks_the_clock():
+    """R11's own property, which this must not undo: a later timestamp with a
+    lower sequence is not afterwards, or the clock is still the thing an
+    attacker moves."""
+    session = sess(
+        _seq_ev("tool_end", 10, 9, tool_name="fetch", 
+                data={"has_injection_patterns": True}),
+        _seq_ev("tool_start", 20, 3, tool_name="send_email", span_id="X",
+                data={"reversible": False}),
+        _seq_ev("tool_end", 21, 4, tool_name="send_email", span_id="X",
+                data={"reversible": False}))
+    assert ch03_untrusted_to_consequential(session) == []
+
+
+def test_a_tie_against_every_reference_is_still_indeterminate():
+    """The other R11 property. AFTER wins over INDETERMINATE, but only when
+    something actually established it."""
+    def plain(etype, ts, **kw):
+        return ev(etype, ts, **kw)
+    session = sess(
+        plain("tool_end", 5, tool_name="fetch",
+              data={"has_injection_patterns": True}),
+        plain("tool_end", 5, tool_name="fetch2",
+              data={"has_injection_patterns": True}),
+        plain("tool_start", 5, tool_name="send_email", span_id="X",
+              data={"reversible": False}),
+        plain("tool_end", 6, tool_name="send_email", span_id="X",
+              data={"reversible": False}))
+    assert ch03_untrusted_to_consequential(session) == []
+    assert len(unordered_after_marker(session)) == 1
+
+
+def test_ordering_against_many_references_does_not_go_quadratic():
+    """300 policy events x 300 consequential calls, which is the exact shape
+    the CH04 amplification note measured at 6.3 MB of verdict."""
+    events = []
+    for i in range(300):
+        events.append(_seq_ev("cost_threshold_exceeded", i * 0.001, i,
+                              data={"session_cost_usd": 0.9}))
+    for i in range(300):
+        events.append(_seq_ev("tool_start", 100 + i * 0.002, 1000 + i * 2,
+                              tool_name="delete_x", span_id=f"c{i}",
+                              data={"reversible": False}))
+        events.append(_seq_ev("tool_end", 100 + i * 0.002 + 0.0005,
+                              1001 + i * 2, tool_name="delete_x",
+                              span_id=f"c{i}", data={"reversible": False}))
+    session = sess(*events)
+    assert session.tool_calls, "warm the pairing cache so it is not timed below"
+    started = time.monotonic()
+    findings = ch04_guardrail_overrun(session)
+    assert time.monotonic() - started < 2.0, (
+        "ordering 300 calls against 300 references took too long; the "
+        "reduction has probably become a nested loop")
+    assert findings

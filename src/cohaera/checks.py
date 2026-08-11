@@ -557,6 +557,104 @@ def _ordering(call: ToolCall, event: Event) -> str:
     return ORDER_AFTER if call.started_at > event.timestamp else ORDER_NOT_AFTER
 
 
+class _References:
+    """A set of reference events, reduced to what an ordering question needs.
+
+    COH-R11 asked "did this call start after that event?" against ONE reference
+    chosen by wall clock, and then answered it by collector sequence where one
+    existed. Those are two different instruments and the selection used the one
+    the same commit had just declared forgeable: with markers at (seq 1, ts 100)
+    and (seq 9, ts 50), the clock picks the second, the sequence says the call
+    at seq 5 ran after the first, and the finding disappears. Both CH03 and CH04
+    lost findings they had produced before R11 -- and only on streams carrying
+    ``cohaera.integrity:1``, so the regression was exclusive to deployments that
+    had done the work to be verifiable.
+
+    The question is existential: untrusted content was read, or a control fired,
+    and then a consequential call ran. ANY reference that precedes the call
+    answers it, so the reduction is over all of them and AFTER wins.
+
+    O(M) TO BUILD AND O(1) PER CALL, which is not an optimisation. Comparing
+    every call against every reference is the O(N*M) shape that produced a
+    6.3 MB verdict from 900 events and is documented on ch04_guardrail_overrun;
+    reintroducing it here to fix an ordering bug would trade a missed finding
+    for an availability fault. Two values suffice for the clock because a call
+    excludes at most one stream from that comparison: its own.
+    """
+
+    __slots__ = ("_best", "_next", "count", "earliest_ts", "min_seq")
+
+    def __init__(self, events: Iterable[Event]) -> None:
+        self.min_seq: dict[str, int] = {}
+        self._best: tuple[float, str | None] | None = None
+        self._next: tuple[float, str | None] | None = None
+        self.count = 0
+        self.earliest_ts = 0.0
+        for event in events:
+            self.count += 1
+            integrity = event.integrity
+            stream = integrity.stream_id if integrity else None
+            seq = integrity.seq if integrity else None
+            if stream is not None and seq is not None:
+                low = self.min_seq.get(stream)
+                if low is None or seq < low:
+                    self.min_seq[stream] = seq
+            self._note_clock(event.timestamp, stream)
+        if self._best is not None:
+            self.earliest_ts = self._best[0]
+
+    def _note_clock(self, ts: float, stream: str | None) -> None:
+        """Keep the lowest timestamp, and the lowest from a DIFFERENT stream.
+
+        Two is enough: a call is compared by clock against every reference not
+        settled by sequence, and the only references settled by sequence are
+        the ones sharing the call's own stream. So at most one stream is ever
+        excluded, and the answer is either the best or the best from elsewhere.
+        """
+        if self._best is None or ts < self._best[0]:
+            if self._best is not None and self._best[1] != stream:
+                self._next = self._best
+            self._best = (ts, stream)
+        elif stream != self._best[1] and (self._next is None or ts < self._next[0]):
+            self._next = (ts, stream)
+
+    def verdict(self, call: ToolCall) -> str:
+        """The strongest claim this reference set supports about ``call``.
+
+        AFTER beats INDETERMINATE beats NOT_AFTER. A tie against one reference
+        does not become "before" just because another reference is definitely
+        later: the point of the third value is that an unestablished order is
+        reported rather than resolved.
+        """
+        tie = False
+        stream, seq = call.start_stream, call.start_seq
+        if stream is not None and seq is not None:
+            low = self.min_seq.get(stream)
+            if low is not None:
+                if seq > low:
+                    return ORDER_AFTER
+                if seq == low:
+                    # One record cannot be two records; a shared sequence is a
+                    # broken chain, which CH06 reports. It is not an ordering.
+                    tie = True
+
+        clock = self._best
+        if clock is not None and stream is not None and clock[1] == stream:
+            # References in the call's own stream were settled by sequence
+            # above, and the sequence OUTRANKS the clock. Comparing them again
+            # by timestamp is how the producer's number gets a second vote.
+            clock = self._next
+        if clock is not None and call.clock_valid:
+            if call.started_at > clock[0]:
+                return ORDER_AFTER
+            if call.started_at == clock[0]:
+                tie = True
+        elif clock is not None:
+            tie = True
+
+        return ORDER_INDETERMINATE if tie else ORDER_NOT_AFTER
+
+
 def _shared_name_tokens(calls: list[ToolCall]) -> frozenset[str]:
     """Tokens that appear in the names of two or more DISTINCT tools here.
 
@@ -782,14 +880,15 @@ def ch03_untrusted_to_consequential(session: Session,
     if not marker_events:
         return []
 
-    # COH-R11. The earliest marker EVENT, not just its timestamp, because the
-    # ordering question is now asked against a record rather than a number: the
-    # record is what carries the collector sequence. `>=` used to decide this,
-    # so a call sharing the marker's tick was treated as afterwards -- the
-    # opposite of what CH04 did with the same tie.
-    first_marker_event = min(marker_events, key=lambda e: e.timestamp)
-    first_marker = first_marker_event.timestamp
-    verdicts = [(c, _ordering(c, first_marker_event))
+    # COH-R11, and its follow-up. The ordering question is asked against the
+    # marker RECORDS rather than one timestamp, because the record is what
+    # carries the collector sequence -- and against ALL of them rather than the
+    # clock-earliest one. Picking a single reference by wall clock while
+    # deciding the order by sequence is what made this check lose findings it
+    # had produced before R11; see _References.
+    markers_ref = _References(marker_events)
+    first_marker = markers_ref.earliest_ts
+    verdicts = [(c, markers_ref.verdict(c))
                 for c in session.consequential_calls]
     cand = [c for c, o in verdicts if o == ORDER_AFTER]
     unordered = [c for c, o in verdicts if o == ORDER_INDETERMINATE]
@@ -891,9 +990,9 @@ def unordered_after_marker(session: Session) -> list[ToolCall]:
                      if scanner_marked(e.data) and e.timestamp_valid]
     if not marker_events:
         return []
-    first = min(marker_events, key=lambda e: e.timestamp)
+    markers_ref = _References(marker_events)
     return [c for c in session.consequential_calls
-            if _ordering(c, first) == ORDER_INDETERMINATE]
+            if markers_ref.verdict(c) == ORDER_INDETERMINATE]
 
 
 # ---------------------------------------------------------------------------
@@ -1057,6 +1156,13 @@ def ch04_guardrail_overrun(session: Session,
     threshold are the same fact, so the check now reports the EARLIEST firing of
     each policy type once and carries the repeat count instead.
     """
+    # COH-R11 follow-up. Every firing of a policy type is a reference, not just
+    # the clock-earliest one. Keeping only the earliest by timestamp and then
+    # ordering by collector sequence is what let a second firing with a lower
+    # timestamp and a higher sequence shadow the real one and empty the check.
+    # The reported firing is still the earliest, because that is the one an
+    # analyst wants named; the ORDERING is decided against all of them.
+    by_type: dict[str, list[Event]] = {}
     earliest: dict[str, Any] = {}
     counts: Counter[str] = Counter()
     unusable_clock = 0
@@ -1067,6 +1173,7 @@ def ch04_guardrail_overrun(session: Session,
         if not e.timestamp_valid:
             unusable_clock += 1
             continue
+        by_type.setdefault(e.event_type, []).append(e)
         cur = earliest.get(e.event_type)
         if cur is None or e.timestamp < cur.timestamp:
             earliest[e.event_type] = e
@@ -1085,7 +1192,8 @@ def ch04_guardrail_overrun(session: Session,
         # the cheapest evasion in the file, one field of the producer's own
         # choosing. It is now the shared three-valued ordering, and a tie with
         # no collector sequence to break it is reported rather than resolved.
-        ordering = [(c, _ordering(c, e)) for c in consequential]
+        policy_ref = _References(by_type[etype])
+        ordering = [(c, policy_ref.verdict(c)) for c in consequential]
         cand = [c for c, o in ordering if o == ORDER_AFTER]
         unordered = [c for c, o in ordering if o == ORDER_INDETERMINATE]
         # Partition the completed calls by whether an approval actually fits
