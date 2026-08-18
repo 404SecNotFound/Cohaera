@@ -4,7 +4,7 @@ Rules and mappings that consume `cohaera_session_verdict` records.
 
 ```
 content/
-  sigma/     9 Sigma rules, validated, converted and conformance-tested
+  sigma/     13 Sigma rules, validated, converted and conformance-tested
   manifest/  example capability manifest: exact tool ID -> declared effects
   aie/       LogRhythm AIE rule specifications + the build-vs-buy comparison
   parser/    Exabeam field map + notes on observra issue #108
@@ -44,21 +44,39 @@ analytics rules work today. Zero correlation rules can fire."*
 
 ## Sigma
 
-Nine rules, all validating against the required-field set with real UUIDs.
+Thirteen rules, all validating against the required-field set with real UUIDs.
 
 | Rule | Level | Check | Expressible upstream? |
 |---|---|---|---|
-| `cohaera_guardrail_bypass_completed.yml` | high | CH04 completed | No |
+| `cohaera_guardrail_bypass_completed.yml` | high | CH04 completed, semantics undeclared | No |
+| `cohaera_blocking_control_bypassed.yml` | high | CH04 declared blocking, no bound approval | No |
 | `cohaera_post_guardrail_attempt.yml` | informational | CH04 attempted | No |
 | `cohaera_concealment_gap.yml` | medium | CH02 | No |
 | `cohaera_untrusted_to_completed_action.yml` | medium | CH03 completed | No |
 | `cohaera_untrusted_to_attempted_action.yml` | low | CH03 attempted | No |
 | `cohaera_sequence_order_violation.yml` | medium | CH01 | No |
 | `cohaera_unpaired_consequential_call.yml` | low | CH05 | No |
+| `cohaera_evidence_integrity_failed.yml` | critical | CH06 | No |
+| `cohaera_reported_failure_with_effect_receipt.yml` | high | CH07 contradiction | No |
+| `cohaera_effect_receipt_unbound.yml` | medium | CH07 binding guard | No |
 | `cohaera_coverage_degraded.yml` | informational | coverage | No |
-| `cohaera_telemetry_integrity_defects.yml` | low | integrity | No |
+| `cohaera_telemetry_integrity_defects.yml` | low | field-level defects | No |
 
 Convert with `sigma convert -t <backend>`.
+
+### Two rules named "integrity", and they are about different things
+
+`cohaera_telemetry_integrity_defects.yml` is about **fields**: a record arrived
+with a span that was a list, or a timestamp that was a string, and the schema
+firewall dropped the field and labelled it. It says the producer's serialiser is
+wrong.
+
+`cohaera_evidence_integrity_failed.yml` is about **records**: what arrived is not
+what the collector signed for. A sequence gap, a chain break, a signature that
+did not verify. It says somebody edited the stream, and it is the only rule in
+this pack whose subject is the telemetry rather than the agent — which is why
+every other finding in the same verdict carries `evidence_status` saying how far
+the evidence underneath it was established.
 
 ### The pairs, and why they are pairs
 

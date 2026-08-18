@@ -50,4 +50,14 @@ falsepositives:
       Re-fit the baseline after any deliberate change to the agent.
     - Agents with genuinely non-deterministic planning, where ordering varies
       run to run without security significance.
+    - |
+      A LEGITIMATE RARE ACTION IN A LONG SESSION. Read
+      findings[].evidence.triggers first. 'rate' means the session's whole shape
+      is unusual. 'unseen_consequential' means the shape is ORDINARY and one
+      novel route into a state-changing or egress call is what fired it -- which
+      is the only thing that catches a diluted attack (EVASION.md E02) and also
+      fires on an agent taking one of its own rare secondary actions. Measured
+      at 32 true to 16 false on the evaluation corpus. Triage that trigger on
+      the DESTINATION tool in evidence.unseen_consequential_transitions, not on
+      the violation rate, which will be low by definition.
 level: medium

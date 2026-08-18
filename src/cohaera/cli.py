@@ -31,14 +31,35 @@ convincing "0 finding(s)" line and then clear the screen above it.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import os
 import sys
+import tempfile
+import time
+from pathlib import Path
+from typing import Any
 
 from . import __version__
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest, ManifestError
 from .checks import SequenceGrammar, run_all
+from .evidence import (
+    EMPTY_STORE,
+    P_ABSENT,
+    POLICY_ARTIFACT_BASELINE,
+    POLICY_ARTIFACT_MANIFEST,
+    Freshness,
+    LedgerError,
+    PolicyAttestation,
+    PolicySignature,
+    PolicySignatureError,
+    StreamLedger,
+    TrustStore,
+    TrustStoreError,
+    file_sha256,
+    verify_policy_signature,
+)
 from .identity import Correlator, run_id
 from .ingest import load
 from .limits import DEFAULT_LIMITS, Limits, LimitsError
@@ -90,6 +111,18 @@ def non_negative_int(text: str) -> int:
     return value
 
 
+def positive_float(text: str) -> float:
+    """A duration that must actually elapse. Zero would make everything stale."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+    if not math.isfinite(value) or value <= 0.0:
+        raise argparse.ArgumentTypeError(
+            f"must be a finite number of seconds greater than 0, got {value}")
+    return value
+
+
 def unit_ratio(text: str) -> float:
     """A fraction in 0.0..1.0. ``--max-reject-ratio 2.0`` can never trip."""
     try:
@@ -120,9 +153,51 @@ def _load_manifest(path: str | None,
         return EMPTY_MANIFEST
     manifest = CapabilityManifest.from_file(path, limits=limits)
     _err(f"[cohaera] capability manifest {sanitise_display(path, 160)}: "
-         f"{len(manifest.tools)} tool(s), digest {manifest.digest}, "
+         f"{len(manifest.tools)} tool(s), file digest {manifest.file_digest}, "
+         f"semantic digest {manifest.semantic_digest}, "
          f"producer {sanitise_display(manifest.producer or '?', 80)}")
     return manifest
+
+
+def _load_keys(path: str | None,
+               limits: Limits = DEFAULT_LIMITS) -> TrustStore:
+    if not path:
+        return EMPTY_STORE
+    store = TrustStore.from_file(path, limits=limits)
+    _err(f"[cohaera] trust store {sanitise_display(path, 160)}: "
+         f"{len(store.keys)} key(s) "
+         f"({len(store.for_role('collector'))} collector, "
+         f"{len(store.for_role('policy'))} policy), file digest "
+         f"{store.file_digest}, semantic digest {store.semantic_digest}")
+    for warning in store.warnings:
+        # Not fatal. These are problems with the operator's own bookkeeping, and
+        # refusing to run over one would be a denial of service against the
+        # person trying to tighten their configuration. Said out loud instead,
+        # because a rotation that exists in the file and not in the verifier is
+        # invisible otherwise.
+        _err(f"[cohaera] WARNING: trust store {warning}")
+    return store
+
+
+def _attest_policy(path: str | None, sig_path: str | None, artifact: str,
+                   store: TrustStore, max_bytes: int,
+                   limits: Limits = DEFAULT_LIMITS) -> PolicyAttestation:
+    """Verify a detached signature over one operator-supplied file.
+
+    Returns an attestation in every case, including the case where nothing was
+    supplied, because ``POLICY_SIGNATURE_ABSENT`` in the verdict is the point:
+    an unsigned manifest that says so is a different artifact from one that
+    passes silently, and the second is what this codebase keeps arguing against.
+
+    Raises rather than degrading when a signature WAS supplied and did not hold.
+    An operator who passed --tool-manifest-sig asked for the file to be checked,
+    and scoring on it anyway would answer a question they did not ask.
+    """
+    if not path or not sig_path:
+        return PolicyAttestation(artifact=artifact, status=P_ABSENT)
+    signature = PolicySignature.from_file(sig_path, limits=limits)
+    digest = file_sha256(path, max_bytes)
+    return verify_policy_signature(signature, digest, artifact, store)
 
 
 def _correlator(args: argparse.Namespace, limits: Limits) -> Correlator:
@@ -159,6 +234,76 @@ def cmd_score(args: argparse.Namespace) -> int:
     except (ManifestError, OSError) as exc:
         _err(f"[cohaera] capability manifest rejected: {sanitise_display(str(exc), 300)}")
         return EXIT_ERROR
+    if args.trust_store and args.collector_keys:
+        # Two paths naming the same thing, and no way to know which the operator
+        # meant. Silently preferring one would mean a run verified against a key
+        # set the operator did not think they had supplied, which is the worst
+        # possible outcome for a flag whose entire job is to say which keys are
+        # trusted.
+        _err("[cohaera] --trust-store and --collector-keys both given, and they "
+             "are the same option under two names. Pass one.")
+        return EXIT_ERROR
+    try:
+        keys = _load_keys(args.trust_store or args.collector_keys, limits)
+    except (TrustStoreError, OSError) as exc:
+        # Refused, not degraded. An operator who passed --trust-store asked
+        # for signatures to be verified; carrying on without them would report
+        # an unverified stream as merely unsigned, which is the wrong answer to
+        # the question they asked.
+        _err(f"[cohaera] trust store rejected: "
+             f"{sanitise_display(str(exc), 300)}")
+        return EXIT_ERROR
+
+    # The two operator-supplied files that decide how every record is READ. The
+    # manifest says which tools are consequential; the baseline teaches CH01 what
+    # normal looks like. Editing either changes every verdict without touching a
+    # single telemetry record, which is why they are attested before they are
+    # used rather than after.
+    try:
+        attestations = [
+            _attest_policy(args.tool_manifest, args.tool_manifest_sig,
+                           POLICY_ARTIFACT_MANIFEST, keys,
+                           limits.max_manifest_bytes, limits),
+            _attest_policy(args.baseline, args.baseline_sig,
+                           POLICY_ARTIFACT_BASELINE, keys,
+                           limits.max_input_bytes, limits),
+        ]
+    except (PolicySignatureError, OSError) as exc:
+        _err(f"[cohaera] policy signature rejected: "
+             f"{sanitise_display(str(exc), 300)}")
+        return EXIT_ERROR
+    for att in attestations:
+        if att.status == P_ABSENT:
+            continue
+        if not att.verified:
+            _err(f"[cohaera] REFUSING to score: the {att.artifact} signature did "
+                 f"not hold ({att.status}: {sanitise_display(att.detail, 200)}). "
+                 "A signature that is checked and fails is the one case where "
+                 "carrying on would be worse than not having asked.")
+            return EXIT_ERROR
+        _err(f"[cohaera] {att.artifact} signature VERIFIED under "
+             f"{sanitise_display(att.key_id, 80)} "
+             f"(file sha256 {att.file_sha256[:16]}...)")
+
+    if args.require_signed_policy:
+        supplied = {POLICY_ARTIFACT_MANIFEST: args.tool_manifest,
+                    POLICY_ARTIFACT_BASELINE: args.baseline}
+        unsigned = [a.artifact for a in attestations
+                    if supplied.get(a.artifact) and not a.verified]
+        if unsigned:
+            _err(f"[cohaera] --require-signed-policy: {', '.join(unsigned)} "
+                 "was supplied without a verified signature. Sign it with "
+                 "tools/policy_sign.py and pass the detached signature, or drop "
+                 "the flag and accept that the file is trusted because it is on "
+                 "disk.")
+            return EXIT_ERROR
+
+    freshness = Freshness(max_age_s=args.evidence_max_age,
+                          as_of=(args.evidence_as_of if args.evidence_as_of
+                                 is not None else time.time()))
+    if freshness.enabled:
+        _err(f"[cohaera] freshness bound: signed records older than "
+             f"{args.evidence_max_age:g}s as of {freshness.as_of:.0f} are stale")
 
     if args.reject_log:
         try:
@@ -168,28 +313,68 @@ def cmd_score(args: argparse.Namespace) -> int:
                  f"is not writable: {sanitise_display(str(exc), 200)}")
             return EXIT_ERROR
 
+    ledger: StreamLedger | None = None
+    if args.seen_streams:
+        try:
+            ledger = StreamLedger.load(args.seen_streams, limits)
+        except (LedgerError, OSError) as exc:
+            # Refused, not started fresh. An unreadable ledger scores every
+            # stream as new, which is precisely the state an attacker who
+            # deleted it wants, and doing that quietly would hide the deletion.
+            _err(f"[cohaera] seen-stream ledger rejected: "
+                 f"{sanitise_display(str(exc), 400)}")
+            return EXIT_ERROR
+        _err(f"[cohaera] seen-stream ledger {sanitise_display(args.seen_streams, 160)}: "
+             f"{len(ledger.streams)} stream(s) previously scored")
+
     report = IngestReport(source=str(args.telemetry))
     correlator = _correlator(args, limits)
 
     grammar = None
     baseline_hash = ""
+    baseline_ingest: dict | None = None
     if args.baseline:
         baseline_report = IngestReport(source=str(args.baseline))
         benign = load(args.baseline, limits=limits,
                       correlator=Correlator(None, limits=limits),
                       manifest=manifest, report=baseline_report)
+        # C5-07. A partial baseline used to produce a warning and then be fitted
+        # anyway. That is the worst of both: CH01 is the one detector here that
+        # LEARNS, its whole output is "unlike what I was shown", and quietly
+        # showing it less than the operator supplied changes every verdict
+        # afterwards -- in both directions, since a missing transition becomes a
+        # false positive and a missing session becomes a blind spot.
+        #
+        # An abort can also happen with zero rejected records, so the warning
+        # never fired for the case where the reader stopped early on a budget.
+        # This checks the same budget function the target telemetry is checked
+        # against, and refuses by default.
+        baseline_problem = _budget_exceeded(baseline_report, limits)
+        if baseline_report.rejected and not baseline_problem:
+            baseline_problem = (f"{baseline_report.rejected} baseline record(s) "
+                                "were quarantined")
+        if baseline_problem and not args.allow_partial_baseline:
+            _err(f"[cohaera] REFUSING to fit on a partial baseline: "
+                 f"{sanitise_display(baseline_problem, 300)}. A baseline "
+                 "assembled from incomplete data teaches a partial normal, and "
+                 "every CH01 verdict after it is measured against the wrong "
+                 "reference. Re-run with --allow-partial-baseline if that is "
+                 "genuinely what you want; the choice is recorded in provenance.")
+            return EXIT_BUDGET
         grammar = SequenceGrammar().fit(benign)
         baseline_hash = grammar.fingerprint()
+        baseline_ingest = baseline_report.summary()
         _err(f"[cohaera] fitted grammar on {grammar.sessions_fitted} benign sessions, "
              f"{len(grammar.bigrams)} distinct transitions, baseline_hash "
              f"{baseline_hash or 'none'}")
-        if baseline_report.rejected:
-            _err(f"[cohaera] WARNING: {baseline_report.rejected} baseline record(s) "
-                 "were quarantined. A baseline assembled from partial data teaches "
-                 "a partial normal.")
+        if baseline_problem:
+            _err(f"[cohaera] WARNING: fitted on a PARTIAL baseline "
+                 f"({sanitise_display(baseline_problem, 200)}) because "
+                 "--allow-partial-baseline was given.")
 
     sessions = load(args.telemetry, limits=limits, correlator=correlator,
-                    manifest=manifest, report=report)
+                    manifest=manifest, report=report, keys=keys,
+                    freshness=freshness, ledger=ledger)
     _err(f"[cohaera] {sanitise_display(str(args.telemetry), 160)}: "
          f"{sum(len(s.events) for s in sessions)} events in {len(sessions)} sessions, "
          f"{report.rejected} record(s) quarantined\n")
@@ -201,14 +386,53 @@ def cmd_score(args: argparse.Namespace) -> int:
         # C4-01: the CONTENT of what was read, not the summary counts.
         input_digest=report.content_digest,
         baseline_hash=baseline_hash,
-        manifest_hash=manifest.digest,
+        manifest_hash=manifest.file_digest,
     )
+    if ledger is not None:
+        # Stamped here because analysis_run_id is a digest of everything read
+        # and does not exist until reading finishes. Written before any verdict
+        # is emitted: a run that dies while printing has still SCORED these
+        # streams, and forgetting that would let the same input through again.
+        ledger.stamp(run)
+        try:
+            ledger.save()
+        except (LedgerError, OSError) as exc:
+            # Same reasoning as the quarantine ledger (C4-04). Losing the record
+            # of what has been scored while reporting success means the next
+            # replay of this stream is undetectable and nothing said so.
+            _err(f"[cohaera] could not write the seen-stream ledger to "
+                 f"{sanitise_display(str(args.seen_streams), 160)}: "
+                 f"{sanitise_display(str(exc), 300)}")
+            return EXIT_ERROR
+
     provenance = {
         "analysis_run_id": run,
         "detector_version": __version__,
         "config_hash": limits.digest(),
         "baseline_hash": baseline_hash,
+        # C5-07. What the baseline was actually built from, so a verdict can be
+        # audited against the reference it was measured against rather than
+        # against the file somebody believes was used.
+        "baseline_ingest": baseline_ingest,
+        "baseline_partial_allowed": bool(args.allow_partial_baseline),
         "capability_manifest": manifest.as_dict(),
+        "trust_store": keys.as_dict(limits.max_evidence_items),
+        # What Cohaera established about the two files that decide how every
+        # record is read. POLICY_SIGNATURE_ABSENT is the value nearly every
+        # deployment will carry, and recording it is the point: an unsigned
+        # manifest that says so is a different artifact from one that passes
+        # silently.
+        "policy_attestations": [a.as_dict() for a in attestations],
+        "evidence_freshness": freshness.as_dict(),
+        "stream_ledger": (
+            {"enabled": True, "path": str(args.seen_streams),
+             "streams_known": len(ledger.streams)} if ledger
+            else {"enabled": False}),
+        # Stream identity and extent, so that two runs which scored the same
+        # collector stream twice are distinguishable after the fact. Cohaera
+        # keeps no state between runs, so this is the only form replay detection
+        # can take here. See evidence.Freshness.
+        "collector_streams": report.integrity.get("stream_summary", []),
         "correlation_key_version": correlator.key_version,
         "correlation_keyed": correlator.keyed,
         "ingest": report.summary(),
@@ -247,7 +471,7 @@ def cmd_score(args: argparse.Namespace) -> int:
 
     if args.reject_log:
         try:
-            _write_reject_log(args.reject_log, report)
+            _write_reject_log_atomic(args.reject_log, report)
         except OSError as exc:
             _err(f"[cohaera] could not write the quarantine ledger to "
                  f"{sanitise_display(args.reject_log, 160)}: "
@@ -267,7 +491,36 @@ def cmd_score(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _write_reject_log(path: str, report: IngestReport) -> None:
+def _write_reject_log_atomic(path: str, report: IngestReport) -> None:
+    """Write the quarantine ledger without ever leaving a partial one.
+
+    C5-06. This used to open the final path directly, so a run that died
+    part-way through writing left a truncated ledger where a complete one had
+    been -- and ``_probe_writable`` had already destroyed the previous contents
+    before scoring even started. The record of what Cohaera REFUSED to score is
+    audit evidence, and audit evidence that a failed run can erase is not
+    evidence.
+
+    Written to a sibling temporary file, flushed, fsynced, then moved into place
+    with ``os.replace``, which is atomic on POSIX and on Windows. Either the old
+    ledger is there or the new one is; there is no state in between.
+    """
+    target = Path(path)
+    fd, tmp = tempfile.mkstemp(dir=str(target.parent) or ".",
+                               prefix=f".{target.name}.", suffix=".partial")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            _write_reject_log(fh, report)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def _write_reject_log(fh: Any, report: IngestReport) -> None:
     """Machine-readable quarantine ledger, one JSON object per rejected record.
 
     C4-04. This used to catch OSError, print a line to stderr and return, so a
@@ -280,10 +533,9 @@ def _write_reject_log(path: str, report: IngestReport) -> None:
 
     So it raises. The caller turns that into a non-zero exit.
     """
-    with open(path, "w", encoding="utf-8") as fh:
-        for r in report.rejects:
-            fh.write(json.dumps(r.as_dict(), sort_keys=True) + "\n")
-        fh.write(json.dumps({"_summary": report.summary()}, sort_keys=True) + "\n")
+    for r in report.rejects:
+        fh.write(json.dumps(r.as_dict(), sort_keys=True) + "\n")
+    fh.write(json.dumps({"_summary": report.summary()}, sort_keys=True) + "\n")
 
 
 def _probe_writable(path: str) -> None:
@@ -291,9 +543,20 @@ def _probe_writable(path: str) -> None:
 
     Scoring a 10 GB file and only then discovering the ledger cannot be written
     is a bad trade for the operator, and the failure is knowable up front.
+
+    C5-06. It used to probe by opening the FINAL path in write mode, which
+    truncated an existing ledger before a single record had been read -- so a
+    run that then failed to load its input had already destroyed the previous
+    run's audit evidence and never wrote a replacement. The probe now tests the
+    destination DIRECTORY with a temporary file and leaves the target alone.
     """
-    with open(path, "w", encoding="utf-8"):
-        pass
+    target = Path(path)
+    parent = target.parent if str(target.parent) else Path()
+    if target.exists() and not os.access(target, os.W_OK):
+        raise OSError(f"{path}: exists and is not writable")
+    fd, tmp = tempfile.mkstemp(dir=str(parent) or ".", prefix=".cohaera-probe-")
+    os.close(fd)
+    os.unlink(tmp)
 
 
 def _add_common(p: argparse._ActionsContainer) -> None:
@@ -301,9 +564,58 @@ def _add_common(p: argparse._ActionsContainer) -> None:
                    help="JSON capability manifest keyed on exact tool ID. Declared "
                         "capabilities outrank the name heuristic and the producer's "
                         "reversible flag.")
+    p.add_argument("--trust-store", metavar="PATH",
+                   help="JSON trust store (cohaera.trust_store:1): public keys, what "
+                        "each is authorised to attest, its validity window, and "
+                        "whether it has been revoked. Used to verify "
+                        "cohaera.integrity:1 signatures on telemetry and "
+                        "cohaera.policy_signature:1 signatures on the manifest and "
+                        "baseline. Without it, signed records are parsed and NOT "
+                        "verified, and the verdict says so with NO_COLLECTOR_KEYS.")
+    p.add_argument("--collector-keys", metavar="PATH",
+                   help="Superseded name for --trust-store, kept because deployments "
+                        "wrote cohaera.collector_keys:1 files. Either flag accepts "
+                        "either schema; a legacy file's keys are collector-role only "
+                        "and cannot attest policy.")
+    p.add_argument("--tool-manifest-sig", metavar="PATH",
+                   help="Detached cohaera.policy_signature:1 over the capability "
+                        "manifest, verified against a policy-role key. Supplying it "
+                        "and having it fail is a refusal to score, not a warning.")
+    p.add_argument("--require-signed-policy", action="store_true",
+                   help="Refuse to run unless every supplied policy file (manifest, "
+                        "baseline) carries a signature that verified. Off by default "
+                        "because it would break every existing deployment; on, it is "
+                        "what turns the signature from an option into a control.")
+    p.add_argument("--seen-streams", metavar="PATH",
+                   help="JSON ledger of collector streams already scored, kept "
+                        "BETWEEN runs. It is what detects a stream re-fed inside "
+                        "the freshness window, which every other check passes "
+                        "because the replayed stream is genuine. Created on "
+                        "first use; a file that exists and does not parse is a "
+                        "hard error, because scoring everything as new is what "
+                        "deleting it would achieve. Unsigned local state: an "
+                        "attacker who can delete it removes the detection "
+                        "(EVASION.md E22).")
+    p.add_argument("--evidence-max-age", type=positive_float, metavar="SECONDS",
+                   help="Report signed records older than this as stale "
+                        "(INTEGRITY_EVIDENCE_STALE). This is the bound that makes "
+                        "re-feeding a captured stream detectable: every other check "
+                        "passes on a replayed stream, because it really was written "
+                        "by that collector. Off by default, and coverage says "
+                        "NO_FRESHNESS_BOUND when it is off.")
+    p.add_argument("--evidence-as-of", type=float, metavar="EPOCH",
+                   help="The instant --evidence-max-age is measured from, in seconds "
+                        "since the epoch. Defaults to the wall clock at run start; "
+                        "set it to make a run reproducible, or to score an archive "
+                        "as of the day it was captured.")
     p.add_argument("--correlation-secret-env", metavar="NAME", default=SECRET_ENV,
                    help=f"Environment variable holding the HMAC key for anonymous "
                         f"correlation keys (default {SECRET_ENV}).")
+    p.add_argument("--allow-partial-baseline", action="store_true",
+                   help="Fit the sequence grammar even when the baseline file was "
+                        "partially read or partially quarantined. Off by default: "
+                        "a partial baseline teaches a partial normal and silently "
+                        "changes every CH01 verdict. Recorded in provenance.")
     p.add_argument("--strict", action="store_true",
                    help="Exit non-zero if any record is quarantined.")
     p.add_argument("--max-rejects", type=non_negative_int, metavar="N",
@@ -336,6 +648,12 @@ def main(argv: list[str] | None = None) -> int:
     sc = sub.add_parser("score", help="score observra telemetry")
     sc.add_argument("telemetry", help="observra JSONL file")
     sc.add_argument("--baseline", help="benign JSONL to fit the sequence grammar")
+    sc.add_argument("--baseline-sig", metavar="PATH",
+                    help="Detached cohaera.policy_signature:1 over the baseline. "
+                         "CH01 is the only detector here that LEARNS, so an "
+                         "attacker who can add sessions to the baseline teaches it "
+                         "that the attack is normal -- EVASION.md E03. This is what "
+                         "makes editing the file detectable.")
     _add_common(sc)
     sc.set_defaults(func=cmd_score)
 

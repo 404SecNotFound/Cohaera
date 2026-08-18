@@ -21,17 +21,65 @@ import hashlib
 import math
 import re
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from functools import cached_property
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
-from . import validate
+from . import evidence, validate
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest
+from .evidence import (
+    ARGS_ABSENT,
+    ARGS_DECLARED,
+    ARGS_RECOMPUTED,
+    Approval,
+    EffectReceipt,
+    Integrity,
+    SessionIntegrity,
+)
 from .identity import CorrelationKey, canonical, digest
 from .identity import verdict_id as _verdict_id
 from .limits import DEFAULT_LIMITS, DEFECT_RESPONSE_TEXT_TYPE, Limits
-from .validate import json_safe  # re-exported: part of the public API
+from .validate import (
+    json_safe,  # re-exported: part of the public API
+    marker_list,
+    scanner_claim,
+)
+
+
+def scanner_marked(data: Any) -> bool:
+    """Did a scanner say, in a well-formed way, that it FOUND markers here?
+
+    The one predicate CH03 is allowed to build a critical finding on, and it
+    lives here rather than in ``checks`` so that the answer cannot differ
+    between the check that fires and the coverage report that says whether the
+    check could run. A malformed claim is neither True nor False: it is a
+    defect, already recorded on the Event, and it counts as no claim at all.
+    """
+    if not isinstance(data, Mapping):
+        return False
+    claim, _ = scanner_claim(data.get("has_injection_patterns"))
+    if claim:
+        return True
+    markers, _ = marker_list(data.get("injection_patterns"))
+    return bool(markers)
+
+
+def scanner_reported(data: Any) -> bool:
+    """Did a scanner report at all -- finding markers or finding none?
+
+    ``has_injection_patterns: false`` and an empty ``injection_patterns`` list
+    are both real answers, and the difference between "no markers" and "no
+    scanner" is the whole reason coverage exists. A malformed claim is not an
+    answer, so a producer cannot buy CH03 coverage with a type error.
+    """
+    if not isinstance(data, Mapping):
+        return False
+    claim, codes = scanner_claim(data.get("has_injection_patterns"))
+    if claim is not None and not codes:
+        return True
+    markers, codes = marker_list(data.get("injection_patterns"))
+    return markers is not None and not codes
 
 # ---------------------------------------------------------------------------
 # Vocabulary lifted from observra's schema/cim_schema.toml so Cohaera stays
@@ -238,6 +286,26 @@ class Event:
     limits: Limits = field(default=DEFAULT_LIMITS, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        # COH-R13. A record is a JSON OBJECT, and this is where that stops
+        # being an assumption. `Event(raw="{}")` used to construct happily --
+        # freeze turns a str into a str and a list into a tuple -- and then
+        # raise `AttributeError: 'str' object has no attribute 'get'` from
+        # whichever accessor happened to run first, a crash arbitrarily far
+        # from the line that caused it.
+        #
+        # This is not the rule-3 case and must not be softened into it. A
+        # non-object arriving from the wire is already quarantined by ingest as
+        # NOT_A_JSON_OBJECT and never reaches this constructor; a non-object
+        # arriving here came from Cohaera's own code or from a tool building
+        # events in memory, which is a defect in the caller rather than a
+        # hostile record to be tolerated. Absent-and-flagged is for fields
+        # inside a record. It is not for the record not being one.
+        if not isinstance(self.raw, dict):
+            raise TypeError(
+                "Event.raw must be a JSON object, not "
+                f"{type(self.raw).__name__}. A record read from a stream is "
+                "quarantined as NOT_A_JSON_OBJECT before it reaches here, so "
+                "this is a caller building an Event by hand.")
         if not isinstance(self.raw, FrozenDict):
             object.__setattr__(self, "raw", freeze(self.raw))
 
@@ -245,10 +313,53 @@ class Event:
     def view(self) -> validate.RecordView:
         return validate.view(self.raw, self.limits)
 
+    @cached_property
+    def _evidence(self) -> tuple[Any, Any, Any, tuple[str, ...]]:
+        """Parse the three P1 sidecars once. See :mod:`cohaera.evidence`.
+
+        Cached on the frozen record for the same reason every other derived
+        value is: a sidecar parse is a canonical-JSON hash away from being
+        expensive, and the record cannot change underneath the cache.
+        """
+        codes: list[str] = []
+
+        def take(pair):
+            value, c = pair
+            codes.extend(c)
+            return value
+
+        integrity = take(Integrity.parse(self.raw.get(evidence.INTEGRITY_FIELD),
+                                         self.limits))
+        data = self.data
+        receipt = take(EffectReceipt.parse(data.get(evidence.RECEIPT_FIELD),
+                                           self.limits))
+        approval = take(Approval.parse(data.get(evidence.APPROVAL_FIELD),
+                                       self.limits))
+        if self.event_type in POLICY_EVENTS:
+            take(evidence.enforcement_of(data))
+        return integrity, receipt, approval, tuple(dict.fromkeys(codes))
+
+    @property
+    def integrity(self) -> Integrity | None:
+        return self._evidence[0]
+
+    @property
+    def effect_receipt(self) -> EffectReceipt | None:
+        return self._evidence[1]
+
+    @property
+    def approval(self) -> Approval | None:
+        return self._evidence[2]
+
+    @property
+    def enforcement(self) -> str:
+        """A policy event's declared semantics, or ``undeclared``."""
+        return evidence.enforcement_of(self.data)[0]
+
     @property
     def defects(self) -> tuple[str, ...]:
         """Fields that were not what they claimed to be, as reason codes."""
-        return self.view.defects
+        return tuple(dict.fromkeys(self.view.defects + self._evidence[3]))
 
     @property
     def event_type(self) -> str:
@@ -362,6 +473,25 @@ class ToolCall:
     state: str = "open"
     manifest: CapabilityManifest = field(default=EMPTY_MANIFEST, repr=False,
                                          compare=False)
+    # ---- P1 evidence ----------------------------------------------------
+    # The call's argument identity, and where it came from. Approvals and
+    # receipts bind on this, so a call that has none can be bound only by span,
+    # which is a weaker claim that the verdict has to state rather than assume.
+    arg_digest: str | None = None
+    arg_digest_source: str = ARGS_ABSENT
+    # True when the producer declared a digest AND Cohaera could recompute one
+    # from the captured arguments, and they disagree. That is the producer
+    # contradicting itself about its own call, which no honest emitter does.
+    arg_digest_disagrees: bool = False
+    receipt: EffectReceipt | None = None
+    # ---- ordering (COH-R11) ---------------------------------------------
+    # The collector sequence this call STARTED at, when the start event carried
+    # a cohaera.integrity:1 sidecar. Wall clock is the producer's to choose and
+    # ties in it are both accidental (coarse clocks) and forgeable; a sequence
+    # inside a stream is covered by the hash chain and the signature over its
+    # head, so it cannot be reordered without detection. See checks._ordering.
+    start_stream: str | None = None
+    start_seq: int | None = None
 
     @property
     def capability(self):
@@ -443,8 +573,61 @@ def _num(value: Any) -> float | None:
     return v
 
 
+def _argument_identity(data: dict[str, Any]) -> tuple[str | None, str, bool]:
+    """(digest, source, disagrees) for one call's arguments.
+
+    Two sources, and they are not equivalent. A producer-DECLARED digest is what
+    the policy engine's approval was written against, so it is what a binding
+    has to compare with. A RECOMPUTED one is a hash of the arguments Cohaera
+    actually saw, which is the stronger claim about what the call did but is
+    only available when the adapter captured arguments at all -- and observra
+    strips them on the hot path, so in most deployments it will not be.
+
+    When both exist they must agree. A producer whose declared digest does not
+    match its own emitted arguments is contradicting itself, and that is worth
+    surfacing: it is the shape of an agent declaring the digest an approval
+    covers while sending different arguments.
+    """
+    declared = evidence.digest_text(data.get(evidence.ARG_DIGEST_FIELD))
+    args = data.get("tool_args")
+    computed = evidence.arg_digest(args) if args is not None else None
+    if declared and computed:
+        return declared, ARGS_DECLARED, declared != computed
+    if declared:
+        return declared, ARGS_DECLARED, False
+    if computed:
+        return computed, ARGS_RECOMPUTED, False
+    return None, ARGS_ABSENT, False
+
+
+@dataclass(frozen=True)
+class ApprovalMatch:
+    """One approval, weighed against one call.
+
+    ``fresh`` is deliberately tri-state. False is an expired or not-yet-valid
+    approval; None is an approval that declared no window at all, which is a
+    weaker artefact than a fresh one and a different thing from a stale one.
+    Collapsing the two would report "approval expired" about an approval that
+    never claimed to expire.
+    """
+
+    approval: Approval
+    binding: str
+    fresh: bool | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"binding": self.binding, "fresh": self.fresh,
+                **self.approval.as_dict()}
+
+
 class SealedSessionError(RuntimeError):
     """An attempt to mutate a session that has already been scored against."""
+
+
+# Pure cache plumbing: rebinding these cannot change what the session IS, only
+# how often its derived values are recomputed over an event list that can no
+# longer change. Everything else is frozen by seal(). See Session.__setattr__.
+_SESSION_CACHE_FIELDS = frozenset({"_caches", "_revision"})
 
 
 @dataclass
@@ -478,6 +661,12 @@ class Session:
     limits: Limits = field(default=DEFAULT_LIMITS, repr=False, compare=False)
     manifest: CapabilityManifest = field(default=EMPTY_MANIFEST, repr=False,
                                          compare=False)
+    # What the stream verifier concluded about this session's records. Set by
+    # :func:`cohaera.ingest.assemble`, because sequence verification is a
+    # whole-input property and cannot be recomputed from one session's events.
+    # None means no verification was run at all, which is NOT the same as
+    # "verification found nothing" and must not be reported as clean.
+    integrity: SessionIntegrity | None = field(default=None, compare=False)
     _caches: dict[str, tuple[Any, Any]] = field(default_factory=dict, repr=False,
                                                 compare=False)
     _revision: int = field(default=0, repr=False, compare=False)
@@ -486,6 +675,43 @@ class Session:
     @property
     def sealed(self) -> bool:
         return self._sealed
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """COH-R13. Seal the SESSION, not just its event list.
+
+        ``seal`` froze ``events`` and nothing else, which closed one route to a
+        stale cache and left the others open. ``manifest`` is the clearest:
+        classification reads it, so rebinding it after sealing either serves
+        classes cached under the previous manifest -- an egress call still
+        reported read_only -- or silently reclassifies the session under a
+        manifest it was never sealed with. ``integrity`` is worse in kind,
+        because None there means no verification ran and must not be
+        distinguishable from a verdict; ``limits`` changes every bound the
+        evidence was cut to; and ``_sealed`` itself was rebindable, so the seal
+        could simply be switched off and ``add_event`` used again.
+
+        This is C4-07 and C4-08 a third time, and it gets the same answer they
+        did: remove the mutation rather than add an invalidation hook for
+        callers to forget. ``cohaera.ingest.assemble`` assigns ``integrity``
+        before it seals, and ``eval.harness.SessionCache`` hands one sealed
+        session to three scoring regimes on the strength of this guarantee.
+        """
+        # `_sealed` is absent from __dict__ until the dataclass __init__ sets
+        # it last, so construction is unaffected.
+        if self.__dict__.get("_sealed") and name not in _SESSION_CACHE_FIELDS:
+            raise SealedSessionError(
+                f"session {self.session_id!r} is sealed; {name!r} cannot be "
+                "rebound because derived values are cached from it and every "
+                "reader of a sealed session assumes it cannot change (C4-08, "
+                "COH-R13)")
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if self.__dict__.get("_sealed"):
+            raise SealedSessionError(
+                f"session {self.session_id!r} is sealed; {name!r} cannot be "
+                "deleted (COH-R13)")
+        object.__delattr__(self, name)
 
     # ---- cache plumbing --------------------------------------------------
     def _cached(self, key: str, build):
@@ -507,12 +733,14 @@ class Session:
         self._revision += 1
 
     def seal(self) -> None:
-        """Freeze the event list. Idempotent; after this the session is read-only."""
+        """Freeze the session. Idempotent; after this it is read-only."""
         if self._sealed:
             return
+        # Order matters: `_sealed` goes last because __setattr__ refuses every
+        # other rebinding once it is set, and that includes these two.
         self.events = tuple(self.events)
-        self._sealed = True
         self.invalidate()
+        self._sealed = True
 
     def add_event(self, event: Event) -> None:
         """Append an event and invalidate everything derived from the old set."""
@@ -522,7 +750,9 @@ class Session:
                 "cached and adding an event would serve stale ones (C4-08)")
         if isinstance(self.events, tuple):      # defensive: sealed flag cleared
             self.events = list(self.events)
-        self.events.append(event)
+        # `events` is Sequence because a SEALED session's is a tuple. Before
+        # sealing it is always a list, which the line above guarantees.
+        cast("list[Event]", self.events).append(event)
         self.invalidate()
 
     # ---- identity -------------------------------------------------------
@@ -653,6 +883,7 @@ class Session:
         for e in self.ordered_events:
             etype = e.event_type
             if etype == "tool_start":
+                adigest, asource, adisagrees = _argument_identity(e.data)
                 tc = ToolCall(
                     name=e.tool_name or "<unnamed>",
                     started_at=e.timestamp,
@@ -661,15 +892,20 @@ class Session:
                     had_args=e.data.get("tool_args") is not None,
                     state="open",
                     manifest=self.manifest,
+                    arg_digest=adigest,
+                    arg_digest_source=asource,
+                    arg_digest_disagrees=adisagrees,
+                    start_stream=e.integrity.stream_id if e.integrity else None,
+                    start_seq=e.integrity.seq if e.integrity else None,
                 )
-                idx = len(calls)
+                started = len(calls)
                 calls.append(tc)
                 if tc.span_id and tc.span_id not in open_by_span:
                     # Span collision: two open calls claiming the same span are
                     # not merged. The first keeps the index; the second falls
                     # back to name matching rather than silently overwriting.
-                    open_by_span[tc.span_id] = idx
-                open_by_name.setdefault(tc.name, deque()).append(idx)
+                    open_by_span[tc.span_id] = started
+                open_by_name.setdefault(tc.name, deque()).append(started)
 
             elif etype in {"tool_end", "tool_error"}:
                 sid = e.span_id
@@ -706,6 +942,7 @@ class Session:
                                else "mismatched_end" if sid
                                else "orphan_end"),
                         manifest=self.manifest,
+                        receipt=e.effect_receipt,
                     ))
                     continue
 
@@ -723,6 +960,7 @@ class Session:
                 if rev is not None:
                     tc.reversible = rev
                 tc.had_result = e.data.get("tool_result") is not None
+                tc.receipt = e.effect_receipt
                 tc.state = "complete"
 
         return calls
@@ -789,27 +1027,26 @@ class Session:
             for e in self.events:
                 if len(out) >= cap:
                     break
-                pats = e.data.get("injection_patterns")
-                # tuple as well as list: a frozen Event's sequences are tuples.
-                if isinstance(pats, (list, tuple)):
-                    items = pats
-                elif isinstance(pats, str) and pats:
-                    items = [p.strip() for p in pats.split(",") if p.strip()]
-                else:
+                items, _ = marker_list(e.data.get("injection_patterns"))
+                if not items:
                     continue
                 for p in items:
                     if len(out) >= cap:
                         break
-                    if isinstance(p, str) and p:
-                        out.append(p[:self.limits.max_marker_chars])
+                    out.append(p[:self.limits.max_marker_chars])
             return out
         return self._cached("markers", build)
 
     @property
     def max_delegation_depth(self) -> int:
-        depths = [e.data.get("current_depth") for e in self.events
-                  if isinstance(e.data.get("current_depth"), int)
-                  and not isinstance(e.data.get("current_depth"), bool)]
+        # Read once per event and narrowed with a walrus, rather than three
+        # separate .get calls the type checker has to prove agree with each
+        # other. `bool` is excluded because it is a subclass of `int` and a
+        # producer sending `current_depth: true` would otherwise contribute 1.
+        depths: list[int] = [
+            d for e in self.events
+            if isinstance(d := e.data.get("current_depth"), int)
+            and not isinstance(d, bool)]
         return max(depths) if depths else 0
 
     @property
@@ -828,6 +1065,96 @@ class Session:
     @property
     def policy_events(self) -> list[str]:
         return [e.event_type for e in self.events if e.event_type in POLICY_EVENTS]
+
+    # ---- P1 approvals ---------------------------------------------------
+    @property
+    def approvals(self) -> list[Approval]:
+        """Every well-formed approval in this session, in arrival order.
+
+        Bounded. An approval is a producer-supplied object and a session that
+        claims a hundred thousand of them is a resource attack, not a
+        well-governed agent.
+        """
+        def build() -> list[Approval]:
+            out: list[Approval] = []
+            for e in self.ordered_events:
+                if len(out) >= self.limits.max_approvals_per_session:
+                    break
+                a = e.approval
+                if a is not None:
+                    out.append(a)
+            return out
+        return self._cached("approvals", build)
+
+    @property
+    def _approvals_by_span(self) -> dict[str, list[Approval]]:
+        def build() -> dict[str, list[Approval]]:
+            index: dict[str, list[Approval]] = {}
+            for a in self.approvals:
+                if a.subject.span_id:
+                    index.setdefault(a.subject.span_id, []).append(a)
+            return index
+        return self._cached("approvals_by_span", build)
+
+    def approvals_for(self, call: ToolCall) -> list[ApprovalMatch]:
+        """Every approval naming this call's span, and how well each one bound.
+
+        Span alone is not a binding. An approval that names the span but a
+        different tool does not cover this call; one that names the span and the
+        tool but a different argument digest is the reuse case this schema
+        exists to catch, and it is reported as a mismatch rather than silently
+        dropped, because "an approval was presented for this call and did not
+        fit it" is a stronger statement than "no approval was presented".
+        """
+        if not call.span_id:
+            return []
+        out: list[ApprovalMatch] = []
+        for a in self._approvals_by_span.get(call.span_id, ()):
+            if a.subject.tool_id and a.subject.tool_id != call.name:
+                continue
+            if a.subject.arg_digest and call.arg_digest:
+                binding = (evidence.BOUND_EXACT
+                           if a.subject.arg_digest == call.arg_digest
+                           else evidence.BOUND_ARG_MISMATCH)
+            else:
+                # Either the approval or the call declined to identify the
+                # arguments. The span still binds; the arguments do not, and a
+                # verdict built on this has to say which of the two it got.
+                binding = evidence.BOUND_SPAN_ONLY
+            out.append(ApprovalMatch(approval=a, binding=binding,
+                                     fresh=a.covers_clock(call.started_at)))
+        return out
+
+    def covering_approval(self, call: ToolCall) -> ApprovalMatch | None:
+        """The strongest ALLOW that actually covers this call, if any.
+
+        Order matters and is the mechanism: an exact argument binding outranks a
+        span-only one, and an approval outside its validity window does not
+        cover anything at all. An expired approval is not an approval.
+        """
+        best: ApprovalMatch | None = None
+        for m in self.approvals_for(call):
+            if m.approval.decision != evidence.DECISION_ALLOW:
+                continue
+            if m.binding not in evidence.BINDING_TRUSTED or m.fresh is False:
+                continue
+            if best is None or (best.binding != evidence.BOUND_EXACT
+                                and m.binding == evidence.BOUND_EXACT):
+                best = m
+        return best
+
+    @property
+    def dangling_approvals(self) -> list[Approval]:
+        """Approvals whose subject matches no call in this session.
+
+        Either the emitter is wrong, or an approval was harvested for reuse
+        somewhere Cohaera cannot see. Both are worth a line in the record.
+        """
+        def build() -> list[Approval]:
+            spans = {c.span_id for c in self.tool_calls if c.span_id}
+            return [a for a in self.approvals
+                    if a.subject.span_id not in spans]
+        return self._cached("dangling_approvals", build)
 
     @property
     def total_cost_usd(self) -> float:
@@ -925,6 +1252,12 @@ class Finding:
     evidence: dict[str, Any] = field(default_factory=dict)
     family: str = ""
     confidence: float = 1.0
+    # How far the telemetry underneath this finding was itself established.
+    # Defaults to ``unattested`` rather than to a verified value, because that
+    # is the true state of every deployment that emits no integrity evidence,
+    # and a default that reads as "checked" would be the exact failure this
+    # field exists to remove. See cohaera.checks.evidence_status.
+    evidence_status: str = "unattested"
 
     _ORDER: ClassVar[dict[str, int]] = {
         "info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -977,14 +1310,14 @@ def to_cim_event(session: Session, findings: list[Finding],
         schema=schema,
     )
 
-    record = {
+    record: dict[str, Any] = {
         "type": "cohaera_session_verdict",
         "schema": schema,
         "event_type": "cohaera_session_verdict",
         "timestamp": session.ended_at,
         "session_id": session.session_id,
         "trace_id": session.session_id,
-        "agent_name": (session.agent_names or [None])[0],
+        "agent_name": session.agent_names[0] if session.agent_names else None,
         "framework": session.framework,
         "host": session.host,
         "user": session.user,

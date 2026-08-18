@@ -1,0 +1,24 @@
+# Every change needs a maintainer review. The paths below are called out
+# individually because a mistake in them is not visible in the diff.
+*                           @404SecNotFound
+
+# The schema firewall and the evidence layer. A change here can turn a rejection
+# into a coercion, or a critical finding into silence, without looking like it.
+/src/cohaera/validate.py    @404SecNotFound
+/src/cohaera/evidence.py    @404SecNotFound
+/src/cohaera/ed25519.py     @404SecNotFound
+/src/cohaera/limits.py      @404SecNotFound
+
+# Published numbers. The card is generated and CI fails on a diff, so an edit
+# here is either a regeneration or somebody typing over a measurement.
+/eval/EVALUATION-CARD.md    @404SecNotFound
+/eval/evaluation-card.json  @404SecNotFound
+
+# The catalogue of what still defeats this detector, and the self-test that
+# asserts it still does.
+/EVASION.md                 @404SecNotFound
+/tests/test_evasion.py      @404SecNotFound
+
+# Supply chain: pinned actions, required checks, the release surface.
+/.github/                   @404SecNotFound
+/pyproject.toml             @404SecNotFound

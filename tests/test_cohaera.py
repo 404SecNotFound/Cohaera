@@ -10,6 +10,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from cohaera.checks import (
@@ -23,7 +25,14 @@ from cohaera.checks import (
     run_all,
 )
 from cohaera.ingest import assemble
-from cohaera.model import Event, Session, to_cim_event
+from cohaera.limits import DEFECT_INJECTION_MARKERS_TYPE, DEFECT_SCANNER_CLAIM_TYPE
+from cohaera.model import (
+    Event,
+    Session,
+    scanner_marked,
+    scanner_reported,
+    to_cim_event,
+)
 
 BASE = 1_785_700_000.0
 
@@ -258,6 +267,108 @@ def test_ch03_silent_without_markers():
     s = sess(ev("tool_start", 0, tool_name="send_email", span_id="B", reversible=False),
              ev("tool_end", 1, tool_name="send_email", span_id="B", reversible=False))
     assert ch03_untrusted_to_consequential(s) == []
+
+
+# -- COH-R03: the scanner's claim is somebody else's assertion ---------------
+#
+# CH03 is the only check that turns an upstream tool's word into a CRITICAL
+# finding, which makes the type of that word load-bearing in a way no other
+# field is. It used to be read with plain truthiness.
+
+
+@pytest.mark.parametrize("claim", ["false", "no", "0", 0, 1, [], {}, "true"])
+def test_a_malformed_scanner_claim_produces_no_finding(claim):
+    """The reported reproduction, generalised.
+
+    ``"false"`` is a truthy string, so a scanner reporting that it found NOTHING
+    produced "the agent completed a consequential action after reading
+    attacker-controlled instructions", at critical, with no markers anywhere in
+    the session. Every one of these is a producer saying something Cohaera
+    cannot read, and none of them is grounds for an alert.
+    """
+    s = sess(ev("tool_end", 0, tool_name="fetch_kb", span_id="A",
+                has_injection_patterns=claim),
+             ev("tool_start", 5, tool_name="send_email", span_id="B", reversible=False),
+             ev("tool_end", 6, tool_name="send_email", span_id="B", reversible=False))
+    assert ch03_untrusted_to_consequential(s) == []
+
+
+def test_a_malformed_scanner_claim_is_recorded_rather_than_ignored():
+    """Absent, and SAID to be absent. Silence here would turn a producer's type
+    error into an invisible blind spot, which is the failure mode the schema
+    firewall exists to prevent."""
+    s = sess(ev("tool_end", 0, tool_name="fetch_kb", span_id="A",
+                has_injection_patterns="false",
+                injection_patterns="INSTRUCTION_OVERRIDE,OTHER"))
+    assert DEFECT_SCANNER_CLAIM_TYPE in s.integrity_defects
+    assert DEFECT_INJECTION_MARKERS_TYPE in s.integrity_defects
+    assert s.injection_markers == []
+
+
+def test_a_malformed_scanner_claim_does_not_buy_ch03_coverage():
+    """A type error must not upgrade CH03's blind spot into a clean result.
+
+    The check cannot run either way. The difference is whether the verdict says
+    so, and a session where the only scanner field is unreadable is a session
+    nobody scanned as far as Cohaera can tell.
+    """
+    def ch03_state(*events):
+        cov = coverage(sess(*events), None)
+        return {c["check"]: c["status"] for c in cov["checks"]}["CH03_untrusted_to_consequential"]
+
+    call = (ev("tool_start", 5, tool_name="send_email", span_id="B", reversible=False),
+            ev("tool_end", 6, tool_name="send_email", span_id="B", reversible=False))
+    malformed = ev("tool_end", 0, tool_name="fetch_kb", span_id="A",
+                   has_injection_patterns="false")
+    scanned = ev("tool_end", 0, tool_name="fetch_kb", span_id="A",
+                 has_injection_patterns=False)
+
+    assert ch03_state(malformed, *call) == ch03_state(*call), (
+        "an unreadable scanner field counted as a scanner having run")
+    assert ch03_state(scanned, *call) != ch03_state(*call), (
+        "a scanner that ran and found nothing is evidence and must count")
+
+
+def test_a_marker_list_is_taken_whole_or_not_at_all():
+    """Half-understood evidence is the shape this project refuses everywhere.
+
+    The old reader kept the elements it recognised, so a list Cohaera plainly
+    could not parse still yielded markers -- and those markers still fired a
+    critical finding.
+    """
+    s = sess(ev("tool_end", 0, tool_name="fetch_kb", span_id="A",
+                injection_patterns=[{}, "INSTRUCTION_OVERRIDE"]),
+             ev("tool_start", 5, tool_name="send_email", span_id="B", reversible=False),
+             ev("tool_end", 6, tool_name="send_email", span_id="B", reversible=False))
+    assert s.injection_markers == []
+    assert DEFECT_INJECTION_MARKERS_TYPE in s.integrity_defects
+    assert ch03_untrusted_to_consequential(s) == []
+
+
+def test_a_well_formed_claim_still_fires():
+    """The other half. Tightening a type must not silence the check itself."""
+    for marked in ({"has_injection_patterns": True},
+                   {"injection_patterns": ["INSTRUCTION_OVERRIDE"]},
+                   {"injection_patterns": ["A", "B"], "has_injection_patterns": True}):
+        s = sess(ev("tool_end", 0, tool_name="fetch_kb", span_id="A", **marked),
+                 ev("tool_start", 5, tool_name="send_email", span_id="B", reversible=False),
+                 ev("tool_end", 6, tool_name="send_email", span_id="B", reversible=False))
+        f = ch03_untrusted_to_consequential(s)
+        assert len(f) == 1 and f[0].severity == "critical", marked
+
+
+def test_an_empty_marker_list_is_a_scanner_that_found_nothing():
+    """Not a marker, but not silence either: it is a scanner reporting a clean
+    read, which is exactly the evidence that separates "no markers" from "no
+    scanner"."""
+    s = sess(ev("tool_end", 0, tool_name="fetch_kb", span_id="A",
+                injection_patterns=[]),
+             ev("tool_start", 5, tool_name="send_email", span_id="B", reversible=False),
+             ev("tool_end", 6, tool_name="send_email", span_id="B", reversible=False))
+    assert ch03_untrusted_to_consequential(s) == []
+    assert not s.integrity_defects
+    assert scanner_reported(s.events[0].data)
+    assert not scanner_marked(s.events[0].data)
 
 
 # ---------------------------------------------------------------- CH04

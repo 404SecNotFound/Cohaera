@@ -29,16 +29,27 @@ import pytest
 yaml = pytest.importorskip("yaml", reason="PyYAML is a dev dependency")
 
 REPO = Path(__file__).resolve().parent.parent
-WORKFLOW = REPO / ".github" / "workflows" / "ci.yml"
+WORKFLOW_DIR = REPO / ".github" / "workflows"
+WORKFLOW = WORKFLOW_DIR / "ci.yml"
 RULESET = REPO / ".github" / "rulesets" / "main.json"
+DEPENDABOT = REPO / ".github" / "dependabot.yml"
 
 _MATRIX_REF = re.compile(r"\$\{\{\s*matrix\.([A-Za-z_][A-Za-z0-9_-]*)\s*\}\}")
+# `uses: owner/repo@ref` or `owner/repo/path@ref`, with whatever trails it.
+_USES = re.compile(r"^\s*-?\s*uses:\s*(\S+)\s*(#.*)?$", re.MULTILINE)
+_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
-def load_workflow() -> dict:
+def workflow_files() -> list[Path]:
+    files = sorted(WORKFLOW_DIR.glob("*.yml")) + sorted(WORKFLOW_DIR.glob("*.yaml"))
+    assert files, f"no workflow files under {WORKFLOW_DIR}"
+    return files
+
+
+def load_workflow(path: Path = WORKFLOW) -> dict:
     # "on:" is parsed by YAML 1.1 as the boolean True, which is a wart rather
     # than a problem here: nothing below touches it.
-    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 def load_ruleset() -> dict:
@@ -100,8 +111,15 @@ def test_required_checks_match_the_ci_jobs_exactly():
     Both directions matter. A required check with no job blocks every PR
     forever; a job with no required check runs and is then ignored, which is a
     gate that reports without gating.
+
+    Every workflow file, not just ci.yml: codeql.yml reports a required check
+    too, and reading one file would have called it unknown and failed here --
+    or, worse, reading one file and only asserting one direction would have let
+    a second workflow's gate go unrequired.
     """
-    expected = expected_check_names(load_workflow())
+    expected: set[str] = set()
+    for path in workflow_files():
+        expected |= expected_check_names(load_workflow(path))
     required = required_contexts(load_ruleset())
 
     missing = expected - required          # job exists, nothing requires it
@@ -189,5 +207,194 @@ def test_status_checks_are_strict():
     pytest.fail("no required_status_checks rule")
 
 
+# ---------------------------------------------------------------------------
+# Supply chain: the workflow files are themselves a dependency manifest
+# ---------------------------------------------------------------------------
+
+
+def test_every_action_is_pinned_to_a_commit_sha():
+    """`uses: actions/checkout@v4` is a name lookup in a repository we do not
+    control. Whoever can move the `v4` tag can run arbitrary code in a job that
+    holds this repository's token, and the workflow file does not change, so
+    there is no diff for anyone to review.
+
+    A SHA is a content address. This asserts every `uses:` is one, in every
+    workflow, so an unpinned action added later fails the suite rather than
+    depending on a reviewer noticing a two-character difference.
+    """
+    unpinned = []
+    for path in workflow_files():
+        for ref, _comment in _USES.findall(path.read_text(encoding="utf-8")):
+            if ref.startswith("./") or ref.startswith("docker://"):
+                continue          # a local composite action or a pinned image
+            _, _, rev = ref.partition("@")
+            if not _SHA.match(rev):
+                unpinned.append(f"{path.name}: {ref}")
+    assert not unpinned, (
+        "these actions are pinned to a mutable tag or branch rather than to a "
+        f"commit: {unpinned}. Resolve with: "
+        "git ls-remote https://github.com/OWNER/REPO refs/tags/TAG")
+
+
+def test_every_pinned_action_says_which_version_it_is():
+    """A bare 40-character hex string is unreviewable. The trailing comment is
+    what lets a human see that a Dependabot pull request moved checkout from
+    v4.4.0 to v4.5.0 rather than to somewhere else entirely."""
+    missing = []
+    for path in workflow_files():
+        for ref, comment in _USES.findall(path.read_text(encoding="utf-8")):
+            if "@" not in ref or not _SHA.match(ref.partition("@")[2]):
+                continue
+            if not comment or not re.search(r"v\d", comment):
+                missing.append(f"{path.name}: {ref}")
+    assert not missing, (
+        "these pinned actions carry no version comment, so the pin cannot be "
+        f"read or reviewed: {missing}. Write: uses: owner/repo@<sha> # vX.Y.Z")
+
+
+def test_dependabot_covers_the_actions_that_are_now_frozen():
+    """Pinning without an update path trades a mutable tag for a permanently
+    stale dependency, which is not obviously the better trade. This asserts the
+    other half exists."""
+    assert DEPENDABOT.is_file(), (
+        "actions are pinned to SHAs but there is no .github/dependabot.yml, so "
+        "nothing will ever unpin them for a security update")
+    config = yaml.safe_load(DEPENDABOT.read_text(encoding="utf-8"))
+    ecosystems = {u.get("package-ecosystem") for u in config.get("updates", [])}
+    assert "github-actions" in ecosystems, (
+        f"dependabot covers {sorted(ecosystems)} but not github-actions")
+
+
+def test_codeql_is_absent_in_both_places_or_present_in_both():
+    """CodeQL was REMOVED, and this pins the removal as a matched pair.
+
+    It ran, and its analysis was clean -- 26 of 26 Python files, the full
+    security-extended suite. What it could never do is UPLOAD the result: this
+    is a private repository on a personal account, where code scanning requires
+    GitHub Code Security, so every run ended
+
+        Code scanning is not enabled for this repository.
+        CodeQL job status was configuration error.
+
+    That is not a defect in this diff and no code change fixes it. The reason it
+    could not simply be left red is the ruleset: `codeql (python)` was listed as
+    a tenth required status check, and a required check that can never report
+    success blocks every pull request forever -- the exact failure
+    ``test_required_checks_match_the_ci_jobs_exactly`` exists to prevent,
+    arriving from the other direction. A permanently failing check is also how
+    people learn to ignore red.
+
+    So the workflow and the required check were removed TOGETHER, and this test
+    is what stops them coming back apart. Restoring one without the other
+    reintroduces either a blocked repository or an ungated job, and which of
+    those you get depends on which half somebody restores first.
+
+    TO RESTORE, once code scanning is available -- either by making the
+    repository public, where it is free, or by enabling Code Security on the
+    account:
+
+        1. git revert the commit that removed .github/workflows/codeql.yml
+        2. add { "context": "codeql (python)" } to the required_status_checks
+           list in .github/rulesets/main.json
+        3. re-apply the ruleset (it does not apply itself; see this directory's
+           README)
+
+    Do 1 and 2 in the same commit. This test fails if you do not.
+    """
+    workflow = WORKFLOW_DIR / "codeql.yml"
+    required = required_contexts(load_ruleset())
+    if workflow.is_file():
+        assert "codeql (python)" in required, (
+            "codeql.yml is back but the ruleset does not require it, so the job "
+            "runs and a red result would not block a merge")
+        loaded = load_workflow(workflow)
+        triggers = loaded[True] if True in loaded else loaded.get("on")
+        assert "pull_request" in triggers, (
+            f"codeql.yml triggers on {sorted(triggers)}; without pull_request "
+            "the required check never reports and every pull request is blocked")
+    else:
+        assert "codeql (python)" not in required, (
+            "the ruleset requires 'codeql (python)' but codeql.yml has been "
+            "removed, so no job will ever report it and every pull request is "
+            "blocked forever")
+
+
+def test_workflow_permissions_are_least_privilege():
+    """A workflow with no explicit `permissions:` inherits the repository
+    default, which may be write-all. Every one of these reads."""
+    for path in workflow_files():
+        workflow = load_workflow(path)
+        perms = workflow.get("permissions")
+        assert perms is not None, (
+            f"{path.name} declares no top-level permissions, so it inherits "
+            "the repository default")
+        assert perms.get("contents") == "read", (
+            f"{path.name} grants contents: {perms.get('contents')!r} at the "
+            "top level; grant write per job if a job genuinely needs it")
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# ---------------------------------------------------------------------------
+# COH-R15 / COH-R17: the two gates the sixth review found missing or misaimed
+# ---------------------------------------------------------------------------
+
+
+def _steps(job_name: str) -> list[dict]:
+    return load_workflow()["jobs"][job_name].get("steps", [])
+
+
+def _run_text(job_name: str) -> str:
+    return "\n".join(s.get("run", "") for s in _steps(job_name))
+
+
+def test_r15_the_type_checker_actually_runs_in_ci():
+    """The review raised typing as unverified because mypy was installed
+    nowhere. A gate that exists only in a contributor's shell is not a gate."""
+    text = _run_text("test")
+    assert "mypy" in text, "no mypy step in the test job"
+    assert any(line.strip() == "mypy" for line in text.splitlines()), (
+        "mypy must be invoked, not merely mentioned")
+
+
+def test_r15_mypy_is_pinned_and_configured_in_pyproject():
+    """Configured in the repository rather than inherited from whichever
+    version CI resolves -- the same argument as the ruff selection."""
+    pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    assert "[tool.mypy]" in pyproject
+    assert re.search(r'"mypy>=[\d.]+,<\d+"', pyproject), (
+        "mypy must be in the dev extra with an upper bound")
+
+
+def test_r15_the_pep561_marker_exists_and_is_packaged():
+    """Both halves. The file on disk does nothing unless setuptools is told to
+    ship it, and a marker that does not reach the wheel means every downstream
+    type checker reads this package as Any."""
+    assert (REPO / "src" / "cohaera" / "py.typed").is_file()
+    pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    assert "[tool.setuptools.package-data]" in pyproject
+    assert 'cohaera = ["py.typed"]' in pyproject
+
+
+def test_r17_the_sbom_describes_the_wheel_not_the_build_machine():
+    """`cyclonedx-py environment` with no argument documents the runner's own
+    interpreter -- pip, build, cyclonedx-bom, setuptools and whatever the
+    GitHub image ships -- under a step named "for the built artefact"."""
+    text = _run_text("sbom")
+    assert "cyclonedx-py environment" in text, "the sbom job stopped generating one"
+    assert not re.search(r"cyclonedx-py environment\s+-o", text), (
+        "cyclonedx-py environment with no target describes the build "
+        "environment, not the artefact")
+    assert "/tmp/sbom-venv" in text, (
+        "the SBOM must be taken of a venv containing the wheel")
+
+
+def test_r17_the_sbom_is_asserted_on_rather_than_only_uploaded():
+    """An SBOM nothing checks is an artefact, not a control."""
+    text = _run_text("sbom")
+    assert 'root.get("name") == "cohaera"' in text, (
+        "nothing checks that the SBOM's subject is this project")
+    assert "zero dependencies" in text, (
+        "nothing checks the closure against the zero-dependency claim")

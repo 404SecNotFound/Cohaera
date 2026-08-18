@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+title: "Cohaera: session-scoped security verdicts for agent telemetry"
+message: >-
+  If you use Cohaera in academic work, please cite it. Please also cite the
+  version and the evaluation card digest: the numbers move between versions and
+  a citation without them is not reproducible.
+type: software
+authors:
+  - family-names: Hafeez
+    given-names: Imran
+repository-code: "https://github.com/404SecNotFound/Cohaera"
+abstract: >-
+  Cohaera is a correlation layer for AI agent telemetry. It turns a flat
+  per-event stream into session-scoped verdicts a SIEM can fire rules on, and
+  reports what it could not evaluate, because a check that silently cannot run
+  is a false negative wearing a green tick. It is dependency-free, offline, and
+  ships an evaluation card that reports its false-positive rate and a catalogue
+  of the ways its checks can be defeated.
+keywords:
+  - agent security
+  - LLM agents
+  - detection engineering
+  - telemetry
+  - SIEM
+  - prompt injection
+license: Apache-2.0
+version: 0.2.0

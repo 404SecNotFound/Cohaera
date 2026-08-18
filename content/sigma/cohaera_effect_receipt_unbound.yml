@@ -1,0 +1,62 @@
+title: Agent Effect Receipt Does Not Bind To Its Call
+id: 9f4c2b18-7e05-4d3a-8c61-2b7f9e04d5a6
+status: experimental
+description: |
+  A call carries an effect receipt that names a different span, a different tool,
+  or a different argument digest than the call it arrived on.
+
+  A receipt is only worth something if it is bound. An unbound one can be copied
+  from a call that really happened onto one that did not, which would turn the
+  whole mechanism into decoration -- an impressive-looking field that proves
+  nothing. Checking the binding is what stops that, and this rule is what the
+  check produces when it fails.
+
+  TWO READINGS, AND THEY ARE FAR APART. Most often this is an adapter emitting
+  the binding incorrectly, which is why the level is medium rather than critical:
+  a new integration gets the span wrong and every receipt in the session fails to
+  bind at once. The other reading is a receipt harvested from a legitimate call
+  and presented for a malicious one. The shape distinguishes them: a systematic
+  adapter fault affects every receipt in the session uniformly, while a copied
+  receipt is one call out of many, and usually the consequential one.
+
+  data.findings[].evidence.unbound[].binding says which part failed:
+
+    unbound        the span or the tool does not match this call
+    arg_mismatch   span and tool match, arguments do not. This is the narrow,
+                   deliberate case -- the same tool on the same span with
+                   different arguments -- and it is the least likely to be an
+                   adapter bug
+
+  Requires Cohaera and tool adapters emitting cohaera.receipt:1.
+references:
+    - https://github.com/404SecNotFound/Cohaera
+    - https://github.com/404SecNotFound/Cohaera/blob/main/docs/EVIDENCE-TRUST.md
+author: Imran Hafeez
+date: 2026-08-07
+modified: 2026-08-07
+related:
+    - id: c81d6f45-2a93-4e70-b6c4-9d05e3a7182b
+      type: similar
+logsource:
+    product: cohaera
+    service: session_verdict
+detection:
+    selection:
+        type: 'cohaera_session_verdict'
+        data.triggered_rules|contains: 'CH07_effect_receipt_does_not_bind'
+    condition: selection
+fields:
+    - session_id
+    - agent_name
+    - user
+    - host
+    - data.tool_sequence
+    - data.coverage.completeness
+falsepositives:
+    - A newly integrated adapter emitting the binding incorrectly. Expect every
+      receipt in the session to fail together; a single unbound receipt among
+      many bound ones is the case to investigate.
+    - An adapter that omits arguments from its telemetry while the authority's
+      receipt was minted against the full set, so the digests cannot agree.
+      Cohaera only reports a mismatch when BOTH sides declared a digest.
+level: medium

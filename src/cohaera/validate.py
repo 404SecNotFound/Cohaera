@@ -33,6 +33,7 @@ message) are truncated, and the truncation is itself recorded as a defect.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re
 from dataclasses import dataclass, field
@@ -43,10 +44,12 @@ from .limits import (
     DEFECT_DATA_TYPE,
     DEFECT_EVENT_TYPE_TYPE,
     DEFECT_IDENTITY_TYPE,
+    DEFECT_INJECTION_MARKERS_TYPE,
     DEFECT_NUMERIC_NONFINITE,
     DEFECT_RESPONSE_TEXT_LENGTH,
     DEFECT_RESPONSE_TEXT_TYPE,
     DEFECT_REVERSIBLE_TYPE,
+    DEFECT_SCANNER_CLAIM_TYPE,
     DEFECT_SESSION_KEY_TYPE,
     DEFECT_SPAN_LENGTH,
     DEFECT_SPAN_TYPE,
@@ -57,6 +60,86 @@ from .limits import (
 )
 
 _NAN = float("nan")
+
+# ---------------------------------------------------------------------------
+# Strict JSON (COH-R10)
+# ---------------------------------------------------------------------------
+#
+# ``json.loads`` accepts three things a security decoder must not, and every one
+# of them is a difference between what Cohaera sees and what the next parser to
+# read the same bytes sees. That gap is a parser differential, and it is how a
+# field gets one value in the detector and another in the SIEM:
+#
+#   DUPLICATE KEYS. `{"reversible": false, "reversible": true}` is valid JSON
+#     and last-wins in CPython. Other decoders take the first. A producer that
+#     wants a call classified one way here and another way downstream writes it
+#     twice, and neither reader has done anything wrong.
+#   NON-FINITE NUMBERS. `NaN`, `Infinity` and `-Infinity` are not JSON at all --
+#     no other language's decoder is obliged to accept them -- and NaN compares
+#     false to everything, including itself, which is a fine way to make an
+#     ordering check silently decline.
+#   FLOAT OVERFLOW. `1e400` is ordinary-looking JSON that becomes `inf`, and
+#     ``parse_constant`` is NOT consulted for it. A fix that hooks only the
+#     three named constants leaves this one open, which is why the float hook
+#     is here as well.
+#
+# The integer bound is not from the review; it turned up while testing the rest.
+# CPython 3.11 refuses int-to-str conversion beyond 4300 digits, so a record
+# carrying a 5000-digit integer raised a bare ``ValueError`` -- not a
+# ``JSONDecodeError`` -- straight out of ``json.loads``, past an ingest handler
+# that catches decode errors, and out of the run. Bounded here so it is a
+# rejected record with a reason code instead.
+#
+# The bound is a module constant rather than a ``Limits`` field on purpose: it
+# says what JSON Cohaera will admit at all, which is not a per-run policy knob,
+# and threading a Limits through five call sites for a number nobody will tune
+# would cost more than it explains.
+MAX_JSON_INT_DIGITS = 1024
+
+
+class StrictJSONError(ValueError):
+    """JSON that a decoder accepts and a trust boundary should not."""
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise StrictJSONError(f"duplicate object key {key!r}")
+        out[key] = value
+    return out
+
+
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        raise StrictJSONError(f"non-finite number {text!r}")
+    return value
+
+
+def _bounded_int(text: str) -> int:
+    digits = len(text.lstrip("-+"))
+    if digits > MAX_JSON_INT_DIGITS:
+        raise StrictJSONError(
+            f"integer with {digits} digits exceeds "
+            f"MAX_JSON_INT_DIGITS={MAX_JSON_INT_DIGITS}")
+    return int(text)
+
+
+def _no_constants(name: str) -> Any:
+    raise StrictJSONError(f"{name} is not admissible JSON")
+
+
+def strict_json_loads(text: str | bytes) -> Any:
+    """``json.loads`` with the three permissive behaviours turned off.
+
+    Raises :class:`StrictJSONError` -- a ``ValueError``, like
+    ``json.JSONDecodeError``, so a caller that already refuses unparseable input
+    refuses this too without learning a new exception type.
+    """
+    return json.loads(text, object_pairs_hook=_no_duplicate_keys,
+                      parse_float=_finite_float, parse_int=_bounded_int,
+                      parse_constant=_no_constants)
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +238,51 @@ def tri_state_bool(value: Any) -> tuple[bool | None, tuple[str, ...]]:
     return None, (DEFECT_REVERSIBLE_TYPE,)
 
 
+def scanner_claim(value: Any) -> tuple[bool | None, tuple[str, ...]]:
+    """``has_injection_patterns``: exactly a bool, or absent with a defect.
+
+    The same rule as :func:`tri_state_bool` and a separate function because the
+    defect means something different. ``reversible`` mis-typed makes a call
+    unclassifiable. This mis-typed makes CH03 report, at CRITICAL, that an agent
+    completed an action after reading attacker-controlled instructions -- on the
+    word of a field that said ``"false"``.
+
+    False is a real answer and is kept as one: a scanner that ran and found
+    nothing is evidence, and is what separates "no markers" from "no scanner".
+    """
+    if value is None:
+        return None, ()
+    if isinstance(value, bool):
+        return value, ()
+    return None, (DEFECT_SCANNER_CLAIM_TYPE,)
+
+
+def marker_list(value: Any) -> tuple[tuple[str, ...] | None, tuple[str, ...]]:
+    """``injection_patterns``: a list of non-empty strings, or absent.
+
+    ALL OR NOTHING, deliberately. The previous reader skipped elements it did
+    not like and kept the rest, so ``[{}, "INSTRUCTION_OVERRIDE"]`` was a
+    one-marker list from a scanner that had plainly emitted something Cohaera
+    did not understand. Half-understood evidence is the shape this project
+    refuses everywhere else -- see the P1 sidecar note in ``limits`` -- and a
+    partially-parsed marker list is no different.
+
+    A string is not a list. It used to be split on commas, which meant a
+    producer could choose between one marker and several by punctuation, and
+    nothing in the schema said which it meant.
+    """
+    if value is None:
+        return None, ()
+    if not isinstance(value, (list, tuple)) or isinstance(value, (str, bytes)):
+        return None, (DEFECT_INJECTION_MARKERS_TYPE,)
+    out = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            return None, (DEFECT_INJECTION_MARKERS_TYPE,)
+        out.append(item)
+    return tuple(out), ()
+
+
 # ---------------------------------------------------------------------------
 # Record-level validation
 # ---------------------------------------------------------------------------
@@ -233,13 +361,20 @@ def view(raw: dict[str, Any], limits: Limits = DEFAULT_LIMITS) -> RecordView:
     if raw.get("data") is not None and not isinstance(raw.get("data"), dict):
         defects.append(DEFECT_DATA_TYPE)
 
-    data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+    raw_data = raw.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     if "response_text" in data:
         _, codes = semantic_text(data.get("response_text"), limits.max_response_chars,
                                  DEFECT_RESPONSE_TEXT_TYPE, DEFECT_RESPONSE_TEXT_LENGTH)
         defects.extend(codes)
     if "reversible" in data:
         _, codes = tri_state_bool(data.get("reversible"))
+        defects.extend(codes)
+    if "has_injection_patterns" in data:
+        _, codes = scanner_claim(data.get("has_injection_patterns"))
+        defects.extend(codes)
+    if "injection_patterns" in data:
+        _, codes = marker_list(data.get("injection_patterns"))
         defects.extend(codes)
 
     # dict.fromkeys, not set(), so the order is the order they were found in.
@@ -308,8 +443,18 @@ class IngestReport:
                           compare=False)
     reject_codes: dict[str, int] = field(default_factory=dict)
     defect_codes: dict[str, int] = field(default_factory=dict)
+    # COH-R02. The estimated peak resident cost of what has been ACCEPTED, so
+    # an operator can see how close a run came to max_resident_bytes rather
+    # than discovering the ceiling by being OOM-killed at it.
+    resident_bytes: int = 0
     aborted: bool = False
     abort_reason: str = ""
+    # What the collector-stream verifier concluded across the whole input, as
+    # opposed to per session. Filled in by ``ingest.assemble``. It carries the
+    # per-stream extent that makes a cross-run replay visible by comparing two
+    # verdicts, which is the only form of replay detection available to a
+    # process that keeps no state between runs. See evidence.Freshness.
+    integrity: dict[str, Any] = field(default_factory=dict)
 
     def note_bytes(self, blob: bytes, tag: bytes = b"") -> None:
         """Fold one raw record into the content digest, accepted or rejected."""
@@ -353,6 +498,7 @@ class IngestReport:
             "defect_codes": dict(sorted(self.defect_codes.items())),
             "aborted": self.aborted,
             "abort_reason": self.abort_reason,
+            "resident_bytes_estimate": self.resident_bytes,
             "content_digest": self.content_digest,
         }
 

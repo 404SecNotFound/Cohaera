@@ -22,22 +22,75 @@ band, from the same path an attacker would control to hide an action (SEC-03).
 The manifest is loaded out of band from a file the operator chose, so it is the
 stronger of the two claims about the same tool.
 
-The manifest is not signed here. Signing needs a key distribution story that
-does not exist yet, and shipping a signature field that nothing verifies would
-be worse than shipping none. What is here is the digest, recorded in every
+SIGNING THE MANIFEST LIVES OUTSIDE THIS MODULE, AND NOW EXISTS
+    This file used to say the manifest was unsigned because signing needed a key
+    distribution story that did not exist. That story is now
+    ``cohaera.trust_store:1`` (see :mod:`cohaera.evidence`), so the manifest can
+    be attested with a detached ``cohaera.policy_signature:1`` over its exact
+    bytes, verified against a key the operator gave the ``policy`` role.
+
+    The signature is deliberately NOT a field in this file, and it is not parsed
+    here. Two reasons, and both are the same reason in different clothes. A
+    signature embedded in the document it signs has to be excised before hashing,
+    which is a canonicalisation problem and canonicalisation problems are where
+    signature bugs live. And a manifest parser that verified its own signature
+    would be checking a claim against a key chosen by the same call that supplied
+    the claim; the check belongs to the caller, which is why ``cli`` does it and
+    refuses to score when it fails.
+
+    Signing is OPTIONAL and its absence is REPORTED. Every verdict carries a
+    ``policy_attestations`` entry saying ``POLICY_SIGNATURE_ABSENT`` when nothing
+    was supplied, because an unsigned manifest that says so is a different
+    artifact from one that passes in silence.
+
+The digests below are unchanged and still do their own job: recorded in every
 verdict, so that two runs disagreeing about what a tool does are distinguishable
-after the fact.
+after the fact whether or not anybody signed anything.
+
+TWO DIGESTS, NOT ONE (C4-10)
+    The recorded digest used to be a hash of the file's bytes alone, so
+    re-indenting the JSON or reordering its keys changed it and every verdict
+    after the edit looked like it had run under a different policy. The fourth
+    review proposed replacing it with a hash of the parsed semantics. That trade
+    goes the wrong way on its own: a semantic digest reports *no change* for an
+    edit that adds a field this parser does not yet read, and "did the policy
+    file change at all" is exactly the question a tamper signal has to answer
+    strictly.
+
+    So both ship, and they answer different questions:
+
+        file_digest      sha256 of the exact bytes read from disk. The tamper
+                         signal. Moves for any edit, including ones Cohaera
+                         cannot interpret.
+        semantic_digest  sha256 of the parsed capability records -- every field
+                         Cohaera acts on, normalised and canonically ordered.
+                         Moves only when the meaning changes.
+
+    The pair is worth more than either alone, because the *gap* between them is
+    itself a reading. Same semantic digest, different file digest: a reformat,
+    or an edit in a part of the file this version does not parse. Different
+    semantic digest: the policy changed, and every verdict on either side of the
+    change is answering a different question.
+
+    ``semantic_digest`` deliberately excludes ``producer``, ``manifest_version``
+    and ``producer_schema_version``. Those are labels travelling with the
+    verdict, not inputs to any classification, and folding them in would make a
+    version bump indistinguishable from a capability change -- which is the
+    failure the semantic digest exists to avoid.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from .limits import DEFAULT_LIMITS, Limits
+from .validate import strict_json_loads
 
 # Effects, in the vocabulary the review's F2 asks for.
 EFFECT_READ = "read"
@@ -54,6 +107,17 @@ VALID_EFFECTS = frozenset({EFFECT_READ, EFFECT_WRITE, EFFECT_DELETE,
 # says nothing about it.
 _EGRESS = {EFFECT_EGRESS}
 _STATE_CHANGE = {EFFECT_WRITE, EFFECT_DELETE, EFFECT_EXECUTE}
+
+# Tagged into the semantic digest so the digest commits to the SET OF FIELDS it
+# covers, not just their values. When a later version starts parsing a field it
+# ignores today, that field joins the semantics; bumping this tag makes every
+# digest visibly change rather than silently mean something new.
+SEMANTICS_SCHEMA = "cohaera.manifest.semantics:2"
+
+# There are five valid effects. Anything longer is duplicates or noise, and the
+# only thing a 10-million-element list can still achieve is an error message
+# expensive enough to be the attack.
+_MAX_EFFECTS_DECLARED = 32
 
 
 class ManifestError(ValueError):
@@ -85,6 +149,63 @@ class Capability:
     def consequential(self) -> bool:
         return self.klass in {"state_change", "egress"}
 
+    def semantics(self) -> dict[str, Any]:
+        """This record reduced to what it MEANS, with spelling normalised away.
+
+        Two declarations that Cohaera would act on identically must reduce to
+        the same structure here, or the semantic digest is just a slower byte
+        digest. Hence: effects sorted (a set, written as a list); sensitive_args
+        sorted and de-duplicated (a set of argument names, and naming one twice
+        does not make it more sensitive); an empty ``destination`` folded to
+        None, because a declared-but-blank destination is an absent one.
+
+        Faithfulness to what the file literally said is ``file_digest``'s job.
+        """
+        return {
+            "effects": sorted(self.effects),
+            "reversible": self.reversible,
+            "destination": self.destination or None,
+            "requires_approval": self.requires_approval,
+            "sensitive_args": sorted(set(self.sensitive_args)),
+        }
+
+
+@dataclass(frozen=True)
+class PolicyDeclaration:
+    """What one guardrail is declared to DO when it fires.
+
+    P1.3 gives the policy engine a place to say ``enforcement`` on the event
+    itself, and that field alone would be a mistake to act on. It arrives in
+    band, from the same path an attacker controls, and it SUPPRESSES a finding:
+    an agent that wanted CH04 quiet would stamp ``advisory`` on a control that
+    blocks and never be contradicted. That is SEC-03 exactly -- the producer's
+    ``reversible`` flag deciding whether a call is consequential -- reappearing
+    on the check that is supposed to catch a bypass.
+
+    So the manifest gets a ``policies`` section, and it outranks the event, for
+    the same reason and with the same precedence as ``tools``: the operator
+    chose this file, the agent wrote the event. A deployment that declares its
+    blocking controls here cannot be talked out of them by the thing being
+    watched.
+
+    Keyed on ``policy_id`` where the producer emits one, and on the event type
+    otherwise, because observra's ``cost_threshold_exceeded`` and
+    ``depth_exceeded`` carry no policy identifier at all.
+    """
+
+    policy_id: str
+    enforcement: str
+    description: str = ""
+
+    def semantics(self) -> dict[str, Any]:
+        return {"enforcement": self.enforcement}
+
+
+# Values a policy may declare. Mirrors cohaera.evidence.VALID_ENFORCEMENT, and
+# is spelled out here rather than imported because ``evidence`` imports
+# ``identity`` and ``validate``, and nothing on the manifest path needs either.
+VALID_ENFORCEMENT = frozenset({"blocking", "advisory"})
+
 
 @dataclass(frozen=True)
 class CapabilityManifest:
@@ -93,8 +214,48 @@ class CapabilityManifest:
     producer: str = ""
     manifest_version: str = ""
     producer_schema_version: str = ""
-    tools: dict[str, Capability] = field(default_factory=dict)
-    digest: str = ""
+    tools: Mapping[str, Capability] = field(default_factory=dict)
+    policies: Mapping[str, PolicyDeclaration] = field(default_factory=dict)
+    # See the module docstring. file_digest is the tamper signal and is empty
+    # for a manifest built in memory; semantic_digest is defined for every
+    # manifest, file-backed or not, because it is computed from the records.
+    file_digest: str = ""
+    semantic_digest: str = ""
+
+    def __post_init__(self) -> None:
+        """Seal the two mappings. COH-R05.
+
+        ``frozen=True`` froze the ATTRIBUTES and nothing they pointed at, so a
+        manifest was immutable in exactly the way that does not matter.
+        ``manifest.tools["send_email"] = harmless`` still worked, and both
+        digests -- the file digest an operator compares against their copy, and
+        the semantic digest that goes into every verdict's provenance -- went on
+        describing the manifest as it had been at load time. The record and the
+        engine's belief about the record could disagree indefinitely, with the
+        provenance chain asserting they agreed. That is C4-07 and C4-08 a third
+        time, at the one layer that decides which tools are consequential.
+
+        Copied first, then wrapped: a proxy over the caller's dict would still
+        change under us when the caller mutated theirs. ``Capability`` and
+        ``PolicyDeclaration`` are frozen and hold only frozensets, tuples and
+        scalars, so two levels is the whole depth -- there is nothing below them
+        left to seal.
+        """
+        object.__setattr__(self, "tools", MappingProxyType(dict(self.tools)))
+        object.__setattr__(self, "policies",
+                           MappingProxyType(dict(self.policies)))
+
+    # A mappingproxy cannot be pickled, and ``copy.deepcopy`` reaches for pickle
+    # when it meets a type it has no rule for -- so sealing the mappings broke
+    # ``deepcopy(manifest)`` and, through it, ``dataclasses.asdict`` on anything
+    # holding one. Copying an immutable value is the identity function, so say
+    # so rather than leave a TypeError waiting in a caller this repository does
+    # not contain.
+    def __copy__(self) -> CapabilityManifest:
+        return self
+
+    def __deepcopy__(self, memo: dict) -> CapabilityManifest:
+        return self
 
     @property
     def loaded(self) -> bool:
@@ -104,6 +265,19 @@ class CapabilityManifest:
         if not isinstance(tool_id, str) or not tool_id:
             return None
         return self.tools.get(tool_id)
+
+    def policy(self, *candidates: Any) -> PolicyDeclaration | None:
+        """The operator's declaration for a policy, by ``policy_id`` then type.
+
+        Takes the candidates in preference order so the caller does not have to
+        care which of them the producer happened to emit.
+        """
+        for key in candidates:
+            if isinstance(key, str) and key:
+                found = self.policies.get(key)
+                if found is not None:
+                    return found
+        return None
 
     def klass_for(self, tool_id: Any) -> str | None:
         cap = self.get(tool_id)
@@ -115,13 +289,15 @@ class CapabilityManifest:
             "manifest_version": self.manifest_version,
             "producer_schema_version": self.producer_schema_version,
             "tool_count": len(self.tools),
-            "digest": self.digest,
+            "policy_count": len(self.policies),
+            "file_digest": self.file_digest,
+            "semantic_digest": self.semantic_digest,
         }
 
     # ---- loading --------------------------------------------------------
 
     @classmethod
-    def from_obj(cls, obj: Any, digest: str = "",
+    def from_obj(cls, obj: Any, file_digest: str = "",
                  limits: Limits = DEFAULT_LIMITS) -> CapabilityManifest:
         if not isinstance(obj, dict):
             raise ManifestError("manifest root must be a JSON object")
@@ -154,11 +330,28 @@ class CapabilityManifest:
             if not isinstance(effects, list) or not effects:
                 raise ManifestError(f"tool {tool_id!r} must declare a non-empty "
                                     "'effects' list")
-            bad = [e for e in effects if e not in VALID_EFFECTS]
+            if len(effects) > _MAX_EFFECTS_DECLARED:
+                # There are five valid effects. A list longer than this is
+                # duplicates or noise, and the only thing it can still do is
+                # make the error below expensive to build.
+                raise ManifestError(
+                    f"tool {tool_id!r} declares {len(effects)} effects; there "
+                    f"are {len(VALID_EFFECTS)} valid ones")
+            # COH-R06. This was `[e for e in effects if e not in VALID_EFFECTS]`,
+            # and `in` against a frozenset HASHES its operand -- so `effects:
+            # [{}]` or `[["read"]]` raised `TypeError: unhashable type` out of a
+            # manifest loader, from a file the operator is being invited to
+            # hand-edit. Type first, membership second. Every malformed shape
+            # has to leave here as a ManifestError or the caller cannot tell
+            # "your manifest is wrong" from "Cohaera crashed".
+            bad = [e for e in effects
+                   if not isinstance(e, str) or isinstance(e, bool)
+                   or e not in VALID_EFFECTS]
             if bad:
                 raise ManifestError(
-                    f"tool {tool_id!r} declares unknown effect(s) {bad!r}; "
-                    f"valid effects are {sorted(VALID_EFFECTS)}")
+                    f"tool {tool_id!r} declares unknown effect(s) "
+                    f"{bad[:_MAX_EFFECTS_DECLARED]!r}; valid effects are "
+                    f"{sorted(VALID_EFFECTS)}")
             rev = spec.get("reversible")
             if rev is not None and not isinstance(rev, bool):
                 raise ManifestError(f"tool {tool_id!r} 'reversible' must be a boolean")
@@ -176,9 +369,18 @@ class CapabilityManifest:
                 raise ManifestError(
                     f"tool {tool_id!r} 'requires_approval' must be a boolean, got "
                     f"{type(approval).__name__} {approval!r}")
-            sensitive = spec.get("sensitive_args") or []
+            # COH-R06, the quiet half. This was `spec.get("sensitive_args") or
+            # []`, so every FALSEY non-list -- 0, "", False, {} -- became an
+            # empty list and the type check below never saw it. A producer that
+            # meant to declare sensitive arguments and mis-typed the field got a
+            # manifest that silently declared none, which is the direction that
+            # loses a control rather than the direction that raises.
+            sensitive = spec.get("sensitive_args")
+            if sensitive is None:
+                sensitive = []
             if not isinstance(sensitive, list) or any(
-                    not isinstance(s, str) for s in sensitive):
+                    not isinstance(s, str) or isinstance(s, bool)
+                    for s in sensitive):
                 raise ManifestError(
                     f"tool {tool_id!r} 'sensitive_args' must be a list of strings")
             if len(sensitive) > limits.max_manifest_sensitive_args:
@@ -197,6 +399,42 @@ class CapabilityManifest:
                 sensitive_args=tuple(sensitive),
             )
 
+        policies: dict[str, PolicyDeclaration] = {}
+        policies_raw = obj.get("policies")
+        if policies_raw is not None:
+            if not isinstance(policies_raw, dict):
+                raise ManifestError("manifest 'policies' must be an object")
+            if len(policies_raw) > limits.max_manifest_tools:
+                raise ManifestError(
+                    f"manifest declares {len(policies_raw)} policies, exceeding "
+                    f"max_manifest_tools={limits.max_manifest_tools}")
+            for policy_id, spec in policies_raw.items():
+                if not isinstance(policy_id, str) or not policy_id:
+                    raise ManifestError(
+                        f"policy id must be a non-empty string: {policy_id!r}")
+                _bounded_str(policy_id, f"policy id {policy_id[:64]!r}")
+                if not isinstance(spec, dict):
+                    raise ManifestError(f"policy {policy_id!r} must map to an object")
+                enforcement = spec.get("enforcement")
+                # Type before membership, same as effects above: `in` against a
+                # frozenset hashes, and `enforcement: {}` raised TypeError here.
+                if (not isinstance(enforcement, str) or isinstance(enforcement, bool)
+                        or enforcement not in VALID_ENFORCEMENT):
+                    # No default. A policy declared here with no usable
+                    # enforcement is the operator saying something Cohaera
+                    # cannot act on, and guessing which way they meant it is how
+                    # a suppression gets shipped as a feature.
+                    raise ManifestError(
+                        f"policy {policy_id!r} must declare 'enforcement' as one "
+                        f"of {sorted(VALID_ENFORCEMENT)}, got {enforcement!r}")
+                description = spec.get("description", "")
+                if description != "":
+                    description = _bounded_str(
+                        description, f"policy {policy_id!r} 'description'")
+                policies[policy_id] = PolicyDeclaration(
+                    policy_id=policy_id, enforcement=enforcement,
+                    description=description)
+
         # These three are emitted verbatim into every verdict's provenance, so
         # they are bounded too rather than coerced with str(): str({...}) on a
         # dict produced a repr that then travelled to the SIEM as a "producer".
@@ -205,7 +443,8 @@ class CapabilityManifest:
             value = obj.get(key, "")
             meta[key] = "" if value == "" else _bounded_str(value, f"'{key}'")
 
-        return cls(tools=tools, digest=digest, **meta)
+        return cls(tools=tools, policies=policies, file_digest=file_digest,
+                   semantic_digest=semantic_digest(tools, policies), **meta)
 
     @classmethod
     def from_file(cls, path: str | Path,
@@ -221,13 +460,41 @@ class CapabilityManifest:
                 f"{p}: manifest exceeds max_manifest_bytes="
                 f"{limits.max_manifest_bytes}")
         try:
-            obj = json.loads(blob.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            obj = strict_json_loads(blob.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
             raise ManifestError(f"{p}: not readable as UTF-8 JSON: {exc}") from exc
         except RecursionError as exc:                  # deeply nested manifest
             raise ManifestError(f"{p}: nesting too deep to parse") from exc
-        return cls.from_obj(obj, digest=hashlib.sha256(blob).hexdigest()[:16],
+        return cls.from_obj(obj, file_digest=hashlib.sha256(blob).hexdigest()[:16],
                             limits=limits)
+
+
+def semantic_digest(tools: dict[str, Capability],
+                    policies: dict[str, PolicyDeclaration] | None = None) -> str:
+    """Hash what the manifest MEANS: every parsed field, canonically ordered.
+
+    Deliberately not routed through ``identity.canonical``. Everything hashed
+    here has already been through ``from_obj``'s type checks -- strings, bools,
+    and members of ``VALID_EFFECTS`` -- so there is no producer-controlled float
+    that could arrive as NaN and no structure that needs coercing. Hashing it
+    directly also keeps ``capabilities`` free of an import edge to ``identity``,
+    which imports ``validate``, which nothing on this path needs.
+
+    An empty manifest hashes to "" rather than to the digest of an empty tool
+    map. "No manifest was loaded" and "a manifest was loaded and declared
+    nothing" are different states, and only one of them should be reported as a
+    policy identity.
+    """
+    policies = policies or {}
+    if not tools and not policies:
+        return ""
+    payload = {
+        "schema": SEMANTICS_SCHEMA,
+        "tools": {tool_id: cap.semantics() for tool_id, cap in tools.items()},
+        "policies": {pid: p.semantics() for pid, p in policies.items()},
+    }
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
 EMPTY_MANIFEST = CapabilityManifest()

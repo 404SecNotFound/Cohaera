@@ -1,0 +1,51 @@
+version: 2
+
+# The other half of SHA-pinning the actions.
+#
+# A pinned SHA is a frozen supply chain, and frozen is only better than mutable
+# if something thaws it deliberately. Without this file, pinning trades "a tag
+# can move under us" for "a fixed known-vulnerable version stays forever", which
+# is not obviously the better trade. With it, an action update arrives as a pull
+# request that goes through the same review and the same required status checks
+# as any other change -- which is the whole point: the update becomes visible
+# and reviewable instead of silent.
+#
+# Dependabot rewrites the SHA and the trailing version comment together, so the
+# pin stays readable. tests/test_ci_config.py asserts every `uses:` is a
+# 40-character SHA with a version comment, so a Dependabot PR that somehow
+# produced a tag reference would fail CI rather than merge.
+
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies
+      - github-actions
+
+  # The runtime has zero dependencies and that is asserted in CI, so this covers
+  # the dev extras only -- pytest, ruff, PyYAML, the Sigma CLI, cyclonedx-bom.
+  # They are still a supply chain: they run in a job that can read this
+  # repository, and ruff's rule set is a gate whose meaning a version bump can
+  # change. Grouped into one pull request because five separate ones a week is
+  # how a repository learns to merge dependency updates without reading them.
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      dev-tooling:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "deps"
+    labels:
+      - dependencies
+      - python

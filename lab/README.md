@@ -25,9 +25,17 @@ verify:
 - No duplicate static IPs, and every address sits on a declared subnet.
 - No use of vmnet1 or vmnet8, which VMware reserves.
 
-What I could **not** verify: that the script parses in PowerShell, that
-`vnetlib64.exe` accepts those arguments on your build, that the Packer
-`boot_command` timing suits your disk speed, or that any VM boots.
+- The safety properties COH-R18 raised, asserted against the source in
+  `tests/test_lab.py`: that `-TimeoutSec` is read rather than merely declared,
+  that every external-tool call carries a deadline, that a missing ISO checksum
+  fails the build, and that the verify stage executes the reachability matrix
+  and can fail on it.
+
+What I could **not** verify, and this has not changed: that the script parses in
+PowerShell, that `vnetlib64.exe` accepts those arguments on your build, that the
+Packer `boot_command` timing suits your disk speed, or that any VM boots. The
+tests above read the script as text. That is strictly weaker than running it,
+and strictly stronger than nothing.
 
 **Run `-DryRun` first, read `generated/cloud-init/agent-01/user-data`, then build
 one VM with `-Only agent-01` before you build four.**
@@ -123,9 +131,14 @@ Deliberately fatal, because each one wastes an hour before it surfaces:
 - Packer not on PATH
 - `vmrun.exe` not where the config says
 - `networks` requested without elevation
+- **no ISO checksum** (`UbuntuIsoSha256` unset), unless you pass
+  `-AllowUnverifiedIso`. COH-R18: this was a warning, and a warning is not a
+  control. The install image is the root of trust for every VM here, so
+  building from an unverified one makes the isolation properties below
+  unfalsifiable. A checksum that IS set is compared against the file at
+  preflight rather than forty minutes later by Packer.
 
-Warnings, not fatal: no ISO checksum, tight disk, VMs requesting more than 75%
-of host RAM.
+Warnings, not fatal: tight disk, VMs requesting more than 75% of host RAM.
 
 ---
 
@@ -159,12 +172,27 @@ That directory is gitignored. Check before you commit anyway.
 .\Build-CohaeraLab.ps1 -Stage verify
 ```
 
-Then the four things the script cannot check for you:
+That stage now **runs** the isolation checks rather than printing them
+(COH-R18). The matrix lives in `Reachability` in `lab.config.psd1`, each row
+declaring a source VM, a probe, and whether the lab design says it should reach
+or be blocked; the probes run on the guests over SSH and a disagreement fails
+the run. The negative rows are the load-bearing ones — `analysis-01` must not
+reach `agent-01` by ICMP *or* TCP, and must not reach DNS or the internet at
+all — because they are what makes an egress finding in Cohaera mean anything,
+and a stray route breaks them silently. A probe that cannot run counts as a
+failure, not a pass. `collector-01` is separately checked not to forward
+between its two segments.
 
-1. **Virtual Network Editor**: vmnet2/3/4 host-only, DHCP unticked.
-2. **From agent-01**: LLM API reachable, collector reachable, everything else not.
-3. **From analysis-01**: `ping 10.10.10.10` must fail.
-4. **Set a hard spend cap at your API provider** before the first corpus run.
+Expect the `agent-01 → https://example.com` row to FAIL on a fresh lab. That is
+correct: the generated nftables output chain is ACCEPT so first-boot `apt`
+works, and phase 2 below replaces it with deny-all plus a pinned API allowlist.
+
+Two things still need you:
+
+1. **Virtual Network Editor**: vmnet2/3/4 host-only, DHCP unticked. Nothing can
+   check this from inside — the probes pass just as happily on a segment that
+   is bridged, and `vnetlib64.exe` reports success when it does nothing.
+2. **Set a hard spend cap at your API provider** before the first corpus run.
    Runaway agent loops are a real failure mode, and unbounded consumption is
    LLM10 in the OWASP Top 10.
 

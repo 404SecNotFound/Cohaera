@@ -23,19 +23,27 @@ built to break it rather than input that was merely malformed by accident:
 from __future__ import annotations
 
 import hashlib
-import json
 import sys
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest
+from .evidence import (
+    EMPTY_STORE,
+    NO_FRESHNESS,
+    Freshness,
+    StreamLedger,
+    StreamVerifier,
+    TrustStore,
+)
 from .identity import ANON_WINDOW_S, Correlator
 from .limits import (
     DEFAULT_LIMITS,
     REJECT_LINE_TOO_LONG,
     REJECT_MALFORMED_JSON,
+    REJECT_MEMORY_BUDGET,
     REJECT_NESTING_TOO_DEEP,
     REJECT_NOT_AN_OBJECT,
     REJECT_RATIO_EXCEEDED,
@@ -46,11 +54,18 @@ from .limits import (
     REJECT_TOO_MANY_REJECTS,
     REJECT_TOO_MANY_SESSIONS,
     REJECT_UNDECODABLE,
+    RESIDENT_BYTES_PER_INPUT_BYTE,
     Limits,
     json_depth_exceeds,
 )
 from .model import Event, Session
-from .validate import IngestReport, Reject, digest_bytes, sanitise_display
+from .validate import (
+    IngestReport,
+    Reject,
+    digest_bytes,
+    sanitise_display,
+    strict_json_loads,
+)
 
 __all__ = ["ANON_WINDOW_S", "RawLine", "assemble", "load", "read_events"]
 
@@ -84,9 +99,14 @@ class RawLine:
     oversize: bool
     nbytes: int             # bytes in the record, excluding the line terminator
     digest: str             # sha256 of an oversize record; "" otherwise
+    # C5-05. The total input budget was exhausted while this line was being
+    # read, so reading stopped part-way through it. The line is incomplete and
+    # must not be parsed; the run aborts.
+    over_budget: bool = False
 
 
-def _bounded_lines(path: Path, max_bytes: int) -> Iterator[RawLine]:
+def _bounded_lines(path: Path, max_bytes: int,
+                   max_total_bytes: int | None = None) -> Iterator[RawLine]:
     """Yield :class:`RawLine` without ever buffering an unbounded line.
 
     ``file.readline()`` reads until a newline arrives, so a producer that never
@@ -94,7 +114,20 @@ def _bounded_lines(path: Path, max_bytes: int) -> Iterator[RawLine]:
     chunks and abandons a line's CONTENT the moment it exceeds the bound, while
     continuing to count and hash what streams past, then resynchronises on the
     next newline. Peak memory is ``max_bytes + _CHUNK`` regardless of input.
+
+    C5-05. ``max_total_bytes`` is enforced HERE, mid-line, and that placement is
+    the whole fix. The caller used to check the running total after receiving a
+    complete RawLine, which has two failures: an over-long line is streamed and
+    hashed in full before anything can object, and a final line that pushes the
+    run past the cap has no later iteration to trigger it -- a 28-byte one-line
+    file was accepted under ``max_input_bytes=10``. A cap that stops work only
+    after the work is done is a report, not a budget.
+
+    Reading stops at the chunk that crosses the total, so peak work is bounded
+    by ``max_total_bytes + _CHUNK`` rather than by the size of the file.
     """
+    consumed = 0        # bytes pulled off the disk
+    emitted = 0         # bytes in the records actually yielded
     with path.open("rb") as fh:
         buf = bytearray()
         hasher: Any = None
@@ -122,15 +155,17 @@ def _bounded_lines(path: Path, max_bytes: int) -> Iterator[RawLine]:
                 hasher.update(buf)
                 buf.clear()
 
-        def finish() -> RawLine:
+        def finish(over_budget: bool = False) -> RawLine:
             return RawLine(lineno=lineno, payload=b"" if oversize else bytes(buf),
                            oversize=oversize, nbytes=nbytes,
-                           digest=hasher.hexdigest()[:16] if oversize else "")
+                           digest=hasher.hexdigest()[:16] if oversize else "",
+                           over_budget=over_budget)
 
         while True:
             chunk = fh.read(_CHUNK)
             if not chunk:
                 break
+            consumed += len(chunk)
             start = 0
             while True:
                 nl = chunk.find(b"\n", start)
@@ -138,6 +173,17 @@ def _bounded_lines(path: Path, max_bytes: int) -> Iterator[RawLine]:
                     feed(chunk[start:])
                     break
                 feed(chunk[start:nl])
+                if (max_total_bytes is not None
+                        and emitted + nbytes > max_total_bytes):
+                    # This record would take the run past the total. It is not
+                    # yielded at all: a budget that admits the record that
+                    # breaks it is one record too generous, and the review's
+                    # reproduction is exactly the single-line case where that
+                    # record is the only one there is.
+                    yield RawLine(lineno=lineno, payload=b"", oversize=False,
+                                  nbytes=nbytes, digest="", over_budget=True)
+                    return
+                emitted += nbytes
                 yield finish()
                 buf.clear()
                 hasher = None
@@ -145,6 +191,15 @@ def _bounded_lines(path: Path, max_bytes: int) -> Iterator[RawLine]:
                 oversize = False
                 lineno += 1
                 start = nl + 1
+            if max_total_bytes is not None and consumed >= max_total_bytes:
+                # Stop reading the file entirely. Whatever is buffered is a
+                # partial record and is reported as such rather than parsed.
+                if nbytes:
+                    yield finish(over_budget=True)
+                else:
+                    yield RawLine(lineno=lineno, payload=b"", oversize=False,
+                                  nbytes=0, digest="", over_budget=True)
+                return
         if nbytes:
             yield finish()                   # last line, no trailing newline
 
@@ -181,6 +236,7 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
 
     records_read = 0
     bytes_read = 0
+    retained_bytes = 0      # bytes of records that became Events
 
     def _budget_hit() -> tuple[str, str]:
         """The first live budget this run has exhausted, as (code, detail).
@@ -202,6 +258,18 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
         if rep.accepted >= limits.max_events_total:
             return REJECT_TOO_MANY_EVENTS, (
                 f"max_events_total={limits.max_events_total} reached")
+        # COH-R02. The one bound that is about what the input BECOMES. Every
+        # other budget here counts bytes or records; this design holds the
+        # whole run in memory, and a parsed record costs about 32 times its own
+        # bytes. Metered on RETAINED bytes, because a rejected record is read
+        # and released -- charging the estimate for it would abort honest runs
+        # over a noisy producer.
+        resident = retained_bytes * RESIDENT_BYTES_PER_INPUT_BYTE
+        if resident >= limits.max_resident_bytes:
+            return REJECT_MEMORY_BUDGET, (
+                f"estimated {resident} resident byte(s) from {retained_bytes} "
+                f"byte(s) of accepted input reaches "
+                f"max_resident_bytes={limits.max_resident_bytes}")
         if limits.max_rejects is not None and rep.rejected > limits.max_rejects:
             return REJECT_TOO_MANY_REJECTS, (
                 f"{rep.rejected} rejected record(s) exceeds "
@@ -215,14 +283,40 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
                 f"max_reject_ratio={limits.max_reject_ratio}")
         return "", ""
 
-    for raw in _bounded_lines(p, limits.max_line_bytes):
-        lineno = raw.lineno
-
+    # C5-05. An explicit iterator, so that a live budget can be checked BEFORE
+    # the next line is requested. ``for raw in ...`` pulls a complete record out
+    # of the generator first, which means an exhausted reject budget still paid
+    # for one more full line -- read, decoded, depth-scanned and hashed -- every
+    # time it was checked.
+    lines = _bounded_lines(p, limits.max_line_bytes,
+                           max_total_bytes=limits.max_input_bytes)
+    lineno = 0
+    while True:
         code, detail = _budget_hit()
         if code:
             rep.aborted = True
             rep.abort_reason = code
             _reject(lineno, code, f"{detail}; remaining records not read")
+            return
+        try:
+            raw = next(lines)
+        except StopIteration:
+            break
+        lineno = raw.lineno
+
+        if raw.over_budget:
+            # The reader stopped mid-file because the total byte budget was
+            # reached. Anything buffered is a partial record and is never
+            # parsed: a truncated JSON object is not a record, and accepting
+            # one would be the fail-open coercion this codebase refuses
+            # everywhere else.
+            rep.aborted = True
+            rep.abort_reason = REJECT_TOO_MANY_BYTES
+            _reject(lineno, REJECT_TOO_MANY_BYTES,
+                    f"max_input_bytes={limits.max_input_bytes} reached after "
+                    f"{bytes_read + raw.nbytes} byte(s); reading stopped and "
+                    f"the remainder of the file was not read",
+                    nbytes=raw.nbytes)
             return
 
         records_read += 1
@@ -255,19 +349,23 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
             continue
 
         try:
-            obj = json.loads(line)
-        except json.JSONDecodeError as exc:
-            _reject(lineno, REJECT_MALFORMED_JSON, str(exc), payload)
-            continue
+            obj = strict_json_loads(line)
         except RecursionError:
             # Belt and braces. The depth pre-scan should make this unreachable,
             # but the guarantee must not depend on sys.getrecursionlimit().
             _reject(lineno, REJECT_NESTING_TOO_DEEP,
                     "decoder recursion limit reached", payload)
             continue
-        except (ValueError, MemoryError) as exc:      # pragma: no cover - defensive
+        except (ValueError, MemoryError) as exc:
+            # ValueError rather than JSONDecodeError, and it is load-bearing in
+            # three ways now: the decoder's own error, COH-R10's
+            # StrictJSONError, and the bare ValueError CPython raises for an
+            # integer too long to convert to a string. This clause was marked
+            # defensive and unreachable; the last of those made it reachable,
+            # and the manifest and trust-store loaders -- which caught only
+            # JSONDecodeError -- were crashing on the same input.
             _reject(lineno, REJECT_MALFORMED_JSON, f"{type(exc).__name__}: {exc}",
-                    record)
+                    payload)
             continue
 
         if not isinstance(obj, dict):
@@ -281,6 +379,8 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
             continue
 
         e = Event(raw=obj, limits=limits)
+        retained_bytes += len(record)
+        rep.resident_bytes = retained_bytes * RESIDENT_BYTES_PER_INPUT_BYTE
         rep.note_bytes(record, b"A")
         rep.note_defects(e.defects)
         rep.accepted += 1
@@ -296,7 +396,10 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
              correlator: Correlator | None = None,
              manifest: CapabilityManifest = EMPTY_MANIFEST,
              report: IngestReport | None = None,
-             quiet: bool = False) -> list[Session]:
+             quiet: bool = False,
+             keys: TrustStore = EMPTY_STORE,
+             freshness: Freshness = NO_FRESHNESS,
+             ledger: StreamLedger | None = None) -> list[Session]:
     """Group a flat event stream into Sessions.
 
     Keyed on session_id, then trace_id, then a scoped anonymous key, then
@@ -308,6 +411,15 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
     Every session carries the correlation kind and confidence it was built from,
     so a verdict assembled out of guesswork cannot present itself as one
     assembled from a producer-supplied session ID.
+
+    INTEGRITY IS VERIFIED IN ARRIVAL ORDER, NOT IN SORTED ORDER
+        Sessions are assembled from events sorted by clock, because that is what
+        pairing and ordering checks need. Collector sequence numbers are about
+        the order records were WRITTEN, so verifying them over the sorted list
+        would reorder the stream before checking whether it had been reordered,
+        and every clock skew in the input would read as a delivery fault. The
+        verifier therefore gets the events as they arrived, after the sorted
+        pass has established which session each one belongs to.
     """
     corr = correlator or Correlator(limits=limits)
     rep = report if report is not None else IngestReport()
@@ -315,7 +427,12 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
     dropped_sessions = 0
     dropped_events = 0
 
-    ordered = sorted(events, key=lambda e: e.sort_key)
+    # Materialised rather than consumed by ``sorted`` alone: arrival order is a
+    # second, independent reading of the same events and both are needed.
+    incoming = list(events)
+    session_of: dict[int, str] = {}
+
+    ordered = sorted(incoming, key=lambda e: e.sort_key)
     for e in ordered:
         rv = e.view
         # e.digest is passed uncalled: only the isolation branch needs it.
@@ -331,7 +448,23 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
         if len(s.events) >= limits.max_events_per_session:
             dropped_events += 1
             continue
-        s.events.append(e)
+        session_of[id(e)] = key.value
+        # Sessions are built as lists here and sealed at the end of this
+        # function; `Session.events` is typed Sequence because a sealed one is
+        # a tuple. See the C4-08 note on the class.
+        cast("list[Event]", s.events).append(e)
+
+    # A dropped event still occupies a position in its collector stream, so it
+    # is observed for sequence continuity and attributed to no session. Omitting
+    # it would manufacture a gap out of Cohaera's own budget.
+    verifier = StreamVerifier(keys=keys, limits=limits, freshness=freshness,
+                              ledger=ledger)
+    for e in incoming:
+        verifier.observe(e.raw, e.integrity, session_of.get(id(e), ""))
+    verifier.finalise()
+    for key_value, s in buckets.items():
+        s.integrity = verifier.for_session(key_value)
+    rep.integrity = verifier.summary()
 
     if dropped_sessions:
         rep.aborted = True
@@ -349,7 +482,7 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
 
     sessions = list(buckets.values())
     for s in sessions:
-        s.events.sort(key=lambda x: x.sort_key)
+        cast("list[Event]", s.events).sort(key=lambda x: x.sort_key)
         # C4-08. Sealed, not merely invalidated. Batch assembly is finished with
         # these sessions, and everything downstream caches derived values off
         # them, so the event list is made immutable rather than left mutable
@@ -363,9 +496,13 @@ def load(path: str | Path, limits: Limits = DEFAULT_LIMITS,
          correlator: Correlator | None = None,
          manifest: CapabilityManifest = EMPTY_MANIFEST,
          report: IngestReport | None = None,
-         quiet: bool = False) -> list[Session]:
+         quiet: bool = False,
+         keys: TrustStore = EMPTY_STORE,
+         freshness: Freshness = NO_FRESHNESS,
+         ledger: StreamLedger | None = None) -> list[Session]:
     """Read and group one telemetry file. The report is filled in as a side effect."""
     rep = report if report is not None else IngestReport()
     events = list(read_events(path, limits=limits, report=rep, quiet=quiet))
     return assemble(events, limits=limits, correlator=correlator,
-                    manifest=manifest, report=rep, quiet=quiet)
+                    manifest=manifest, report=rep, quiet=quiet, keys=keys,
+                    freshness=freshness, ledger=ledger)

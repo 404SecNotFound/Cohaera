@@ -1,0 +1,58 @@
+name: Defect
+description: Something Cohaera does that it should not, or fails to do
+labels: ["defect"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        A defect report that reproduces is worth ten that describe. If you can
+        attach the telemetry that triggers it, that is the whole report.
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: >-
+        The smallest input that shows it, and the exact command. Redact
+        identities, but keep the SHAPE of the record -- the field types are
+        usually the finding.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened, and why
+      description: >-
+        For a false positive or false negative, say which check and what
+        evidence you think it should have used.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: The verdict, the traceback, or the missing alert.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`cohaera --version`, or the commit."
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where
+      options:
+        - Ingest / schema firewall
+        - A check (CH01-CH07)
+        - Coverage and confidence
+        - Evidence layer (integrity, receipts, approvals, trust store)
+        - CLI or output format
+        - SIEM content pack
+        - Evaluation harness or corpus
+        - Something else
+    validations:
+      required: true

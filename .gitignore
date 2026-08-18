@@ -22,3 +22,9 @@ lab/*.local.psd1
 # A readable sample (one session per family x kind) IS committed, at
 # eval/corpus/sample.jsonl, so the corpus can be audited without running it.
 eval/corpus/data/
+
+# The Ed25519 signature cache. Derived, content-addressed, and safe to delete at
+# any time -- see eval/corpus/signatures.py for why it has no stale state to go
+# wrong. Outside data/ on purpose: that directory is digested into the
+# evaluation card, and a cache is not a corpus artefact.
+eval/corpus/.signature-cache.json

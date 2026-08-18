@@ -32,6 +32,11 @@
 .PARAMETER Destroy
     Stop and delete the lab VMs. Does not remove the vmnets.
 
+.PARAMETER AllowUnverifiedIso
+    Build even though UbuntuIsoSha256 is unset. The preflight refuses by
+    default: an unverified install image is the root of trust for every VM in
+    the lab, so nothing built from it can be trusted either.
+
 .EXAMPLE
     .\Build-CohaeraLab.ps1 -DryRun
     Generate and inspect everything without building.
@@ -57,7 +62,10 @@ param(
     [string[]] $Stage  = @('preflight','networks','generate','build','configure','verify'),
     [string[]] $Only,
     [switch]   $DryRun,
-    [switch]   $Destroy
+    [switch]   $Destroy,
+    # COH-R18. The named escape for an unverified ISO. Without it the preflight
+    # refuses to build when UbuntuIsoSha256 is unset.
+    [switch]   $AllowUnverifiedIso
 )
 
 $ErrorActionPreference = 'Stop'
@@ -75,11 +83,52 @@ function Die  ($m) { Write-Host "  [FAIL] $m" -ForegroundColor Red; throw $m }
 function Step ($m) { Write-Host "  [ .. ] $m" -ForegroundColor DarkGray }
 
 function Invoke-Tool {
+    <#
+        COH-R18. -TimeoutSec was a declared parameter that the body never read,
+        so every call site that passed one got no timeout and the signature said
+        otherwise. That is worse than having no parameter: the tools this drives
+        are exactly the ones that hang rather than fail. packer waits on an SSH
+        handshake from a VM whose autoinstall died at a prompt; vmrun blocks on a
+        VMware service that is up but not answering; vnetlib64 sits on a lock
+        held by the Virtual Network Editor. A build that stops making progress
+        and never returns cannot be told from one that is merely slow, and the
+        operator finds out by coming back an hour later.
+    #>
     param([string]$Exe, [string[]]$Args, [switch]$IgnoreExit, [int]$TimeoutSec = 0)
     if ($DryRun) { Say "DRYRUN would run: $Exe $($Args -join ' ')"; return @{ ExitCode = 0; Output = '' } }
     Write-Verbose "$Exe $($Args -join ' ')"
-    $out = & $Exe @Args 2>&1
-    $code = $LASTEXITCODE
+
+    if ($TimeoutSec -le 0) {
+        $out  = & $Exe @Args 2>&1
+        $code = $LASTEXITCODE
+    }
+    else {
+        # Start-Process rather than the call operator, because a timeout needs a
+        # handle to wait on and something to kill. Output goes to files: reading
+        # the pipes while also waiting with a deadline deadlocks when a child
+        # fills a pipe buffer nobody is draining.
+        $outFile = [System.IO.Path]::GetTempFileName()
+        $errFile = [System.IO.Path]::GetTempFileName()
+        try {
+            $p = Start-Process -FilePath $Exe -ArgumentList $Args -NoNewWindow -PassThru `
+                    -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+            if (-not $p.WaitForExit($TimeoutSec * 1000)) {
+                # Kill($true) takes the process TREE and needs PowerShell 6+.
+                # packer spawns vmware-vmx, and killing only packer would leave a
+                # VM running and the next run failing on a locked vmx.
+                try { $p.Kill($true) } catch { try { $p.Kill() } catch { } }
+                $partial = ((Get-Content $outFile, $errFile -Raw -ErrorAction SilentlyContinue) -join "`n")
+                Say $partial
+                Die "$Exe exceeded ${TimeoutSec}s and was killed. Output above is what it produced before the deadline."
+            }
+            $out  = ((Get-Content $outFile, $errFile -Raw -ErrorAction SilentlyContinue) -join "`n")
+            $code = $p.ExitCode
+        }
+        finally {
+            Remove-Item $outFile, $errFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     if (-not $IgnoreExit -and $code -ne 0) {
         Say ($out | Out-String)
         Die "$Exe exited $code"
@@ -122,8 +171,8 @@ if ($Destroy) {
         $vmx = Join-Path $VmxRoot "$($vm.Name)\$($vm.Name).vmx"
         if (-not (Test-Path $vmx)) { Say "$($vm.Name): not present"; continue }
         if ($PSCmdlet.ShouldProcess($vm.Name, 'stop and delete')) {
-            Invoke-Tool $Vmrun @('stop', $vmx, 'hard') -IgnoreExit | Out-Null
-            Invoke-Tool $Vmrun @('deleteVM', $vmx)     -IgnoreExit | Out-Null
+            Invoke-Tool $Vmrun @('stop', $vmx, 'hard') -IgnoreExit -TimeoutSec 120 | Out-Null
+            Invoke-Tool $Vmrun @('deleteVM', $vmx)     -IgnoreExit -TimeoutSec 120 | Out-Null
             if (-not $DryRun) {
                 Remove-Item (Split-Path $vmx) -Recurse -Force -ErrorAction SilentlyContinue
             }
@@ -147,10 +196,56 @@ if ('preflight' -in $Stage) {
     }
     $isoGB = [math]::Round((Get-Item $cfg.UbuntuIso).Length / 1GB, 2)
     Ok "ISO: $isoName ($isoGB GB)"
-    if (-not $cfg.UbuntuIsoSha256) { Warn 'UbuntuIsoSha256 is null. Packer will not verify the ISO.' }
+    # COH-R18. This was a warning, and a warning is not a control: the build
+    # went ahead and produced four VMs from an unverified image, with the only
+    # trace a yellow line an operator scrolled past forty minutes earlier. An
+    # ISO is the root of trust for every machine in this lab -- it is where the
+    # kernel, the packages and the SSH daemon come from -- so an unverified one
+    # makes every isolation property below unfalsifiable.
+    #
+    # Fail closed with a named escape, exactly as COH-R04 did for a partial
+    # baseline. The escape is a switch the operator has to type, which is a
+    # decision on the record rather than a warning nobody read.
+    if (-not $cfg.UbuntuIsoSha256) {
+        if (-not $AllowUnverifiedIso) {
+            Die @"
+UbuntuIsoSha256 is null, so Packer would not verify the ISO.
+
+An unverified install image is the root of trust for every VM here. Get the
+checksum from https://releases.ubuntu.com/24.04/SHA256SUMS and set it in
+lab.config.psd1:
+
+    UbuntuIsoSha256 = 'sha256:<the hash for $isoName>'
+
+Compute the local file's hash to compare:
+
+    (Get-FileHash '$($cfg.UbuntuIso)' -Algorithm SHA256).Hash.ToLower()
+
+To build anyway -- in a throwaway lab, from an image you have already
+verified by other means -- re-run with -AllowUnverifiedIso.
+"@
+        }
+        Warn 'UbuntuIsoSha256 is null and -AllowUnverifiedIso was given. The ISO is NOT verified and neither is anything built from it.'
+    }
+    else {
+        # A checksum in the config that does not match the file on disk is worse
+        # than none: it reads as verified. Packer would catch it at build time,
+        # forty minutes in; catching it here costs one hash.
+        $want = ($cfg.UbuntuIsoSha256 -replace '^sha256:', '').ToLower()
+        if ($want -notmatch '^[0-9a-f]{64}$') {
+            Die "UbuntuIsoSha256 is not a 64-character SHA-256 hex digest: '$($cfg.UbuntuIsoSha256)'"
+        }
+        if (-not $DryRun) {
+            $got = (Get-FileHash $cfg.UbuntuIso -Algorithm SHA256).Hash.ToLower()
+            if ($got -ne $want) {
+                Die "ISO checksum MISMATCH.`n  config: $want`n  file:   $got`nThis is not the image the config describes."
+            }
+            Ok "ISO checksum verified ($want)"
+        }
+    }
 
     if (-not (Test-Path $Vmrun)) { Die "vmrun.exe not found at $Vmrun. Fix VmwarePath in the config." }
-    $ver = (Invoke-Tool $Vmrun @('-T','ws','list') -IgnoreExit).Output
+    $ver = (Invoke-Tool $Vmrun @('-T','ws','list') -IgnoreExit -TimeoutSec 60).Output
     Ok "vmrun responds"
 
     $packer = Get-Command $cfg.PackerExe -ErrorAction SilentlyContinue
@@ -168,7 +263,7 @@ clicking through four installers.
 Then set PackerExe in lab.config.psd1 if it is not on PATH.
 "@
     }
-    $pv = (Invoke-Tool $packer.Source @('version') -IgnoreExit).Output.Trim()
+    $pv = (Invoke-Tool $packer.Source @('version') -IgnoreExit -TimeoutSec 60).Output.Trim()
     Ok "Packer: $pv"
 
     if ($cfg.LabPasswordHash -eq 'REPLACE_ME_WITH_A_SHA512_CRYPT_HASH') {
@@ -226,13 +321,13 @@ if ('networks' -in $Stage) {
             if ($PSCmdlet.ShouldProcess($n.VmNet, 'create host-only network')) {
                 # vnetlib64 is version-sensitive and largely undocumented.
                 # Failures are tolerated and reported rather than fatal.
-                Invoke-Tool $Vnetlib @('--','add','adapter',$n.VmNet)              -IgnoreExit | Out-Null
-                Invoke-Tool $Vnetlib @('--','set','vnet',$n.VmNet,'addr',$n.Subnet) -IgnoreExit | Out-Null
-                Invoke-Tool $Vnetlib @('--','set','vnet',$n.VmNet,'mask',$n.Mask)   -IgnoreExit | Out-Null
+                Invoke-Tool $Vnetlib @('--','add','adapter',$n.VmNet)              -IgnoreExit -TimeoutSec 60 | Out-Null
+                Invoke-Tool $Vnetlib @('--','set','vnet',$n.VmNet,'addr',$n.Subnet) -IgnoreExit -TimeoutSec 60 | Out-Null
+                Invoke-Tool $Vnetlib @('--','set','vnet',$n.VmNet,'mask',$n.Mask)   -IgnoreExit -TimeoutSec 60 | Out-Null
                 # DHCP OFF is the point. Static-only means no stray addresses.
-                Invoke-Tool $Vnetlib @('--','remove','dhcp',$n.VmNet)               -IgnoreExit | Out-Null
-                Invoke-Tool $Vnetlib @('--','update','adapter',$n.VmNet)            -IgnoreExit | Out-Null
-                Invoke-Tool $Vnetlib @('--','update','dhcp',$n.VmNet)               -IgnoreExit | Out-Null
+                Invoke-Tool $Vnetlib @('--','remove','dhcp',$n.VmNet)               -IgnoreExit -TimeoutSec 60 | Out-Null
+                Invoke-Tool $Vnetlib @('--','update','adapter',$n.VmNet)            -IgnoreExit -TimeoutSec 60 | Out-Null
+                Invoke-Tool $Vnetlib @('--','update','dhcp',$n.VmNet)               -IgnoreExit -TimeoutSec 60 | Out-Null
             }
             Ok "$($n.VmNet) configured"
         }
@@ -517,19 +612,20 @@ if ('build' -in $Stage) {
     Push-Location $GenRoot
     try {
         Step 'packer init'
-        Invoke-Tool $cfg.PackerExe @('init', '.') -IgnoreExit | Out-Null
+        Invoke-Tool $cfg.PackerExe @('init', '.') -IgnoreExit -TimeoutSec 300 | Out-Null
 
         foreach ($vm in $targets) {
             $vmx = Join-Path $VmxRoot "$($vm.Name)\$($vm.Name).vmx"
             if (Test-Path $vmx) { Warn "$($vm.Name) already exists, skipping. Use -Destroy first to rebuild."; continue }
 
             Step "packer validate $($vm.Name)"
-            Invoke-Tool $cfg.PackerExe @('validate', "$($vm.Name).pkr.hcl") | Out-Null
+            Invoke-Tool $cfg.PackerExe @('validate', "$($vm.Name).pkr.hcl") -TimeoutSec 120 | Out-Null
 
             if ($PSCmdlet.ShouldProcess($vm.Name, 'packer build')) {
                 Step "packer build $($vm.Name), expect 10 to 25 minutes"
                 $t0 = Get-Date
-                Invoke-Tool $cfg.PackerExe @('build','-force',"$($vm.Name).pkr.hcl")
+                Invoke-Tool $cfg.PackerExe @('build','-force',"$($vm.Name).pkr.hcl") `
+                -TimeoutSec ($cfg.BuildTimeoutMin * 60 + 300)
                 Ok "$($vm.Name) built in $([int]((Get-Date) - $t0).TotalMinutes) min"
             }
         }
@@ -545,7 +641,7 @@ if ('configure' -in $Stage) {
         $vmx = Join-Path $VmxRoot "$($vm.Name)\$($vm.Name).vmx"
         if (-not (Test-Path $vmx) -and -not $DryRun) { Warn "$($vm.Name): no vmx, skipping"; continue }
         if ($cfg.SnapshotAfterBuild -and $PSCmdlet.ShouldProcess($vm.Name, "snapshot '$($cfg.SnapshotName)'")) {
-            Invoke-Tool $Vmrun @('snapshot', $vmx, $cfg.SnapshotName) -IgnoreExit | Out-Null
+            Invoke-Tool $Vmrun @('snapshot', $vmx, $cfg.SnapshotName) -IgnoreExit -TimeoutSec 300 | Out-Null
             Ok "$($vm.Name): snapshot '$($cfg.SnapshotName)'"
         }
     }
@@ -566,33 +662,118 @@ if ('verify' -in $Stage) {
         else { if (-not $DryRun) { Warn "$($vm.Name): vmx MISSING"; $fail++ } }
     }
 
+    # -----------------------------------------------------------------
+    # COH-R18. The isolation matrix, executed.
+    #
+    # This used to be a printed list of commands for the operator to run by
+    # hand, which is a property nobody has. The negative rows are the ones that
+    # matter: "analysis-01 cannot reach agent-01" is what makes an egress
+    # finding in Cohaera mean anything, and a stray route breaks it silently.
+    #
+    # Probes run ON the guest over SSH, because that is the only place the
+    # question is being asked from. Each command is written to be unambiguous
+    # about the difference between "refused" and "no answer": both are
+    # 'blocked', and a probe that cannot run at all is a FAILURE rather than a
+    # pass, because a probe that did not run is not a probe that passed.
+    # -----------------------------------------------------------------
+    $probes = @($cfg.Reachability | Where-Object { $_.From -in $targets.Name })
+    if (-not $probes) {
+        Warn 'No reachability probes apply to the selected VMs. Isolation is UNVERIFIED for this run.'
+    }
+    elseif ($DryRun) {
+        Say ''
+        Say "DRYRUN would run $($probes.Count) reachability probe(s) over SSH:"
+        foreach ($p in $probes) { Say "   $($p.From) -> $($p.Kind) $($p.Target) : expect $($p.Expect)" }
+    }
+    else {
+        Say ''
+        Say "Reachability, $($probes.Count) probe(s). A probe that cannot run counts as a failure."
+        foreach ($p in $probes) {
+            $vm = $targets | Where-Object { $_.Name -eq $p.From } | Select-Object -First 1
+            $ip = ($vm.Nics | Where-Object { $_.Ip } | Select-Object -First 1).Ip -replace '/\d+$', ''
+            if (-not $ip) { Warn "$($p.From): no static IP in config, cannot probe"; $fail++; continue }
+
+            # 0 = reached, 1 = blocked. Anything else means the probe itself
+            # broke, which is neither answer and must not be read as either.
+            switch ($p.Kind) {
+                'tcp' {
+                    $h, $port = $p.Target -split ':', 2
+                    $cmd = "timeout 8 bash -c '</dev/tcp/$h/$port' >/dev/null 2>&1 && echo 0 || echo 1"
+                }
+                'ping'  { $cmd = "ping -c1 -W3 $($p.Target) >/dev/null 2>&1 && echo 0 || echo 1" }
+                'dns'   { $cmd = "timeout 8 getent hosts $($p.Target) >/dev/null 2>&1 && echo 0 || echo 1" }
+                'https' { $cmd = "curl -sS -m 8 -o /dev/null '$($p.Target)' >/dev/null 2>&1 && echo 0 || echo 1" }
+                default { Die "Unknown probe kind '$($p.Kind)' for $($p.From) -> $($p.Target). Fix Reachability in the config." }
+            }
+
+            $ssh = Invoke-Tool 'ssh' @(
+                '-o','BatchMode=yes','-o','StrictHostKeyChecking=accept-new',
+                '-o','ConnectTimeout=10',
+                "$($cfg.LabUser)@$ip", $cmd) -IgnoreExit -TimeoutSec 45
+
+            $answer = ($ssh.Output -split "`n" | Where-Object { $_.Trim() -in @('0','1') } |
+                       Select-Object -Last 1)
+            if (-not $answer) {
+                Warn "$($p.From) -> $($p.Kind) $($p.Target): probe did not run (ssh exit $($ssh.ExitCode)). NOT a pass."
+                $fail++
+                continue
+            }
+
+            $got   = if ($answer.Trim() -eq '0') { 'reach' } else { 'blocked' }
+            $label = "$($p.From) -> $($p.Kind) $($p.Target)"
+            if ($got -eq $p.Expect) {
+                Ok "$label : $got"
+            }
+            elseif ($p.ContainsKey('Advisory') -and $p.Advisory) {
+                Warn "$label : expected $($p.Expect), got $got. ADVISORY. $($p.Why)"
+            }
+            else {
+                Write-Host "  [FAIL] $label : expected $($p.Expect), got $got" -ForegroundColor Red
+                Say "         $($p.Why)"
+                $fail++
+            }
+        }
+
+        # A collector that forwards turns the two negative rows above into an
+        # accident of routing rather than a property of the topology.
+        foreach ($name in @($cfg.NoForwarding | Where-Object { $_ -in $targets.Name })) {
+            $vm = $targets | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            $ip = ($vm.Nics | Where-Object { $_.Ip } | Select-Object -First 1).Ip -replace '/\d+$', ''
+            $ssh = Invoke-Tool 'ssh' @(
+                '-o','BatchMode=yes','-o','StrictHostKeyChecking=accept-new',
+                '-o','ConnectTimeout=10',
+                "$($cfg.LabUser)@$ip", 'cat /proc/sys/net/ipv4/ip_forward') -IgnoreExit -TimeoutSec 45
+            $v = ($ssh.Output -split "`n" | Where-Object { $_.Trim() -in @('0','1') } | Select-Object -Last 1)
+            if (-not $v) { Warn "$name : could not read ip_forward. NOT a pass."; $fail++ }
+            elseif ($v.Trim() -ne '0') {
+                Write-Host "  [FAIL] $name : ip_forward=1, so it routes between segments" -ForegroundColor Red
+                Say '         analysis is meant to PULL from the collector, not reach through it.'
+                $fail++
+            }
+            else { Ok "$name : ip_forward=0" }
+        }
+    }
+
     Write-Host @"
 
-  Manual checks the script cannot do for you
-  ------------------------------------------
+  Still manual, because nothing here can check them for you
+  ---------------------------------------------------------
   1. Virtual Network Editor: vmnet2/3/4 are HOST-ONLY with DHCP UNTICKED.
-     vnetlib64 reports success even when it changes nothing.
+     vnetlib64 reports success even when it changes nothing, and the probes
+     above pass just as happily on a segment that is bridged.
 
-  2. From agent-01, the LLM API must be reachable and everything else must not:
-       curl -sS -o /dev/null -w '%{http_code}\n' https://api.anthropic.com/v1/messages
-       nc -zv 10.10.20.10 8080
-       curl -m 5 https://example.com          # should FAIL once you tighten nftables
-
-  3. From analysis-01, agent-01 must be unreachable:
-       ping -c1 -W2 10.10.10.10               # must FAIL
-
-  4. Tighten the agent egress policy. The generated nftables output chain is
+  2. Tighten the agent egress policy. The generated nftables output chain is
      ACCEPT so that first-boot apt works. Phase 2 in LAB.md replaces it with
-     deny-all plus a pinned LLM API allowlist. UNTIL YOU DO THAT, the 'egress'
-     classification in Cohaera has no boundary to mean anything against.
+     deny-all plus a pinned LLM API allowlist. The agent-01 -> example.com row
+     above FAILS until you do, which is the intended state of a fresh lab.
 
-  5. Set a HARD SPEND CAP at your API provider before the first corpus run.
+  3. Set a HARD SPEND CAP at your API provider before the first corpus run.
 "@ -ForegroundColor White
 
     if ($script:Warnings) {
         Write-Host "`n  Warnings raised during this run:" -ForegroundColor Yellow
         $script:Warnings | ForEach-Object { Write-Host "    - $_" -ForegroundColor Yellow }
     }
-    if ($fail) { Die "$fail VM(s) missing" }
+    if ($fail) { Die "$fail verification check(s) failed. The lab's isolation is NOT as configured." }
     Ok 'Done'
 }

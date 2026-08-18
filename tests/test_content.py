@@ -18,6 +18,8 @@ dependencies and this file is not imported by the package.
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 import json
 import re
 import sys
@@ -28,7 +30,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from cohaera.capabilities import CapabilityManifest
+from cohaera.capabilities import (
+    EMPTY_MANIFEST,
+    Capability,
+    CapabilityManifest,
+)
 from cohaera.checks import ALL_CHECKS, SequenceGrammar, run_all
 from cohaera.identity import run_id
 from cohaera.limits import DEFAULT_LIMITS
@@ -307,7 +313,7 @@ def test_every_emitted_check_id_has_a_rule():
 
 def test_example_manifest_loads_and_is_useful():
     manifest = CapabilityManifest.from_file(MANIFEST)
-    assert manifest.loaded and manifest.digest
+    assert manifest.loaded and manifest.file_digest and manifest.semantic_digest
     assert manifest.klass_for("send_email") == "egress"
     assert manifest.klass_for("delete_record") == "state_change"
     assert manifest.klass_for("draft_reply") == "read_only"
@@ -317,11 +323,128 @@ def test_example_manifest_loads_and_is_useful():
     assert manifest.klass_for("sync_local_cache") == "state_change"
 
 
+def test_the_example_manifest_declares_policy_semantics_both_ways():
+    """The `policies` section is the remedy for EVASION.md E20, so the shipped
+    example has to demonstrate the remedy rather than describe it.
+
+    Both values matter and they fail in opposite directions. `advisory` stops
+    CH04 paging on correct behaviour; `blocking` is what lets it use the word
+    bypass. An example carrying only one of them would show half the mechanism.
+    """
+    manifest = CapabilityManifest.from_file(MANIFEST)
+    assert manifest.policy("cost_threshold_exceeded").enforcement == "advisory"
+    assert manifest.policy("depth_exceeded").enforcement == "blocking"
+    # Keyed on a producer's policy_id rather than on an event type, which is
+    # what a real policy engine emits and what the lookup has to support.
+    assert manifest.policy("external-data-egress").enforcement == "blocking"
+    assert manifest.policy("no-such-policy") is None
+    # Lookup takes candidates in preference order, so a caller does not have to
+    # know which of the two the producer happened to send.
+    assert manifest.policy(None, "depth_exceeded").enforcement == "blocking"
+
+
+# -- COH-R05: frozen the attribute, not the thing it pointed at -------------
+
+
+def test_a_manifest_cannot_be_edited_after_its_digest_is_taken():
+    """The reported reproduction.
+
+    ``@dataclass(frozen=True)`` stops ``manifest.tools = {}``. It does nothing
+    about ``manifest.tools["send_email"] = harmless``, and that is the edit that
+    matters: it changes which calls are consequential, for every check, while
+    both digests go on describing the manifest as it was loaded. The provenance
+    chain would assert the run used a policy it had stopped using.
+    """
+    manifest = CapabilityManifest.from_file(MANIFEST)
+    before = (manifest.file_digest, manifest.semantic_digest,
+              manifest.klass_for("send_email"))
+
+    harmless = Capability(tool_id="send_email", effects=frozenset({"read"}))
+    with pytest.raises(TypeError):
+        manifest.tools["send_email"] = harmless
+    with pytest.raises(TypeError):
+        del manifest.tools["send_email"]
+    with pytest.raises(AttributeError):
+        manifest.tools.clear()
+    with pytest.raises(TypeError):
+        manifest.policies["depth_exceeded"] = None
+
+    assert (manifest.file_digest, manifest.semantic_digest,
+            manifest.klass_for("send_email")) == before
+
+
+def test_a_manifest_does_not_share_the_dict_it_was_built_from():
+    """Sealing a reference to somebody else's dict seals nothing. The caller
+    still holds it, and a manifest that changes when they edit theirs is exactly
+    as mutable as one with no seal at all."""
+    source = {"send_email": Capability(tool_id="send_email",
+                                       effects=frozenset({"egress"}))}
+    manifest = CapabilityManifest(tools=source)
+    source["send_email"] = Capability(tool_id="send_email",
+                                      effects=frozenset({"read"}))
+    source["added_later"] = Capability(tool_id="added_later",
+                                       effects=frozenset({"delete"}))
+
+    assert manifest.klass_for("send_email") == "egress"
+    assert manifest.get("added_later") is None
+
+
+def test_the_empty_manifest_is_not_shared_mutable_state():
+    """It is a module-level singleton handed to every session that has no
+    manifest. One write to it would have reclassified tools process-wide."""
+    with pytest.raises(TypeError):
+        EMPTY_MANIFEST.tools["anything"] = Capability(
+            tool_id="anything", effects=frozenset({"egress"}))
+    assert not EMPTY_MANIFEST.loaded
+
+
+def test_a_sealed_manifest_is_still_an_ordinary_mapping_to_read():
+    """Sealing must not cost the read API, or callers will reach past it."""
+    manifest = CapabilityManifest.from_file(MANIFEST)
+    assert "send_email" in manifest.tools
+    assert len(manifest.tools) == len(dict(manifest.tools))
+    assert sorted(manifest.tools)[0] == min(manifest.tools.keys())
+    assert manifest.tools["send_email"].tool_id == "send_email"
+    assert dict(manifest.tools) == dict(manifest.tools.items())
+
+
+def test_a_manifest_can_still_be_copied_and_serialised():
+    """The cost of the seal, paid rather than discovered later.
+
+    A mappingproxy cannot be pickled and ``copy.deepcopy`` falls back to pickle
+    for types it has no rule for, so sealing broke copying -- including
+    ``deepcopy`` of any object HOLDING a manifest, which is every Session.
+    Copying an immutable value is the identity, so the manifest says so and the
+    containing objects work again.
+
+    ``dataclasses.asdict`` on a manifest is the one thing that does not come
+    back, because it recurses past the manifest into the field and meets the
+    proxy directly. It was never the serialisation path -- ``as_dict`` is, it is
+    what provenance uses, and it emits JSON rather than ``Capability`` objects
+    -- so this asserts the supported route works and pins the unsupported one so
+    that the trade is written down instead of rediscovered.
+    """
+    manifest = CapabilityManifest.from_file(MANIFEST)
+    assert copy.deepcopy(manifest) is manifest
+    assert copy.copy(manifest) is manifest
+
+    session = Session(session_id="s", manifest=manifest, events=[])
+    assert copy.deepcopy(session).manifest is manifest
+
+    assert manifest.as_dict()["tool_count"] == len(manifest.tools)
+    json.dumps(manifest.as_dict())            # provenance has to serialise it
+
+    with pytest.raises(TypeError):
+        dataclasses.asdict(manifest)
+
+
 def test_example_manifest_is_valid_json_with_a_stable_digest():
     blob = MANIFEST.read_bytes()
     json.loads(blob.decode("utf-8"))
-    assert (CapabilityManifest.from_file(MANIFEST).digest
-            == CapabilityManifest.from_file(MANIFEST).digest)
+    a = CapabilityManifest.from_file(MANIFEST)
+    b = CapabilityManifest.from_file(MANIFEST)
+    assert a.file_digest == b.file_digest
+    assert a.semantic_digest == b.semantic_digest
 
 
 def test_manifest_corrects_a_heuristic_misclassification():

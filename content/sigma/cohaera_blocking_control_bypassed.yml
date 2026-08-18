@@ -1,0 +1,86 @@
+title: Agent Bypassed A Control Declared BLOCKING
+id: 6b0f8c31-4d27-4a15-9c8e-1f3a5b7d2e64
+status: experimental
+description: |
+  A policy control fired during an agent session, the control is DECLARED
+  BLOCKING, and the session went on to COMPLETE a state-changing or egress tool
+  call afterwards with no approval bound to it.
+
+  This is the one rule in the pack that may use the word "bypass" and mean it.
+  Its sibling aa4b5aa2-7fa0-4d59-aed2-db47bfb71196 fires on the same SEQUENCE
+  without the declaration, and deliberately claims less: with nothing stating
+  what the control was for, a completed action after it is a sequence and not a
+  circumvention. Here the semantics are on the record, so the claim is available.
+
+  WHERE THE DECLARATION CAME FROM MATTERS, AND THE VERDICT SAYS.
+  data.findings[].evidence.policy_enforcement_source is one of:
+
+    manifest      an operator-supplied capability manifest declared it. Trust
+                  this: the operator chose the file, the agent did not write it.
+    policy_event  the producer declared it on the event itself. This is in-band,
+                  from the same path an attacker controls -- and note the
+                  asymmetry, because it is the whole risk: a producer cannot
+                  create this finding by declaring 'blocking' (that only makes
+                  Cohaera louder about its own behaviour), but it CAN suppress
+                  the finding entirely by declaring 'advisory'. Absence of this
+                  rule is therefore not evidence of absence when the only
+                  declaration is in band. Cohaera catalogues that as EVASION.md
+                  E20 and the remedy is the manifest.
+
+  APPROVED CONTINUATIONS DO NOT FIRE THIS. If a cohaera.approval:1 object is
+  bound to the call's span and argument digest, is inside its validity window,
+  and records decision=allow, the continuation is authorised operation and no
+  finding is produced. data.findings[].evidence.approved_continuations counts
+  the calls that were excluded that way, so a reviewer can see the control
+  working rather than infer it from silence.
+
+  data.findings[].evidence.approval_states says why the reported calls were NOT
+  covered: no_approval, denied, approval_for_other_arguments, or
+  approval_expired. The middle two are the interesting ones. An approval granted
+  for one set of arguments and presented for another is the reuse this schema
+  exists to catch, and before argument binding existed it was indistinguishable
+  from a legitimate approval.
+
+  Requires Cohaera. observra cannot express this: its rule engine signature is
+  evaluate_rules(event_type, data), which sees one event at a time and cannot
+  relate an approval to the call it authorises.
+references:
+    - https://github.com/404SecNotFound/Cohaera
+    - https://github.com/open-agent-ai-security/observra/issues/108
+    - https://genai.owasp.org/llm-top-10/
+author: Imran Hafeez
+date: 2026-08-07
+modified: 2026-08-07
+related:
+    - id: aa4b5aa2-7fa0-4d59-aed2-db47bfb71196
+      type: similar
+    - id: d9fc7fc6-ac5e-58c6-a9df-164d229fbb96
+      type: similar
+logsource:
+    product: cohaera
+    service: session_verdict
+detection:
+    selection:
+        type: 'cohaera_session_verdict'
+        data.triggered_rules|contains: 'CH04_blocking_control_bypassed'
+    condition: selection
+fields:
+    - session_id
+    - agent_name
+    - user
+    - host
+    - data.policy_events
+    - data.total_cost_usd
+    - data.state_change_count
+    - data.egress_count
+    - data.tool_sequence
+    - data.coverage.completeness
+falsepositives:
+    - A control declared blocking in the manifest that the operator has since
+      downgraded in the policy engine without updating the manifest. The
+      manifest is authoritative here by design; correct the manifest rather than
+      tuning out the rule.
+    - An approval that exists but was emitted without a span or argument binding,
+      so Cohaera could not attribute it to the call. Check
+      data.coverage.checks[].reasons for APPROVAL_BOUND_BY_SPAN_ONLY.
+level: high

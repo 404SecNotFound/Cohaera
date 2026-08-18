@@ -25,6 +25,39 @@ THREE CHOICES WORTH ARGUING WITH
    which one you have. So recall is reported three ways: raw, restricted to
    sessions where the responsible check was evaluable at all, and weighted by
    the completeness Cohaera itself declared.
+
+FOUR CORRECTIONS AFTER THE FIFTH EXTERNAL REVIEW
+------------------------------------------------
+Every one of these was a defect in the MEASUREMENT rather than in the detector,
+which is the more embarrassing kind and the harder kind to notice, because a
+broken measurement reports success.
+
+C5-01. ANY ALERT WAS COUNTED AS A DETECTION. ``flagged`` is true if any check
+    fired, so an attack labelled as CH01's was scored as caught when CH02 and
+    CH05 happened to fire on the same trace and CH01 missed it entirely.
+    Reproduced on this corpus: family_holdout recall reads 88.2% any-alert and
+    **76.5% attributable**, and the 32 sessions between the two are
+    ``attack_novel_sequence`` cases that CH01 declined on vocabulary mismatch.
+    Both numbers are now published, and ``target_attributable_recall`` is the
+    one the card leads with, because "something fired" is not the claim a
+    per-check result is making.
+
+C5-02. FALSE POSITIVES PER 1000 USED ALL SESSIONS AS ITS DENOMINATOR, so the
+    number moved with the corpus's artificial 33.3% attack prevalence while
+    being presented as an operational planning figure. The prevalence-free unit
+    is per 1000 BENIGN sessions, and ``base_rate_projection`` standardises it to
+    realistic prevalences, where precision collapses and the corpus number
+    stops flattering anything.
+
+C5-03. COVERAGE-WEIGHTED RECALL COULD EXCEED RAW RECALL. Dividing weight on
+    detected attacks by weight on all attacks means a miss with poor telemetry
+    barely enters the denominator, so a detector scores BETTER for missing the
+    attacks it could see least of. That is precisely the wrong incentive for an
+    end-to-end measurement. It is renamed ``weighted_detected_mass``, is never
+    called recall, and the honest pair -- end-to-end recall, and recall where
+    the responsible check was evaluable -- sits beside it.
+
+C5-04 is fixed in the harness rather than here; see ``leakage_experiment``.
 """
 
 from __future__ import annotations
@@ -107,12 +140,50 @@ class Outcome:
     target_evaluable: bool           # the responsible check was not blind here
 
 
+def attributed(outcome: Outcome) -> bool:
+    """Did the check RESPONSIBLE for this session's behaviour actually fire?
+
+    The corpus labels every attack with the check whose job it is. Scoring on
+    "any alert" credits a detection to whichever check happened to fire, which
+    is how a check that declined every one of its own labelled examples came to
+    be reported at full recall (C5-01).
+
+    Benign sessions have no responsible check, so this is meaningless for them
+    and the false-positive side of every metric stays on ``flagged`` -- an
+    analyst is paged by any alert, whatever its ID.
+    """
+    return bool(outcome.target_check) and outcome.target_check in outcome.fired_checks
+
+
 def confusion(outcomes: list[Outcome]) -> dict[str, int]:
     tp = sum(1 for o in outcomes if o.is_attack and o.flagged)
     fn = sum(1 for o in outcomes if o.is_attack and not o.flagged)
     fp = sum(1 for o in outcomes if not o.is_attack and o.flagged)
     tn = sum(1 for o in outcomes if not o.is_attack and not o.flagged)
     return {"tp": tp, "fn": fn, "fp": fp, "tn": tn}
+
+
+def base_rate_projection(tpr: float, fpr: float,
+                         prevalences: tuple[float, ...] = (0.001, 0.01, 0.05)
+                         ) -> list[dict[str, Any]]:
+    """What this detector does at a REALISTIC attack base rate.
+
+    The corpus runs at 33.3% prevalence, which is absurd and is stated as
+    absurd, but a precision figure computed at that prevalence still gets read
+    as a precision figure. Standardising to 0.1%, 1% and 5% is the only way the
+    corpus number stops flattering the detector, and the collapse is severe
+    enough that no amount of prose substitutes for the table.
+    """
+    out = []
+    for p in prevalences:
+        tp = tpr * p
+        fp = fpr * (1 - p)
+        out.append({
+            "attack_prevalence": p,
+            "alerts_per_1000_sessions": round(1000 * (tp + fp), 1),
+            "precision": round(tp / (tp + fp), 5) if (tp + fp) else 0.0,
+        })
+    return out
 
 
 def summarise(outcomes: list[Outcome]) -> dict[str, Any]:
@@ -125,13 +196,23 @@ def summarise(outcomes: list[Outcome]) -> dict[str, Any]:
     fpr = Rate("false positive rate", c["fp"], c["fp"] + c["tn"])
     precision = Rate("precision", c["tp"], c["tp"] + c["fp"])
 
+    # C5-01. The number the card leads with. "Something fired" is not the claim
+    # a per-check result makes, and the gap between these two is where a check
+    # that declined all of its own labelled examples was being reported at full
+    # recall.
+    attributable = Rate("target-attributable recall",
+                        sum(1 for o in attacks if attributed(o)), len(attacks))
+    incidental = c["tp"] - attributable.numerator
+
     evaluable = [o for o in attacks if o.target_evaluable]
     recall_evaluable = Rate(
         "recall where the responsible check was evaluable",
-        sum(1 for o in evaluable if o.flagged), len(evaluable))
+        sum(1 for o in evaluable if attributed(o)), len(evaluable))
 
-    # Coverage-weighted: a detection on a session Cohaera says it could barely
-    # see counts for less than one it saw fully.
+    # C5-03. NOT recall, and no longer named as though it were. Dividing weight
+    # on detected attacks by weight on all attacks means a miss with poor
+    # telemetry barely enters the denominator, so the figure RISES when the
+    # detector misses the attacks it could see least of.
     weight_hit = sum(o.completeness for o in attacks if o.flagged)
     weight_all = sum(o.completeness for o in attacks)
 
@@ -143,15 +224,25 @@ def summarise(outcomes: list[Outcome]) -> dict[str, Any]:
         "attacks": len(attacks),
         "benign": len(benign),
         "confusion": c,
+        # Kept under its old key so existing readers do not silently change
+        # meaning, and renamed everywhere it is DISPLAYED.
         "recall": tpr.as_dict(),
+        "any_alert_recall": tpr.as_dict(),
+        "target_attributable_recall": attributable.as_dict(),
+        "incidental_detections": incidental,
         "false_positive_rate": fpr.as_dict(),
         "precision": precision.as_dict(),
         "f1": round(f1, 4),
         "recall_where_evaluable": recall_evaluable.as_dict(),
-        "coverage_weighted_recall": round(weight_hit / weight_all, 4)
+        "weighted_detected_mass": round(weight_hit / weight_all, 4)
         if weight_all else 0.0,
+        # C5-02. Both, because only the second is prevalence-free, and the first
+        # is what the previous card wrongly told operators to plan against.
         "false_positives_per_1000_sessions": round(
             1000 * c["fp"] / len(outcomes), 1) if outcomes else 0.0,
+        "false_positives_per_1000_benign_sessions": round(
+            1000 * c["fp"] / len(benign), 1) if benign else 0.0,
+        "base_rate_projection": base_rate_projection(tpr.value, fpr.value),
         "mean_coverage_completeness": round(
             sum(o.completeness for o in outcomes) / len(outcomes), 4)
         if outcomes else 0.0,
@@ -195,11 +286,41 @@ def check_attribution(outcomes: list[Outcome]) -> dict[str, dict[str, int]]:
     detector" but "which rule is going to page me at 3am for nothing".
     """
     out: dict[str, dict[str, int]] = {}
+
+    def row(check: str) -> dict[str, int]:
+        return out.setdefault(check, {"on_attacks": 0, "on_benign": 0,
+                                      "on_target_attacks": 0,
+                                      "incidental_on_attacks": 0,
+                                      "labelled": 0, "missed_own_labels": 0})
+
     for o in outcomes:
+        # C5-01, the per-check half. A check firing on an attack that belongs to
+        # a DIFFERENT check is a bonus, not a hit, and counting it as one made
+        # CH01 look as though it had caught sixty attacks it had never been
+        # asked about.
+        if o.is_attack and o.target_check:
+            r = row(o.target_check)
+            r["labelled"] += 1
+            if o.target_check not in o.fired_checks:
+                r["missed_own_labels"] += 1
         for check in o.fired_checks:
-            row = out.setdefault(check, {"on_attacks": 0, "on_benign": 0})
-            row["on_attacks" if o.is_attack else "on_benign"] += 1
-    for row in out.values():
-        total = row["on_attacks"] + row["on_benign"]
-        row["precision_pct"] = round(100 * row["on_attacks"] / total, 1) if total else 0.0
+            r = row(check)
+            if not o.is_attack:
+                r["on_benign"] += 1
+                continue
+            r["on_attacks"] += 1
+            if o.target_check == check:
+                r["on_target_attacks"] += 1
+            else:
+                r["incidental_on_attacks"] += 1
+    for r in out.values():
+        total = r["on_attacks"] + r["on_benign"]
+        r["precision_pct"] = round(100 * r["on_attacks"] / total, 1) if total else 0.0
+        # Precision counting only the attacks this check is RESPONSIBLE for. The
+        # honest per-rule number, and always the lower of the two.
+        r["target_precision_pct"] = (
+            round(100 * r["on_target_attacks"] / total, 1) if total else 0.0)
+        r["target_recall_pct"] = (
+            round(100 * r["on_target_attacks"] / r["labelled"], 1)
+            if r["labelled"] else 0.0)
     return dict(sorted(out.items()))

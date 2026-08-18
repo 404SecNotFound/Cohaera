@@ -52,6 +52,7 @@ REJECT_TOO_MANY_RECORDS = "RECORD_BUDGET_EXHAUSTED"
 REJECT_TOO_MANY_BYTES = "INPUT_BYTE_BUDGET_EXHAUSTED"
 REJECT_TOO_MANY_REJECTS = "REJECT_BUDGET_EXHAUSTED"
 REJECT_RATIO_EXCEEDED = "REJECT_RATIO_EXCEEDED"
+REJECT_MEMORY_BUDGET = "RESIDENT_MEMORY_BUDGET_EXHAUSTED"
 
 # --- field-level defects (the record survives, degraded and labelled) ------
 DEFECT_EVENT_TYPE_TYPE = "INVALID_EVENT_TYPE"
@@ -67,12 +68,38 @@ DEFECT_IDENTITY_TYPE = "INVALID_IDENTITY_FIELD_TYPE"
 DEFECT_DATA_TYPE = "INVALID_DATA_BAG_TYPE"
 DEFECT_REVERSIBLE_TYPE = "INVALID_REVERSIBLE_TYPE"
 DEFECT_NUMERIC_NONFINITE = "NONFINITE_NUMERIC_FIELD"
+# The upstream scanner's claim about a record. CH03 is the only check that turns
+# somebody else's assertion into a critical finding, so it is the one place a
+# type error was worth a severity: `has_injection_patterns: "false"` is a
+# truthy string, and reading it as truth produced a critical
+# completed-action finding on a session where no scanner had found anything.
+# Exact types only, and a malformed claim is ABSENT rather than believed.
+DEFECT_SCANNER_CLAIM_TYPE = "INVALID_SCANNER_CLAIM"
+DEFECT_INJECTION_MARKERS_TYPE = "INVALID_INJECTION_MARKERS"
+
+# --- P1 evidence sidecars (docs/EVIDENCE-TRUST.md) -------------------------
+# A malformed evidence object is treated as ABSENT, never as a weaker version of
+# itself. That direction matters more here than anywhere else in the firewall:
+# a half-parsed approval that still binds to a span would let a producer buy a
+# bypass with a type error, and a half-parsed integrity object would let one buy
+# silence. Absent is fail-closed for all three -- no approval means an
+# unapproved continuation, no integrity means the session is reported as
+# unattested.
+DEFECT_INTEGRITY_TYPE = "INVALID_INTEGRITY_OBJECT"
+DEFECT_RECEIPT_TYPE = "INVALID_EFFECT_RECEIPT"
+DEFECT_APPROVAL_TYPE = "INVALID_APPROVAL_OBJECT"
+DEFECT_ENFORCEMENT_TYPE = "INVALID_POLICY_ENFORCEMENT"
+
+# COH-R02. Peak resident bytes per byte of accepted input, measured across
+# record shapes and rounded up for headroom; see max_resident_bytes.
+RESIDENT_BYTES_PER_INPUT_BYTE = 32
 
 ALL_REJECT_CODES = (
     REJECT_MALFORMED_JSON, REJECT_NOT_AN_OBJECT, REJECT_LINE_TOO_LONG,
     REJECT_NESTING_TOO_DEEP, REJECT_UNDECODABLE, REJECT_TOO_MANY_EVENTS,
     REJECT_TOO_MANY_SESSIONS, REJECT_TOO_MANY_KEYS, REJECT_TOO_MANY_RECORDS,
     REJECT_TOO_MANY_BYTES, REJECT_TOO_MANY_REJECTS, REJECT_RATIO_EXCEEDED,
+    REJECT_MEMORY_BUDGET,
 )
 
 ALL_DEFECT_CODES = (
@@ -80,7 +107,9 @@ ALL_DEFECT_CODES = (
     DEFECT_SESSION_KEY_TYPE, DEFECT_TOOL_NAME_TYPE, DEFECT_TOOL_NAME_LENGTH,
     DEFECT_RESPONSE_TEXT_TYPE, DEFECT_RESPONSE_TEXT_LENGTH, DEFECT_TIMESTAMP,
     DEFECT_IDENTITY_TYPE, DEFECT_DATA_TYPE, DEFECT_REVERSIBLE_TYPE,
-    DEFECT_NUMERIC_NONFINITE,
+    DEFECT_NUMERIC_NONFINITE, DEFECT_INTEGRITY_TYPE, DEFECT_RECEIPT_TYPE,
+    DEFECT_APPROVAL_TYPE, DEFECT_ENFORCEMENT_TYPE,
+    DEFECT_SCANNER_CLAIM_TYPE, DEFECT_INJECTION_MARKERS_TYPE,
 )
 
 
@@ -137,6 +166,40 @@ class Limits:
     max_records_total: int = 4_000_000       # records READ, accepted or not
     max_input_bytes: int = 2_147_483_648     # 2 GiB of record bytes per run
 
+    # COH-R02. THE BOUND THAT WAS MISSING, AND WHY THE ONES ABOVE ARE NOT IT.
+    #
+    # Every bound above counts input. None of them counts what the input turns
+    # INTO, and this design holds the whole run in memory: `load` materialises
+    # every Event, groups them, and returns every Session at once. A parsed
+    # record is not the size of its bytes -- it is a dict of str objects, a
+    # frozen copy, and cached derived values -- so the ratio is large and it is
+    # driven by how many KEYS a record has rather than how long it is.
+    #
+    # Measured, peak RSS against input bytes, 20,000 records per shape:
+    #
+    #     8 keys per record       26.7x        128 keys      18.0x
+    #     40 keys                 21.6x        500 keys      20.1x
+    #     one 3 KB string          1.9x        typical observra record  16.3x
+    #
+    # So `max_input_bytes` at 2 GiB was a licence for roughly 64 GiB of
+    # process. It read as a bound and behaved as a suggestion.
+    #
+    # RESIDENT_BYTES_PER_INPUT_BYTE is the factor rounded up with headroom, and
+    # `max_resident_bytes` is the budget an operator actually cares about. With
+    # the defaults, memory binds first at about 64 MiB of accepted input --
+    # thirty-two times stricter than before, and the number is now one somebody
+    # can reason about against the RAM on the box.
+    #
+    # It is conservative for string-heavy telemetry, which amplifies about 2x
+    # rather than 20x. That direction is deliberate: a budget that stops a run
+    # early is an inconvenience, and one that stops it late is an OOM kill.
+    #
+    # THIS IS A BUDGET, NOT AN ARCHITECTURE. The honest fix is to stop holding
+    # the run in memory -- bounded session windows, a spool, external sorting.
+    # Until that exists this makes the failure a reported abort with a reason
+    # code instead of the kernel choosing which process dies.
+    max_resident_bytes: int = 2_147_483_648  # 2 GiB of assembled state
+
     # ---- identity and correlation ---------------------------------------
     max_span_chars: int = 256
     max_session_key_chars: int = 256
@@ -166,6 +229,36 @@ class Limits:
     max_manifest_tools: int = 10_000
     max_manifest_field_chars: int = 256      # tool id, destination, arg name
     max_manifest_sensitive_args: int = 64    # per tool
+
+    # ---- P1 evidence (docs/EVIDENCE-TRUST.md) ---------------------------
+    # Every one of these bounds an attacker-chosen quantity. A producer picks
+    # how many streams it claims, how far out of order it delivers, and how many
+    # signatures it asks to have checked -- and a signature check is a few
+    # milliseconds of pure-Python scalar multiplication (about 2.5 ms since
+    # ed25519._mul_base precomputed the fixed-base half of it; it was 4), which
+    # is the most expensive thing in this codebase per unit of attacker effort.
+    # The comb changed the constant, not the shape: the work is still linear in
+    # a number the producer chooses, which is why the bound below stays.
+    max_integrity_streams: int = 10_000
+    # How far a record may arrive out of order before the gap ahead of it is
+    # called a deletion. This is the reordering-versus-deletion decision from
+    # EVIDENCE-TRUST section 2, and it is a bound rather than a heuristic
+    # because the buffer it governs is producer-controlled.
+    max_reorder_window: int = 64
+    max_signature_verifications: int = 100_000
+    max_approvals_per_session: int = 1_000
+    max_collector_keys: int = 1_000
+    max_keyfile_bytes: int = 1_048_576
+    # ---- the seen-stream ledger -----------------------------------------
+    # The one piece of state Cohaera keeps between runs, so it is also the one
+    # that can grow without an operator noticing. A stream id is producer-chosen,
+    # so a hostile producer can mint a new one per record and turn the ledger
+    # into an unbounded disk write on the collector host -- which is the same
+    # amplification fault as the 6.3 MB verdict, relocated to a file that
+    # persists. Bounded, with the eviction REPORTED, because an evicted stream
+    # is a stream whose replay is no longer detectable.
+    max_ledger_streams: int = 100_000
+    max_ledger_bytes: int = 33_554_432       # 32 MiB of ledger JSON
 
     # ---- CLI reject policy ----------------------------------------------
     max_rejects: int | None = None           # None = unlimited

@@ -16,6 +16,16 @@ description: |
   Requires Cohaera, and requires text capture to be enabled. If response_text
   is absent, Cohaera reports CH02 as not_evaluated rather than clean; see the
   companion rule cohaera_coverage_degraded.
+
+  KNOWN FALSE NEGATIVE, and it does not fire this rule. Disclosure is matched
+  by token overlap against the tool name, so when a tool suite shares a prefix
+  -- ldap_group_membership_enumerate and ldap_group_membership_apply, or
+  github_issue_read and github_issue_create -- a summary naming only the read
+  shares most of its tokens with the write. Cohaera now classifies that as
+  ambiguous rather than as disclosure: no finding is raised, but the session's
+  coverage carries DISCLOSURE_AMBIGUOUS_SHARED_TOKENS with reduced CH02
+  confidence. Route on cohaera_coverage_degraded to see those sessions; this
+  rule alone will not show them. EVASION.md E16.
 references:
     - https://github.com/404SecNotFound/Cohaera
     - https://arxiv.org/abs/2603.15714

@@ -28,11 +28,51 @@
     "",
     "NOT SIGNED. Signing needs a key distribution story that does not exist yet,",
     "and a signature field that nothing verifies is worse than none. Cohaera",
-    "records the file's SHA-256 digest in every verdict's provenance block, so",
-    "two runs that disagree about what a tool does are distinguishable after the",
-    "fact. Treat the file as configuration under change control.",
+    "records TWO SHA-256 digests of this file in every verdict's provenance",
+    "block, so two runs that disagree about what a tool does are distinguishable",
+    "after the fact. Treat the file as configuration under change control.",
     "",
-    "Usage: cohaera score run.jsonl --tool-manifest this_file.json"
+    "  file_digest      over the exact bytes. Moves for ANY edit, including a",
+    "                   reformat and including a field Cohaera does not read.",
+    "  semantic_digest  over the declarations Cohaera parsed out. Moves only",
+    "                   when the meaning changes. Reformat this file and it",
+    "                   stays put; change an effect and it does not.",
+    "",
+    "Same semantic_digest, different file_digest: the policy did not change.",
+    "Different semantic_digest: it did, and verdicts on either side of the edit",
+    "are answering different questions.",
+    "",
+    "Usage: cohaera score run.jsonl --tool-manifest this_file.json",
+    "",
+    "-----------------------------------------------------------------",
+    "THE 'policies' SECTION AT THE BOTTOM IS OPTIONAL, and the reason it",
+    "exists is worth reading before you skip it.",
+    "",
+    "CH04 asks whether consequential work continued after a guardrail fired.",
+    "Whether that is a BYPASS depends on whether the guardrail was supposed",
+    "to stop anything, and a policy engine can declare that on the event",
+    "itself as an 'enforcement' field.",
+    "",
+    "Declaring it on the event means believing the thing being watched. Note",
+    "the asymmetry, because it decides how much that matters: a producer",
+    "cannot MANUFACTURE a bypass finding by declaring 'blocking' -- that only",
+    "makes Cohaera louder about the producer's own behaviour -- but it CAN",
+    "suppress one entirely by declaring 'advisory'. One string, and the check",
+    "whose job is to notice a circumvention goes quiet. That is EVASION.md",
+    "E20, and it is the same shape as the in-band 'reversible' flag deciding",
+    "whether a call is consequential.",
+    "",
+    "So a declaration here OUTRANKS the event, with the same precedence and",
+    "for the same reason a tool capability outranks 'reversible': the",
+    "operator chose this file, the agent wrote the event.",
+    "",
+    "Key on the producer's policy_id where it emits one, and on the EVENT",
+    "TYPE otherwise -- observra's cost_threshold_exceeded and depth_exceeded",
+    "carry no policy identifier at all.",
+    "",
+    "Where nothing declares a policy, CH04 keeps its old behaviour and its",
+    "old check ID: it reports the sequence, claims no bypass, and coverage",
+    "says POLICY_SEMANTICS_UNDECLARED."
   ],
 
   "manifest_version": "1",
@@ -122,6 +162,21 @@
       "destination": "external:partner-api",
       "requires_approval": true,
       "_note": "Same verb as sync_local_cache, opposite trust boundary. No lexical rule separates these two."
+    }
+  },
+
+  "policies": {
+    "cost_threshold_exceeded": {
+      "enforcement": "advisory",
+      "description": "Soft budget alert. The agent is expected to continue; finance reconciles later. Declared here so CH04 stops paging on correct behaviour."
+    },
+    "depth_exceeded": {
+      "enforcement": "blocking",
+      "description": "Delegation depth is a hard ceiling. Consequential work after this, with no bound cohaera.approval:1 covering it, is a bypass and Cohaera will say so."
+    },
+    "external-data-egress": {
+      "enforcement": "blocking",
+      "description": "Keyed on policy_id rather than event type, which is what a real policy engine emits. Paired with sync_to_partner above."
     }
   }
 }
