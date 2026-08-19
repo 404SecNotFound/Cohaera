@@ -74,6 +74,7 @@ from cohaera.evidence import (
     BINDING_TRUSTED,
     BOUND_EXACT,
     BOUND_SPAN_ONLY,
+    INADMISSIBLE,
     INTEGRITY_SCHEMA,
     LEDGER_SCHEMA,
     NO_FRESHNESS,
@@ -106,12 +107,14 @@ from cohaera.evidence import (
     R_SEQUENCE_REPLAY,
     R_SIGNATURE_INVALID,
     R_STALE,
+    R_STREAM_BOUNDARY_UNVERIFIED,
     R_STREAM_FORKED,
     R_STREAM_REPLAYED,
     R_STREAM_SKIPPED_RECORDS,
     RECEIPT_SCHEMA,
     ROLE_COLLECTOR,
     ROLE_POLICY,
+    SEEN_ADVANCED,
     TRUST_STORE_SCHEMA,
     W_ALL_KEYS_REVOKED,
     W_LEGACY_SCHEMA,
@@ -125,13 +128,18 @@ from cohaera.evidence import (
     LedgerError,
     PolicySignature,
     PolicySignatureError,
+    SeenStream,
     StreamLedger,
     StreamVerifier,
     TrustStore,
     TrustStoreError,
     arg_digest,
+    body_digest,
+    chain_seed,
+    chain_step,
     file_sha256,
     policy_signing_input,
+    signing_input,
     stream_sha256,
     verify_policy_signature,
 )
@@ -2443,6 +2451,128 @@ def test_records_never_scored_are_reported_but_not_called_tampering(tmp_path):
     state, _ = _scored(full[8:], path, run_id="run-2")
     assert R_STREAM_SKIPPED_RECORDS in state.codes
     assert not state.inadmissible
+
+
+def _sign_from(records: list[dict], stream_id: str, start_seq: int,
+               head: str) -> list[dict]:
+    """A validly signed run that starts at ``start_seq`` from ANY head.
+
+    ``sign_stream`` always starts a stream at seq 0 from its canonical seed, so
+    it cannot express the thing R-02 is about: a continuation minted by somebody
+    holding a collector key, glued onto the sequence numbers of a stream the
+    ledger already knows. Every signature this produces is genuine -- that is
+    the point. Nothing inside a single run can tell it from the real thing.
+    """
+    out = []
+    for i, record in enumerate(records):
+        seq = start_seq + i
+        body = {k: v for k, v in record.items() if k != "integrity"}
+        prev = head
+        head = chain_step(prev, body_digest(body))
+        out.append({**body, "integrity": {
+            "scheme": INTEGRITY_SCHEMA, "stream_id": stream_id, "seq": seq,
+            "prev": prev, "chain": head, "key_id": KEY_ID,
+            "sig": base64.b64encode(ed25519.sign(
+                SECRET, signing_input(stream_id, seq, head))).decode("ascii")}})
+    return out
+
+
+def test_a_continuation_from_a_boundary_nobody_scored_is_a_fork(tmp_path):
+    """R-02, reproduced. The serious half.
+
+    ``compare`` asked one question of a continuation -- is its first sequence
+    past the last one scored -- which establishes that the new records came
+    AFTER the old ones and never that they came FROM them. A second, mutually
+    exclusive history minted under a valid collector key, starting at exactly
+    ``last_seq + 1`` and declaring a predecessor the ledger had never recorded,
+    read as ordinary advancement. Every signature verifies, the chain within the
+    run is perfect, and nothing inside one run can see it: this is precisely the
+    class of attack the ledger exists for.
+
+    Worse than the missed detection was what happened next. ``record`` advanced
+    on ``advanced``, so the fabricated head became the reference every later run
+    was measured against -- the attacker's history, adopted as the truth.
+    """
+    path = tmp_path / "seen.json"
+    _scored(sign_stream(_records(3), "stream-a", SECRET, KEY_ID), path)
+    honest_head = StreamLedger.load(path).streams["stream-a"].head
+
+    false_head = chain_step(chain_seed("stream-a", KEY_ID), "0" * 64)
+    assert false_head != honest_head
+    fabricated = _sign_from(_records(3, sid="sess-1"), "stream-a", 3, false_head)
+    state, ledger = _scored(fabricated, path, run_id="run-2")
+
+    assert R_STREAM_FORKED in state.codes
+    assert state.inadmissible
+    verdict = state.replayed_streams[0]
+    assert verdict["status"] == "forked"
+    assert verdict["boundary"] == "differs"
+    assert verdict["declared_prev"] == false_head
+    assert verdict["previous_head"] == honest_head
+    assert StreamLedger.load(path).streams["stream-a"].head == honest_head, (
+        "a fabricated continuation must not become the reference")
+    assert ledger.streams["stream-a"].last_seq == 2
+
+
+def test_a_gap_in_a_continuation_is_not_ordinary_advancement(tmp_path):
+    """R-02, the other half.
+
+    Records 3 and 4 were never scored by anything, and the verdict said
+    ``advanced`` -- the same word a healthy batched collector gets. The reason
+    code was there, derived separately by arithmetic, but the status a SIEM rule
+    or a human reads first said normal progress.
+
+    It stays non-inadmissible, and that is unchanged and deliberate: an operator
+    scoring a subset on purpose and an attacker deleting a range are the same
+    input from here, and the ledger holds no head for the missing stretch to
+    tell them apart. What changed is that it no longer calls itself ordinary.
+    """
+    path = tmp_path / "seen.json"
+    full = sign_stream(_records(12), "stream-b", SECRET, KEY_ID)
+    _scored(full[:3], path)
+    state, ledger = _scored(full[5:], path, run_id="run-2")
+
+    assert state.replayed_streams[0]["status"] == "discontinuous"
+    assert state.replayed_streams[0]["boundary"] == "gap"
+    assert R_STREAM_SKIPPED_RECORDS in state.codes
+    assert not state.inadmissible, (
+        "a subset scored on purpose looks the same; this is a report, not an "
+        "accusation")
+    assert ledger.streams["stream-b"].last_seq == 11, (
+        "the records after the gap were genuinely scored and must be recorded, "
+        "or the next run reads them as a replay")
+
+
+def test_a_contiguous_continuation_onto_the_stored_head_is_still_advancement():
+    """The confounder R-02's fix must not break.
+
+    A collector tailed in batches is the ordinary case and the whole reason the
+    ledger is usable. If tightening the boundary check made this fire, the
+    ledger would be turned off within a day and the replay detection with it.
+    """
+    ledger = StreamLedger(streams={"s": SeenStream(
+        stream_id="s", first_seq=0, last_seq=5, head="abc")}, path=Path("x"))
+    verdict = ledger.compare("s", 6, 11, "def", None, first_prev="abc")
+    assert verdict.status == SEEN_ADVANCED
+    assert verdict.boundary == "match"
+
+
+def test_an_undeclared_boundary_advances_but_never_reads_as_checked(tmp_path):
+    """``prev`` is optional in the sidecar, so the join can be unverifiable.
+
+    Refusing to advance would break every collector that omits the field, and
+    calling it a fork would accuse them. Reported as its own code instead, and
+    not inadmissible -- a question that could not be answered is not an answer,
+    which is the same rule INTEGRITY_KEY_WINDOW_UNCHECKED follows. What it must
+    never do is read as a boundary that was checked and matched.
+    """
+    ledger = StreamLedger(streams={"s": SeenStream(
+        stream_id="s", first_seq=0, last_seq=5, head="abc")}, path=Path("x"))
+    verdict = ledger.compare("s", 6, 11, "def", None, first_prev=None)
+    assert verdict.status == SEEN_ADVANCED
+    assert verdict.boundary == "unstated"
+    assert verdict.boundary != "match"
+    assert R_STREAM_BOUNDARY_UNVERIFIED not in INADMISSIBLE
 
 
 def test_without_a_ledger_the_absence_is_stated(tmp_path):

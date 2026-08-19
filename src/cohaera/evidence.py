@@ -1310,6 +1310,12 @@ R_FROM_FUTURE = "INTEGRITY_EVIDENCE_FROM_FUTURE"
 R_STREAM_REPLAYED = "INTEGRITY_STREAM_REPLAYED"
 R_STREAM_FORKED = "INTEGRITY_STREAM_FORKED"
 R_STREAM_SKIPPED_RECORDS = "INTEGRITY_STREAM_RECORDS_NEVER_SCORED"
+# R-02. The first record of a continuation declared no predecessor, so the join
+# onto the stored head could not be checked at all. Not inadmissible -- it is a
+# question that could not be answered, and the doctrine on that is settled -- but
+# it must never read as a checked boundary. A producer that omits ``prev`` gives
+# up the only cross-run continuity evidence there is; EVASION.md carries it.
+R_STREAM_BOUNDARY_UNVERIFIED = "INTEGRITY_STREAM_BOUNDARY_UNVERIFIED"
 R_NO_STREAM_LEDGER = "NO_STREAM_LEDGER"
 R_LEDGER_EVICTED = "STREAM_LEDGER_EVICTED_THIS_STREAM"
 R_LEDGER_BUDGET = "STREAM_LEDGER_BUDGET_EXHAUSTED"
@@ -1461,10 +1467,22 @@ LEDGER_SCHEMA = "cohaera.stream_ledger:1"
 
 # How the incoming stream stood against what the ledger remembered.
 SEEN_NEW = "new"                  # never scored before
-SEEN_ADVANCED = "advanced"        # continues past the last scored sequence
+SEEN_ADVANCED = "advanced"        # continues from exactly where scoring stopped
+SEEN_DISCONTINUOUS = "discontinuous"   # continues past it, over a gap
 SEEN_REPLAYED = "replayed"        # occupies sequence positions already scored
-SEEN_FORKED = "forked"            # same positions, DIFFERENT history
+SEEN_FORKED = "forked"            # incompatible history, at or past the boundary
 SEEN_EVICTED = "evicted"          # was known, and the budget dropped it
+
+# How the incoming stream's first record joined onto what the ledger stored.
+# Separate from the status because the status is a judgement and this is the
+# observation it rests on -- and because "the producer did not say" has to stay
+# distinguishable from "the producer said, and it matched".
+BOUNDARY_MATCH = "match"              # declared predecessor == stored head
+BOUNDARY_DIFFERS = "differs"          # declared, and it is a different history
+BOUNDARY_UNSTATED = "unstated"        # no prev on the first record; unverifiable
+BOUNDARY_GAP = "gap"                  # sequences in between were never scored
+BOUNDARY_NOT_COMPARED = "not_compared"   # new stream, or an overlap rather than
+                                         # a continuation
 
 
 class LedgerError(ValueError):
@@ -1503,6 +1521,13 @@ class SeenVerdict:
     previous_last_seq: int | None = None
     previous_runs: int = 0
     head_comparison: str = "not_reached"   # match | differs | not_reached
+    # R-02. How this run's first record joined onto the ledger's stored head,
+    # and what the ledger had stored. Kept in the verdict rather than only in a
+    # branch, because "why did this read as a fork" is the first question asked
+    # and re-deriving it needs both files.
+    boundary: str = BOUNDARY_NOT_COMPARED
+    declared_prev: str | None = None
+    previous_head: str | None = None
 
     @property
     def code(self) -> str | None:
@@ -1510,6 +1535,8 @@ class SeenVerdict:
             return R_STREAM_FORKED
         if self.status == SEEN_REPLAYED:
             return R_STREAM_REPLAYED
+        if self.status == SEEN_DISCONTINUOUS:
+            return R_STREAM_SKIPPED_RECORDS
         return None
 
     def as_dict(self) -> dict[str, Any]:
@@ -1517,7 +1544,10 @@ class SeenVerdict:
                 "overlap_from": self.overlap_from, "overlap_to": self.overlap_to,
                 "previous_last_seq": self.previous_last_seq,
                 "previous_runs": self.previous_runs,
-                "head_comparison": self.head_comparison}
+                "head_comparison": self.head_comparison,
+                "boundary": self.boundary,
+                "declared_prev": self.declared_prev,
+                "previous_head": self.previous_head}
 
 
 class StreamLedger:
@@ -1593,25 +1623,70 @@ class StreamLedger:
     # -- comparison -------------------------------------------------------
 
     def compare(self, stream_id: str, first_seq: int, last_seq: int,
-                head: str, checkpoint_head: str | None) -> SeenVerdict:
+                head: str, checkpoint_head: str | None,
+                first_prev: str | None = None) -> SeenVerdict:
         """Judge one stream against what was recorded. Does not mutate.
 
         ``checkpoint_head`` is this run's chain head at the ledger's recorded
         ``last_seq``, captured while verifying, or None if this run's records
         never reached that far. It is the only value that can answer the
-        replay-or-fork question, and when it is absent the verdict says
-        ``not_reached`` rather than guessing.
+        replay-or-fork question for an OVERLAP, and when it is absent the
+        verdict says ``not_reached`` rather than guessing.
+
+        ``first_prev`` is the predecessor the first record of this run declared,
+        and it answers the same question for a CONTINUATION. R-02: this branch
+        used to be one line -- ``first_seq > previous.last_seq`` meant
+        ``advanced`` -- which asked only that the new records came after the old
+        ones and never that they came FROM them. Two different streams got the
+        same verdict:
+
+          * seq 3 after a stored last_seq of 2, declaring a predecessor the
+            ledger had never recorded. Somebody with a collector key had minted
+            a second, incompatible history and glued it to the sequence numbers
+            of the first. It read as ordinary advancement, and worse, ``record``
+            then stored that history's head -- so the fabricated version became
+            the reference every later run was measured against.
+          * seq 5 after a stored last_seq of 2, with records 3 and 4 never
+            scored by anything. A skipped range, reading as normal progress.
+
+        Three questions now, in this order, and the order is the argument.
+        Sequence contiguity first, because with a gap in between there is no
+        head to compare against -- the ledger never computed the one that would
+        sit at the boundary -- so calling a gap a fork would be inventing an
+        answer. Then the declared predecessor. Only a continuation that is both
+        contiguous AND joins onto the stored head is ordinary advancement.
         """
         previous = self.streams.get(stream_id)
         if previous is None:
             return SeenVerdict(stream_id, SEEN_NEW)
 
         if first_seq > previous.last_seq:
-            # Continues past everything scored before. The ordinary case for a
-            # collector tailed in batches.
-            return SeenVerdict(stream_id, SEEN_ADVANCED,
+            if first_seq != previous.last_seq + 1:
+                # A gap. Deliberately NOT a fork: an operator scoring a subset
+                # on purpose and an attacker deleting a range look identical
+                # from here, and the ledger holds no head for the sequence in
+                # between with which to tell them apart.
+                status, boundary = SEEN_DISCONTINUOUS, BOUNDARY_GAP
+            elif first_prev is None:
+                # Contiguous, and the producer declined to say what it follows.
+                # Advancement, because refusing it would break every collector
+                # that omits the field -- but the boundary is recorded as
+                # unverified rather than as checked.
+                status, boundary = SEEN_ADVANCED, BOUNDARY_UNSTATED
+            elif first_prev != previous.head:
+                # Contiguous, declared, and it names a history this ledger has
+                # never seen. The stream id and the sequence numbers line up and
+                # the chain does not, which is what a fabricated continuation
+                # looks like from here.
+                status, boundary = SEEN_FORKED, BOUNDARY_DIFFERS
+            else:
+                status, boundary = SEEN_ADVANCED, BOUNDARY_MATCH
+            return SeenVerdict(stream_id, status,
                                previous_last_seq=previous.last_seq,
-                               previous_runs=previous.runs)
+                               previous_runs=previous.runs,
+                               boundary=boundary,
+                               declared_prev=first_prev,
+                               previous_head=previous.head)
 
         overlap_to = min(last_seq, previous.last_seq)
         comparison = "not_reached"
@@ -1626,7 +1701,9 @@ class StreamLedger:
                            overlap_to=overlap_to,
                            previous_last_seq=previous.last_seq,
                            previous_runs=previous.runs,
-                           head_comparison=comparison)
+                           head_comparison=comparison,
+                           declared_prev=first_prev,
+                           previous_head=previous.head)
 
     # -- recording --------------------------------------------------------
 
@@ -1645,6 +1722,11 @@ class StreamLedger:
         self.verdicts.append(verdict)
         self._touched.add(verdict.stream_id)
         if verdict.status in (SEEN_REPLAYED, SEEN_FORKED):
+            # Including the R-02 fork, which is a CONTINUATION rather than an
+            # overlap. It matters most there: an overlapping fork at least
+            # collides with positions the ledger already holds, while a
+            # fabricated continuation would otherwise have its head stored as
+            # the reference for every run afterwards.
             previous = self.streams.get(verdict.stream_id)
             if previous is not None:
                 self.streams[verdict.stream_id] = replace(
@@ -1908,6 +1990,11 @@ class _Stream:
     # replay is not preventable here, and this is what makes it auditable.
     first_seq: int | None = None
     last_seq: int | None = None
+    # R-02. The predecessor the FIRST consumed record declared. _begin used to
+    # adopt this as the chain head and say nothing else about it, which is the
+    # bug: adopting a boundary is not the same as checking one. Recorded here so
+    # the ledger can compare it against the head it stored.
+    first_prev: str | None = None
     # This run's chain head at the sequence the LEDGER last recorded, captured
     # in passing. It is the only value that separates a replay from a fork --
     # same head means the same records, a different head means the same
@@ -2065,7 +2152,8 @@ class StreamVerifier:
                 continue
             verdict = self.ledger.compare(
                 stream.stream_id, stream.first_seq, stream.last_seq,
-                stream.head, stream.ledger_checkpoint_head)
+                stream.head, stream.ledger_checkpoint_head,
+                first_prev=stream.first_prev)
             keys = tuple(sorted({k for sid in stream.sessions_seen
                                  for k in self._session(sid).signing_key_ids}))
             self.ledger.record(verdict, stream.first_seq, stream.last_seq,
@@ -2077,15 +2165,17 @@ class StreamVerifier:
                     continue
                 state = self._session(session_key)
                 if code:
+                    # R-02. SEEN_DISCONTINUOUS carries R_STREAM_SKIPPED_RECORDS
+                    # through SeenVerdict.code now, so the gap case arrives here
+                    # rather than being re-derived from an arithmetic test on a
+                    # status that had already called it ordinary advancement.
                     state.note(code)
                     state.replayed_streams.append(verdict.as_dict())
-                elif (verdict.status == SEEN_ADVANCED
-                      and verdict.previous_last_seq is not None
-                      and stream.first_seq > verdict.previous_last_seq + 1):
-                    # Records between the last scored sequence and this run's
-                    # first were never scored by anything. Reported, not called
-                    # tampering: scoring a subset on purpose looks the same.
-                    state.note(R_STREAM_SKIPPED_RECORDS)
+                if verdict.boundary == BOUNDARY_UNSTATED:
+                    # Continuous by sequence, and nothing said what it follows.
+                    # Reported next to the advancement rather than instead of
+                    # it: the records were scored, and the join was not checked.
+                    state.note(R_STREAM_BOUNDARY_UNVERIFIED)
                 if self.ledger.budget_exhausted:
                     state.note(R_LEDGER_BUDGET)
 
@@ -2120,6 +2210,7 @@ class StreamVerifier:
         cap = self.limits.max_evidence_items
         return [{"stream_id": s.stream_id, "first_seq": s.first_seq,
                  "last_seq": s.last_seq, "head": s.head,
+                 "first_prev": s.first_prev,
                  "joined_midstream": s.joined_midstream}
                 for s in sorted(self.streams.values(),
                                 key=lambda s: s.stream_id)[:cap]]
@@ -2157,6 +2248,7 @@ class StreamVerifier:
         state = self._session(session_key)
         if stream.first_seq is None:
             stream.first_seq = seq
+            stream.first_prev = integrity.prev
         stream.last_seq = seq
         expected_chain = chain_step(stream.head, body) if stream.head else None
 

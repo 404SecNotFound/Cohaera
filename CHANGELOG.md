@@ -99,6 +99,35 @@ any diff, so the numbers below are derived rather than claimed.
   **No evaluation-card number moved**: the corpus emits complete bindings on
   every receipt and approval, so the fix changes what would happen to a
   real producer's partial evidence and changes nothing about the measurement.
+- **A stream could be continued from a boundary nothing had ever scored, and
+  the fabrication became the reference (R-02).** `StreamLedger.compare` judged a
+  continuation with one test — `first_seq > previous.last_seq` — which
+  establishes that the new records came *after* the old ones and never that they
+  came *from* them. Somebody holding a collector key could mint a second,
+  mutually exclusive history, start it at exactly `last_seq + 1`, declare a
+  predecessor the ledger had never recorded, and have it read as ordinary
+  advancement. Every signature verifies and the chain within the run is perfect,
+  so nothing inside a single run can see it — which is the entire class of attack
+  the ledger exists for. `record` then advanced on `advanced`, so the fabricated
+  head became the reference every later run was measured against.
+
+  `compare` now asks three questions in order. Sequence contiguity first, because
+  across a gap there is no stored head at the boundary to compare against, so
+  calling a gap a fork would invent an answer. Then the declared predecessor.
+  Only a continuation that is both contiguous **and** joins onto the stored head
+  is `advanced`.
+
+  New status `discontinuous` for a gap — it keeps `INTEGRITY_STREAM_RECORDS_NEVER_SCORED`
+  and stays non-inadmissible, since an operator scoring a subset on purpose is
+  the same input, but it no longer calls itself ordinary advancement. A
+  contiguous continuation onto a different history is `forked` and inadmissible,
+  and does not advance the ledger. A first record that declares no predecessor
+  still advances — refusing would break every collector that omits the field —
+  but carries the new non-inadmissible `INTEGRITY_STREAM_BOUNDARY_UNVERIFIED`
+  and a `boundary` of `unstated`, never `match`.
+
+  Additive: `boundary`, `declared_prev` and `previous_head` on the stream
+  verdict, and `first_prev` in `stream_summary`.
 - **A freshness window only bounded one direction, and one CLI argument switched
   it off in silence (R-13).** `Freshness.stale` reported a future-dated record as
   not stale and computed nothing else, so a signed record dated a year ahead read
