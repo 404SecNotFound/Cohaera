@@ -3,7 +3,7 @@
 # artefact you ship is a function of the day you built it, and "setuptools>=68"
 # accepts every future major release sight unseen. Bounded here so a release is
 # reproducible; raise the ceilings deliberately, not by accident.
-requires = ["setuptools>=68,<81", "wheel>=0.42,<1"]
+requires = ["setuptools>=68,<85", "wheel>=0.42,<1"]
 build-backend = "setuptools.build_meta"
 
 [project]
