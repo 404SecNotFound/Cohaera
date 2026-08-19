@@ -2373,6 +2373,9 @@ class StreamVerifier:
         self.sessions: dict[str, SessionIntegrity] = {}
         self.signatures_verified = 0
         self.signature_budget_exhausted = False
+        # R-12. Wall clock actually spent in signature verification, so the
+        # bound is on the work and not on a proxy for it.
+        self.signature_seconds = 0.0
         self.stream_budget_exhausted = False
         # R-03. Streams compared against the ledger and deliberately not written
         # to it, with the reason. Carried into the run summary because a stream
@@ -2582,6 +2585,7 @@ class StreamVerifier:
             "any_integrity_evidence": self._saw_any_integrity,
             "any_signature_present": self._saw_any_signature,
             "signature_budget_exhausted": self.signature_budget_exhausted,
+            "signature_seconds": round(self.signature_seconds, 3),
             "stream_budget_exhausted": self.stream_budget_exhausted,
             "freshness": self.freshness.as_dict(),
             "stream_ledger": self.ledger.summary(),
@@ -2736,14 +2740,22 @@ class StreamVerifier:
         if key.revoked:
             self._note(state, stream, R_KEY_REVOKED)
             return
-        if self.signatures_verified >= self.limits.max_signature_verifications:
+        # R-12. Count and clock. The count is charged before the work so a
+        # producer cannot get one free verification per budget check; the clock
+        # is what makes the bound mean the same thing on a slow host as on a
+        # fast one.
+        if (self.signatures_verified >= self.limits.max_signature_verifications
+                or self.signature_seconds >= self.limits.max_signature_seconds):
             self.signature_budget_exhausted = True
             state.note(R_SIGNATURE_BUDGET)
             return
         self.signatures_verified += 1
         state.signatures_verified += 1
         message = signing_input(stream.stream_id, seq, integrity.chain or "")
-        if not ed25519.verify(key.public, message, integrity.sig or b""):
+        started = time.monotonic()
+        verified = ed25519.verify(key.public, message, integrity.sig or b"")
+        self.signature_seconds += time.monotonic() - started
+        if not verified:
             self._note(state, stream, R_SIGNATURE_INVALID)
             if len(state.bad_signatures) < self.limits.max_evidence_items:
                 state.bad_signatures.append(seq)

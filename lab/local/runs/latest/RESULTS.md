@@ -49,4 +49,4 @@ It also shows nothing about network isolation. That is the VMware lab
 in [`LAB.md`](../../../LAB.md), which has not yet produced a committed
 build record.
 
-Run took 1.2s.
+Run took 1.3s.

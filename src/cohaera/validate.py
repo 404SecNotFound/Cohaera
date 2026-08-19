@@ -36,6 +36,7 @@ import hashlib
 import json
 import math
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -56,6 +57,8 @@ from .limits import (
     DEFECT_TIMESTAMP,
     DEFECT_TOOL_NAME_LENGTH,
     DEFECT_TOOL_NAME_TYPE,
+    RESIDENT_BYTES_PER_CONTAINER,
+    RESIDENT_BYTES_PER_KEY,
     Limits,
 )
 
@@ -101,6 +104,36 @@ class StrictJSONError(ValueError):
     """JSON that a decoder accepts and a trust boundary should not."""
 
 
+@dataclass
+class Shape:
+    """How many containers and keys one parsed record actually built.
+
+    R-11. The resident-memory budget multiplied ACCEPTED INPUT BYTES by a
+    constant, and a byte count cannot see shape. ``[{},{},{}...]`` and
+    ``[0,1,2...]`` are within a few percent of each other on the wire and are
+    an order of magnitude apart in memory, because an empty dict costs sixty-four
+    bytes to say nothing. The depth limit does not help: a thousand sibling
+    objects at depth three are three deep.
+
+    Counted during the parse, not after it, because after it the cost has
+    already been paid -- which is also why the budget is checked per record
+    rather than only between lines.
+
+    Objects and their keys only. Arrays are counted through their contents:
+    ``_no_duplicate_keys`` is the object hook and there is no array hook, and
+    the measurement below says arrays of scalars are the cheap case anyway --
+    2.9x raw for arrays of empty lists against 18.2x for arrays of empty maps.
+    """
+
+    containers: int = 0
+    keys: int = 0
+
+    @property
+    def bytes_estimate(self) -> int:
+        return (self.containers * RESIDENT_BYTES_PER_CONTAINER
+                + self.keys * RESIDENT_BYTES_PER_KEY)
+
+
 def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in pairs:
@@ -108,6 +141,24 @@ def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise StrictJSONError(f"duplicate object key {key!r}")
         out[key] = value
     return out
+
+
+def _counting_hook(shape: Shape, max_containers: int, max_keys: int
+                   ) -> Callable[[list[tuple[str, Any]]], dict[str, Any]]:
+    def hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        shape.containers += 1
+        shape.keys += len(pairs)
+        if shape.containers > max_containers:
+            raise StrictJSONError(
+                f"record builds more than {max_containers} objects; a byte "
+                f"count cannot see this and an empty object costs memory to "
+                f"say nothing")
+        if shape.keys > max_keys:
+            raise StrictJSONError(
+                f"record builds more than {max_keys} object keys across all "
+                f"depths")
+        return _no_duplicate_keys(pairs)
+    return hook
 
 
 def _finite_float(text: str) -> float:
@@ -140,6 +191,22 @@ def strict_json_loads(text: str | bytes) -> Any:
     return json.loads(text, object_pairs_hook=_no_duplicate_keys,
                       parse_float=_finite_float, parse_int=_bounded_int,
                       parse_constant=_no_constants)
+
+
+def strict_json_loads_shaped(text: str | bytes, *, max_containers: int,
+                             max_keys: int) -> tuple[Any, Shape]:
+    """``strict_json_loads``, plus what the parse actually built. R-11.
+
+    Separate from ``strict_json_loads`` rather than replacing it: the shape
+    matters on the ingest path, where a producer chooses the input, and not
+    where Cohaera parses a file the operator supplied.
+    """
+    shape = Shape()
+    value = json.loads(text, object_pairs_hook=_counting_hook(
+        shape, max_containers, max_keys),
+        parse_float=_finite_float, parse_int=_bounded_int,
+        parse_constant=_no_constants)
+    return value, shape
 
 
 # ---------------------------------------------------------------------------

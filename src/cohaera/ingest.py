@@ -55,7 +55,9 @@ from .limits import (
     REJECT_TOO_MANY_REJECTS,
     REJECT_TOO_MANY_SESSIONS,
     REJECT_UNDECODABLE,
+    RESIDENT_BYTES_PER_CONTAINER,
     RESIDENT_BYTES_PER_INPUT_BYTE,
+    RESIDENT_BYTES_PER_KEY,
     Limits,
     json_depth_exceeds,
 )
@@ -65,7 +67,7 @@ from .validate import (
     Reject,
     digest_bytes,
     sanitise_display,
-    strict_json_loads,
+    strict_json_loads_shaped,
 )
 
 __all__ = ["ANON_WINDOW_S", "RawLine", "assemble", "load", "read_events"]
@@ -248,6 +250,9 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
     records_read = 0
     bytes_read = 0
     retained_bytes = 0      # bytes of records that became Events
+    # R-11. What those records BUILT, which the byte count cannot see.
+    retained_containers = 0
+    retained_keys = 0
 
     def _budget_hit() -> tuple[str, str]:
         """The first live budget this run has exhausted, as (code, detail).
@@ -275,11 +280,20 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
         # bytes. Metered on RETAINED bytes, because a rejected record is read
         # and released -- charging the estimate for it would abort honest runs
         # over a noisy producer.
-        resident = retained_bytes * RESIDENT_BYTES_PER_INPUT_BYTE
+        #
+        # R-11. The larger of the byte estimate and the shape estimate. A byte
+        # count cannot see that `[{},{},{}...]` and `[0,1,2...]` are within a
+        # few percent of each other on the wire and an order of magnitude apart
+        # in memory, because an empty object costs sixty-four bytes to say
+        # nothing.
+        resident = max(retained_bytes * RESIDENT_BYTES_PER_INPUT_BYTE,
+                       retained_containers * RESIDENT_BYTES_PER_CONTAINER
+                       + retained_keys * RESIDENT_BYTES_PER_KEY)
         if resident >= limits.max_resident_bytes:
             return REJECT_MEMORY_BUDGET, (
                 f"estimated {resident} resident byte(s) from {retained_bytes} "
-                f"byte(s) of accepted input reaches "
+                f"byte(s) of accepted input building {retained_containers} "
+                f"object(s) with {retained_keys} key(s) reaches "
                 f"max_resident_bytes={limits.max_resident_bytes}")
         if limits.max_rejects is not None and rep.rejected > limits.max_rejects:
             return REJECT_TOO_MANY_REJECTS, (
@@ -360,7 +374,14 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
             continue
 
         try:
-            obj = strict_json_loads(line)
+            # R-11. Shaped, because the resident estimate needs to know what
+            # the parse BUILT and not only how many bytes it read. The per
+            # record caps are enforced inside the hook, so a line that would
+            # build a hundred thousand objects is refused partway through
+            # building them rather than after.
+            obj, shape = strict_json_loads_shaped(
+                line, max_containers=limits.max_containers_per_record,
+                max_keys=limits.max_keys_per_record)
         except RecursionError:
             # Belt and braces. The depth pre-scan should make this unreachable,
             # but the guarantee must not depend on sys.getrecursionlimit().
@@ -391,7 +412,16 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
 
         e = Event(raw=obj, limits=limits)
         retained_bytes += len(record)
-        rep.resident_bytes = retained_bytes * RESIDENT_BYTES_PER_INPUT_BYTE
+        retained_containers += shape.containers
+        retained_keys += shape.keys
+        # R-11. The larger of the two, because either can dominate and neither
+        # sees what the other measures: a megabyte of prose is all bytes and no
+        # containers, and ten thousand empty objects are all containers and
+        # almost no bytes.
+        rep.resident_bytes = max(
+            retained_bytes * RESIDENT_BYTES_PER_INPUT_BYTE,
+            retained_containers * RESIDENT_BYTES_PER_CONTAINER
+            + retained_keys * RESIDENT_BYTES_PER_KEY)
         rep.note_bytes(record, b"A")
         rep.note_defects(e.defects)
         rep.accepted += 1

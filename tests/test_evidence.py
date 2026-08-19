@@ -110,6 +110,7 @@ from cohaera.evidence import (
     R_REORDERED,
     R_SEQUENCE_GAP,
     R_SEQUENCE_REPLAY,
+    R_SIGNATURE_BUDGET,
     R_SIGNATURE_INVALID,
     R_SIGNATURE_PREFIX_ONLY,
     R_STALE,
@@ -3516,3 +3517,62 @@ def test_every_adapter_path_declares_a_known_assurance_level():
                 f"{name}:{path} declares unknown assurance {assurance!r}")
             assert kind and kind.replace("_", "").isalnum(), (
                 f"{name}:{path} has a malformed kind {kind!r}")
+
+
+# =====================================================================
+# R-12. The signature budget is a count AND a clock.
+# =====================================================================
+
+
+def test_an_exhausted_signature_budget_abstains_rather_than_passing():
+    """R-12. The failure mode that matters is not slowness, it is what the
+    verdict says after the budget stops the work. A stream whose signatures
+    were never checked must not read as a stream whose signatures held."""
+    records = _records(4)
+    signed = sign_stream(records, "stream-a", SECRET, KEY_ID)
+    limits = Limits(max_signature_verifications=1)
+    v = StreamVerifier(keys=KEYS, limits=limits)
+    for raw in signed:
+        e = Event(raw=raw, limits=limits)
+        v.observe(e.raw, e.integrity, raw.get("session_id", ""))
+    v.finalise()
+    audit = v.for_session("sess-1")
+    assert R_SIGNATURE_BUDGET in audit.codes
+    assert v.signature_budget_exhausted
+    assert not audit.signature_covers_final, (
+        "a stream that ran out of budget partway cannot be complete, and the "
+        "session must not read as though the attestation reached the end")
+
+
+def test_the_clock_bound_exists_because_a_count_is_not_a_time():
+    """The cost of one verification is a property of the host, not of this
+    repository. A count bounds the work per run only if every host runs it at
+    the same speed, and an external review measured roughly three minutes for
+    a cap this one clears in under one."""
+    limits = Limits(max_signature_seconds=0.0)
+    records = _records(3)
+    signed = sign_stream(records, "stream-a", SECRET, KEY_ID)
+    v = StreamVerifier(keys=KEYS, limits=limits)
+    for raw in signed:
+        e = Event(raw=raw, limits=limits)
+        v.observe(e.raw, e.integrity, raw.get("session_id", ""))
+    v.finalise()
+    assert v.signature_budget_exhausted
+    assert v.signatures_verified == 0, (
+        "a zero-second budget must stop before the first verification, not "
+        "after it")
+
+
+def test_the_seconds_spent_are_reported():
+    """An operator tuning the bound needs to know what the run actually cost.
+    A budget nothing measures is a number somebody guessed."""
+    records = _records(3)
+    signed = sign_stream(records, "stream-a", SECRET, KEY_ID)
+    v = StreamVerifier(keys=KEYS)
+    for raw in signed:
+        e = Event(raw=raw, limits=DEFAULT_LIMITS)
+        v.observe(e.raw, e.integrity, raw.get("session_id", ""))
+    v.finalise()
+    assert v.signature_seconds > 0.0
+    assert "signature_seconds" in v.summary(), (
+        "the run's report must carry what the verification actually cost")

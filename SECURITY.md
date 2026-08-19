@@ -82,6 +82,43 @@ and a report restating them tells nobody anything new:
   one.
 - **Findings from a scanner with no reproduction.** Send the reproduction.
 
+## The cost of verifying a signature, measured
+
+R-12. Cohaera's Ed25519 verifier is pure Python and has no runtime
+dependencies, which is a deliberate trade and is stated here rather than
+discovered. A signature that is structurally well-formed, carries a **trusted**
+key id, and does not verify costs a full scalar multiplication: the answer is
+not known until the work is done, and the producer decides how many such
+records arrive.
+
+Measured on the development host, Python 3.11, after the fixed-base and
+variable-base comb work:
+
+| | |
+|---|---|
+| one full invalid verification | ~0.5 ms |
+| `max_signature_verifications` (default 100,000) | ~50 s of CPU |
+| `max_signature_seconds` (default 30.0) | the bound that holds on a slow host |
+
+An external review measured about three minutes for the same count bound on a
+slower machine, which is the reason there are two bounds rather than one: a
+count is not a time, and the cost of one verification is a property of the host
+and not of this repository.
+
+Unauthorised keys are rejected **before** any scalar work, so the vector needs
+a key the operator has already trusted. Exhausting either budget is not a crash
+and not a silent pass: the session reports
+`INTEGRITY_SIGNATURE_BUDGET_EXHAUSTED`, its evidence status says the
+attestation was not established through the final record, and the run's report
+carries the seconds actually spent so the bound can be tuned against a
+measurement rather than a guess.
+
+The verifier handles public data and is not a signing oracle, so the usual
+constant-time concern does not apply to it. `tools/collector_sign.py` says on
+its face that it is not constant-time and is a format reference rather than a
+signing service; a production collector should sign with a maintained backend,
+an OS key store, an HSM or a KMS.
+
 ## Supply chain
 
 What this repository does, so you can check whether it is still true:
