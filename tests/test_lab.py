@@ -676,6 +676,10 @@ def test_without_a_capability_manifest_the_behavioural_checks_decline():
     so: the checks report `degraded` at confidence 0.0, which is a stated
     absence, and NOT `evaluated` with an empty finding list, which would be a
     clean bill of health for a question nobody asked.
+
+    Supplying the manifest recovers three of the four. CH04 stays declined,
+    because a manifest that declares a tool's effects does not declare that a
+    policy plane exists -- see the comment below.
     """
     absent, supplied = pair("06-no-manifest")
 
@@ -685,9 +689,35 @@ def test_without_a_capability_manifest_the_behavioural_checks_decline():
         assert checks_of(absent)[check]["confidence"] == 0.0, (
             f"{check} claims confidence on a session containing a call it "
             f"could not classify")
+
+    # Three of the four recover. CH04 does not, and that is the corrected
+    # contract rather than a broken pair.
+    #
+    # A manifest that declares `issue_refund` establishes what the tool DOES.
+    # It says nothing about whether a policy plane exists to have stopped it,
+    # and CH04 is a question about controls, not about tools. Since the fix on
+    # claude/cohaera-ch04-coverage, only a `policies` section answers that, and
+    # this lab's manifest declares tools alone -- so CH04 keeps declining with
+    # NO_POLICY_EVIDENCE while the other three go green.
+    #
+    # That is a better demonstration than the one this test originally made.
+    # A single flag does not buy uniform coverage: it buys exactly the surfaces
+    # it declares, and the checks whose evidence it does not supply keep saying
+    # so.
+    for check in ["CH02_concealment_gap", "CH03_untrusted_to_consequential",
+                  "CH07_effect_contradiction"]:
         assert checks_of(supplied)[check]["status"] == "evaluated", (
             f"{check} does not recover when the manifest declares the tool, so "
             f"the pair no longer attributes anything to the manifest")
+
+    ch04 = checks_of(supplied)["CH04_guardrail_overrun"]
+    assert ch04["status"] == "not_evaluated", (
+        "CH04 recovered from a manifest that declares no policies, which means "
+        "the contract is charging for the wrong evidence again")
+    assert ch04["confidence"] == 0.0
+    # The reason code is not asserted here: the manifest records status and
+    # confidence per check, not reasons. tests/test_hostile.py pins
+    # NO_POLICY_EVIDENCE against the contract itself, which is where it belongs.
 
     assert absent["verdicts"][0]["triggered_rules"] == [], (
         "the unequipped pass fires something, so the demonstration is not "

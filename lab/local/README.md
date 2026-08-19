@@ -94,11 +94,11 @@ and a first deployment does not have, each scored twice on the same telemetry.
 | Prerequisite | Configuration | Coverage | Session grouping | Session key | Evidence | Fired |
 |---|---|---|---|---|---|---|
 | Capability manifest | `absent` | 0.129 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | — |
-| Capability manifest | `supplied` | 0.843 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | `CH03_untrusted_to_completed_action` |
-| Collector signature | `chained` | 0.633 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `chained_unsigned` | — |
-| Collector signature | `signed` | 0.7 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | — |
-| Correlation key | `unkeyed` | 0.3 | 0.3 (`scoped_anonymous`) | `sha256-unkeyed-v1` | `verified_complete` | — |
-| Correlation key | `keyed` | 0.3 | 0.3 (`scoped_anonymous`) | `hmac-sha256-v1` | `verified_complete` | — |
+| Capability manifest | `supplied` | 0.7 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | `CH03_untrusted_to_completed_action` |
+| Collector signature | `chained` | 0.49 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `chained_unsigned` | — |
+| Collector signature | `signed` | 0.557 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | — |
+| Correlation key | `unkeyed` | 0.257 | 0.3 (`scoped_anonymous`) | `sha256-unkeyed-v1` | `verified_complete` | — |
+| Correlation key | `keyed` | 0.257 | 0.3 (`scoped_anonymous`) | `hmac-sha256-v1` | `verified_complete` | — |
 
 | Prerequisite | Check | Without | With |
 |---|---|---|---|

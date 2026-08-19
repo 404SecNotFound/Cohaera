@@ -46,11 +46,11 @@ the two rows is attributable to that one thing.
 | Prerequisite | Configuration | Coverage | Session grouping | Session key | Evidence | Fired |
 |---|---|---|---|---|---|---|
 | Capability manifest | `absent` | 0.129 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | — |
-| Capability manifest | `supplied` | 0.843 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | `CH03_untrusted_to_completed_action` |
-| Collector signature | `chained` | 0.633 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `chained_unsigned` | — |
-| Collector signature | `signed` | 0.7 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | — |
-| Correlation key | `unkeyed` | 0.3 | 0.3 (`scoped_anonymous`) | `sha256-unkeyed-v1` | `verified_complete` | — |
-| Correlation key | `keyed` | 0.3 | 0.3 (`scoped_anonymous`) | `hmac-sha256-v1` | `verified_complete` | — |
+| Capability manifest | `supplied` | 0.7 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | `CH03_untrusted_to_completed_action` |
+| Collector signature | `chained` | 0.49 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `chained_unsigned` | — |
+| Collector signature | `signed` | 0.557 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | — |
+| Correlation key | `unkeyed` | 0.257 | 0.3 (`scoped_anonymous`) | `sha256-unkeyed-v1` | `verified_complete` | — |
+| Correlation key | `keyed` | 0.257 | 0.3 (`scoped_anonymous`) | `hmac-sha256-v1` | `verified_complete` | — |
 
 And per check, which is where it is actually legible. Only the checks
 whose contract MOVED are listed: a check that reads the same either
@@ -60,7 +60,6 @@ way did not depend on the prerequisite.
 |---|---|---|---|
 | Capability manifest | `CH02_concealment_gap` | `degraded` 0.0 | `evaluated` 1.0 |
 | Capability manifest | `CH03_untrusted_to_consequential` | `degraded` 0.0 | `evaluated` 1.0 |
-| Capability manifest | `CH04_guardrail_overrun` | `degraded` 0.0 | `evaluated` 1.0 |
 | Capability manifest | `CH05_unpaired_calls` | `degraded` 0.0 | `evaluated` 1.0 |
 | Capability manifest | `CH07_effect_contradiction` | `degraded` 0.0 | `evaluated` 1.0 |
 | Collector signature | `CH06_evidence_integrity` | `degraded` 0.432 | `degraded` 0.9 |
