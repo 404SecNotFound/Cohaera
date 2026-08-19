@@ -479,3 +479,23 @@ def test_the_local_lab_does_not_claim_to_be_the_isolated_one():
     assert "eval/EVALUATION-CARD.md" in readme, (
         "it must point at the efficacy numbers rather than let six sessions "
         "stand in for them")
+
+
+def test_the_run_manifest_carries_no_environment_facts():
+    """The manifest asserts that these inputs produce these verdicts. That has
+    to hold on every interpreter the project supports, so CI running a
+    different one from whoever regenerated the file is the POINT of the check.
+
+    Caught the hard way: the manifest stamped the interpreter version, and the
+    first CI run failed on 3.12 against a file written on 3.11 -- a real
+    property turned into a host fact, and a green local check that meant
+    nothing.
+    """
+    raw = LOCAL_RUN.read_text(encoding="utf-8")
+    doc = local_manifest()
+    assert "python" not in doc, (
+        "the compared document names an interpreter; a manifest that depends "
+        "on the environment cannot assert a property of the detector")
+    for host_fact in ("3.10", "3.11", "3.12", "3.13", "elapsed", "duration"):
+        assert f'"{host_fact}"' not in raw, (
+            f"{host_fact!r} appears as a value in the compared manifest")

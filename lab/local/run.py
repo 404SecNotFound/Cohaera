@@ -306,7 +306,13 @@ def main(argv: list[str] | None = None) -> int:
     document = {
         "schema": "cohaera.lab_run:1",
         "detector_version": __version__,
-        "python": f"{sys.version_info.major}.{sys.version_info.minor}",
+        # Deliberately NOT the interpreter version. The claim this manifest
+        # makes is "these inputs produce these verdicts", and that has to hold
+        # on every interpreter the project supports -- CI running a different
+        # one from the author is the point of the check, not a discrepancy.
+        # Stamping the environment into the compared document turned a real
+        # property into a host fact and failed the first time CI ran it on
+        # 3.12 against a manifest written on 3.11.
         "signing_key_id": key_id,
         "evidence_as_of": AS_OF,
         "evidence_max_age_s": MAX_AGE,
@@ -331,18 +337,20 @@ def main(argv: list[str] | None = None) -> int:
                   "says.", file=sys.stderr)
             return 1
         print(f"lab/local: {len(states)} states + 3 ledger passes match the "
-              f"committed manifest ({elapsed:.1f}s)")
+              f"committed manifest ({elapsed:.1f}s, python "
+              f"{sys.version_info.major}.{sys.version_info.minor})")
         return 0
 
     _write(manifest_path, text)
     _jsonl(out / "verdicts.jsonl", verdicts)
-    _write(out / "RESULTS.md", _results_markdown(document, elapsed))
+    _write(out / "RESULTS.md", _results_markdown(document))
     print(f"lab/local: wrote {manifest_path.relative_to(REPO)} "
-          f"({len(states)} states, {elapsed:.1f}s)")
+          f"({len(states)} states, {elapsed:.1f}s, "
+          f"python {sys.version_info.major}.{sys.version_info.minor})")
     return 0
 
 
-def _results_markdown(doc: dict, elapsed: float) -> str:
+def _results_markdown(doc: dict) -> str:
     lines = [
         "<!--",
         "  Copyright 2026 Imran Hafeez",
@@ -401,8 +409,6 @@ def _results_markdown(doc: dict, elapsed: float) -> str:
         "It also shows nothing about network isolation. That is the VMware lab",
         "in [`LAB.md`](../../../LAB.md), which has not yet produced a committed",
         "build record.",
-        "",
-        f"Run took {elapsed:.1f}s.",
         "",
     ]
     return "\n".join(lines)

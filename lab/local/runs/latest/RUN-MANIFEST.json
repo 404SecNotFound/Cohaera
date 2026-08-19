@@ -77,7 +77,6 @@
       ]
     }
   ],
-  "python": "3.11",
   "schema": "cohaera.lab_run:1",
   "signing_key_id": "ed25519:ed6a47a39da869b5",
   "states": [
