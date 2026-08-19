@@ -99,6 +99,33 @@ any diff, so the numbers below are derived rather than claimed.
   **No evaluation-card number moved**: the corpus emits complete bindings on
   every receipt and approval, so the fix changes what would happen to a
   real producer's partial evidence and changes nothing about the measurement.
+- **A freshness window only bounded one direction, and one CLI argument switched
+  it off in silence (R-13).** `Freshness.stale` reported a future-dated record as
+  not stale and computed nothing else, so a signed record dated a year ahead read
+  in the verdict exactly like one written a second ago: a collector with a wrong
+  clock, or one an attacker holds, bought unlimited freshness by adding to a
+  number. The docstring called clock skew "somebody else's finding" and nobody
+  else made it. A signed record dated more than `--max-future-skew` seconds past
+  `--evidence-as-of` is now `INTEGRITY_EVIDENCE_FROM_FUTURE` and **inadmissible**
+  — the whole argument for trusting the timestamp is that a replayer can re-send
+  bytes and cannot re-date them, and a record dated after the instant it was
+  scored breaks that argument at the root. It is a separate code from
+  `INTEGRITY_EVIDENCE_STALE` because the remedies differ. Default tolerance 300s,
+  the same reason Kerberos uses it: it absorbs ordinary NTP disagreement and
+  nothing more.
+
+  Separately, `--evidence-as-of` was `type=float` and `float("nan")` succeeds, so
+  `--evidence-as-of nan` disabled the freshness bound entirely — `enabled` went
+  false, the bound line never printed, and the run exited **zero** having skipped
+  the check it was asked for. It now goes through a finite-float validator and
+  exits 2 as a usage error, as does `--max-future-skew`; `Limits` refuses a
+  non-finite or negative value directly, since the CLI is one door of several.
+
+  Additive: `max_future_skew_s` in `Limits` and in the `evidence_freshness`
+  provenance block, `furthest_future_s` in the integrity evidence, and the
+  `--max-future-skew` flag. **The evaluation card's `config_hash` moves** — a new
+  bound joined the set, so two runs either side of this are correctly reported as
+  not comparable in configuration. No detection number moved.
 - **A policy file could be swapped between the read that parsed it and the read
   that hashed it (R-07).** `CapabilityManifest.from_file` resolved the path and
   parsed it; the CLI then resolved the same path again to hash it for the

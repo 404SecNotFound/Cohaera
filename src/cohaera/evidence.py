@@ -1296,6 +1296,13 @@ R_KEY_WINDOW_UNCHECKED = "INTEGRITY_KEY_WINDOW_UNCHECKED"
 R_STALE = "INTEGRITY_EVIDENCE_STALE"
 R_FRESHNESS_UNVERIFIABLE = "INTEGRITY_FRESHNESS_UNVERIFIABLE"
 R_NO_FRESHNESS_BOUND = "NO_FRESHNESS_BOUND"
+# R-13. The other end of the same bound, and it used to have no code at all.
+# A freshness window only bounds records from BEFORE ``as_of``; a record dated
+# after it was reported not-stale and nothing else, which means a clock the
+# operator does not control silently bought unlimited freshness. The stale
+# branch cannot be reused for it -- an old record and a future-dated one are
+# different faults and a shared code would make the remedy unguessable.
+R_FROM_FUTURE = "INTEGRITY_EVIDENCE_FROM_FUTURE"
 
 # The seen-stream ledger. Freshness bounds how OLD a stream may be; this bounds
 # how many TIMES it may be scored, which is the replay the freshness window
@@ -1319,7 +1326,7 @@ R_LEDGER_BUDGET = "STREAM_LEDGER_BUDGET_EXHAUSTED"
 INADMISSIBLE = frozenset({R_SEQUENCE_GAP, R_CHAIN_BROKEN, R_SIGNATURE_INVALID,
                           R_KEY_UNKNOWN, R_SEQUENCE_REPLAY, R_PARTIAL_INTEGRITY,
                           R_KEY_REVOKED, R_KEY_EXPIRED, R_KEY_NOT_YET_VALID,
-                          R_KEY_WRONG_ROLE, R_STALE,
+                          R_KEY_WRONG_ROLE, R_STALE, R_FROM_FUTURE,
                           R_STREAM_REPLAYED, R_STREAM_FORKED})
 
 # R_STREAM_SKIPPED_RECORDS is deliberately NOT inadmissible. Records between the
@@ -1377,6 +1384,11 @@ class Freshness:
 
     max_age_s: float | None = None
     as_of: float | None = None
+    # R-13. How far past ``as_of`` a signed record may be dated before it stops
+    # being ordinary clock disagreement. Zero means no tolerance. The CLI fills
+    # this from ``Limits.max_future_skew_s``; the field lives here so that the
+    # value a run used is in the verdict beside the window it qualifies.
+    max_future_skew_s: float = 0.0
 
     @property
     def enabled(self) -> bool:
@@ -1397,17 +1409,45 @@ class Freshness:
         """None when the question cannot be answered. Future-dated is not stale.
 
         A record dated after ``as_of`` is not old, it is wrong, and calling it
-        stale would report clock skew as an archive replay. Skew is somebody
-        else's finding.
+        stale would report clock skew as an archive replay. That much was always
+        right; what was missing is the other finding, which this used to describe
+        as "somebody else's" and nobody actually made. See :meth:`from_future`.
         """
         age = self.age_of(when)
         if age is None or self.max_age_s is None:
             return None
         return age > float(self.max_age_s)
 
+    def from_future(self, when: float | None) -> bool | None:
+        """Is this record dated further past ``as_of`` than skew allows? R-13.
+
+        A freshness window bounds one direction only. Before this, a signed
+        record dated a year ahead returned ``stale() is False`` and nothing
+        else, so it read in the verdict exactly like a record written a second
+        ago -- and a collector whose clock is wrong, or one an attacker has,
+        bought itself unlimited freshness by adding to a number.
+
+        It is inadmissible rather than a warning because of what freshness IS.
+        The bound exists so that re-feeding a captured stream is detectable, and
+        the whole argument for trusting the timestamp is that it is covered by
+        the chain and the chain by the signature -- a replayer can re-send the
+        bytes and cannot re-date them. A record dated after the instant it was
+        scored breaks that argument at the root: whatever produced it was not
+        reading the same clock as the rest of the evidence, and every age
+        computed against it is a guess.
+
+        ``None`` when freshness is off or the record has no readable clock,
+        never ``False``. "Not checked" is not "checked and fine".
+        """
+        age = self.age_of(when)
+        if age is None:
+            return None
+        return age < -abs(self.max_future_skew_s)
+
     def as_dict(self) -> dict[str, Any]:
         return {"max_age_s": self.max_age_s, "as_of": self.as_of,
-                "enabled": self.enabled}
+                "enabled": self.enabled,
+                "max_future_skew_s": self.max_future_skew_s}
 
 
 NO_FRESHNESS = Freshness()
@@ -1799,6 +1839,12 @@ class SessionIntegrity:
     replayed_streams: list[dict[str, Any]] = field(default_factory=list)
     freshness_checked: int = 0
     oldest_signed_age_s: float | None = None
+    # R-13. The furthest a signed record was dated AHEAD of ``as_of``, in
+    # seconds, or None if none was. Positive, and reported separately from
+    # ``oldest_signed_age_s`` because a future-dated record has a negative age
+    # and would otherwise never be the maximum of anything -- which is how it
+    # went unreported in the first place.
+    furthest_future_s: float | None = None
 
     @property
     def records(self) -> int:
@@ -1833,6 +1879,7 @@ class SessionIntegrity:
             "signing_key_ids": sorted(self.signing_key_ids)[:cap],
             "freshness_checked": self.freshness_checked,
             "oldest_signed_age_s": self.oldest_signed_age_s,
+            "furthest_future_s": self.furthest_future_s,
             "replayed_streams": self.replayed_streams[:cap],
             "attested": self.attested,
         }
@@ -2223,6 +2270,12 @@ class StreamVerifier:
         state.freshness_checked += 1
         if state.oldest_signed_age_s is None or age > state.oldest_signed_age_s:
             state.oldest_signed_age_s = age
+        if self.freshness.from_future(when):
+            ahead = -age
+            if (state.furthest_future_s is None
+                    or ahead > state.furthest_future_s):
+                state.furthest_future_s = ahead
+            state.note(R_FROM_FUTURE)
         if self.freshness.stale(when):
             state.note(R_STALE)
 

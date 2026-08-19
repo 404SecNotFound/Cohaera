@@ -123,6 +123,37 @@ def positive_float(text: str) -> float:
     return value
 
 
+def finite_float(text: str) -> float:
+    """Any real number, and nothing that is not one. R-13.
+
+    ``type=float`` accepts ``nan`` and ``inf``, and argparse reports no error
+    because ``float("nan")`` succeeds. ``--evidence-as-of nan`` therefore
+    *silently disabled the freshness bound entirely*: every comparison against a
+    NaN is false, ``Freshness.enabled`` went false, the "freshness bound:" line
+    never printed, and the run exited zero having checked nothing an operator
+    had explicitly asked it to check. Turning a control off is not a thing an
+    argument value may do quietly, which is the same argument C4-05 made for
+    ``positive_int``.
+    """
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+    if not math.isfinite(value):
+        raise argparse.ArgumentTypeError(
+            f"must be a finite number, got {text!r}. A non-finite value here "
+            "would disable the bound rather than set it.")
+    return value
+
+
+def non_negative_float(text: str) -> float:
+    """A tolerance that may be zero, but may not be negative or non-finite."""
+    value = finite_float(text)
+    if value < 0.0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {value}")
+    return value
+
+
 def unit_ratio(text: str) -> float:
     """A fraction in 0.0..1.0. ``--max-reject-ratio 2.0`` can never trip."""
     try:
@@ -144,6 +175,7 @@ def _limits_from(args: argparse.Namespace) -> Limits:
         max_evidence_items=args.max_evidence_items,
         max_rejects=args.max_rejects,
         max_reject_ratio=args.max_reject_ratio,
+        max_future_skew_s=getattr(args, "max_future_skew", None),
     )
 
 
@@ -338,10 +370,13 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
 
     freshness = Freshness(max_age_s=args.evidence_max_age,
                           as_of=(args.evidence_as_of if args.evidence_as_of
-                                 is not None else time.time()))
+                                 is not None else time.time()),
+                          max_future_skew_s=limits.max_future_skew_s)
     if freshness.enabled:
         _err(f"[cohaera] freshness bound: signed records older than "
-             f"{args.evidence_max_age:g}s as of {freshness.as_of:.0f} are stale")
+             f"{args.evidence_max_age:g}s as of {freshness.as_of:.0f} are stale, "
+             f"and records dated more than {limits.max_future_skew_s:g}s after "
+             f"it are INTEGRITY_EVIDENCE_FROM_FUTURE")
 
     if args.reject_log:
         try:
@@ -642,11 +677,21 @@ def _add_common(p: argparse._ActionsContainer) -> None:
                         "passes on a replayed stream, because it really was written "
                         "by that collector. Off by default, and coverage says "
                         "NO_FRESHNESS_BOUND when it is off.")
-    p.add_argument("--evidence-as-of", type=float, metavar="EPOCH",
+    p.add_argument("--evidence-as-of", type=finite_float, metavar="EPOCH",
                    help="The instant --evidence-max-age is measured from, in seconds "
                         "since the epoch. Defaults to the wall clock at run start; "
                         "set it to make a run reproducible, or to score an archive "
-                        "as of the day it was captured.")
+                        "as of the day it was captured. Must be finite: a NaN here "
+                        "used to disable the freshness bound rather than set it.")
+    p.add_argument("--max-future-skew", type=non_negative_float, metavar="SECONDS",
+                   help=f"How far after --evidence-as-of a signature-verified "
+                        f"record may be dated before it is reported as "
+                        f"INTEGRITY_EVIDENCE_FROM_FUTURE and the evidence becomes "
+                        f"inadmissible (default "
+                        f"{DEFAULT_LIMITS.max_future_skew_s:g}). A freshness window "
+                        f"bounds only how OLD a record may be; without this a "
+                        f"collector with a wrong clock buys unlimited freshness by "
+                        f"adding to a number.")
     p.add_argument("--correlation-secret-env", metavar="NAME", default=SECRET_ENV,
                    help=f"Environment variable holding the HMAC key for anonymous "
                         f"correlation keys (default {SECRET_ENV}).")

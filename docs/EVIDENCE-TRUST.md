@@ -318,6 +318,49 @@ Off by default, and coverage says `NO_FRESHNESS_BOUND` when it is off, because
 the honest default is unknowable: an hour is right for a live tail and wrong for
 a nightly batch, and a bound guessed wrong turns every scheduled run critical.
 
+### The other end of the window
+
+A freshness bound is one-sided by construction: it asks how OLD a record is.
+Until R-13 a record dated *after* `--evidence-as-of` returned "not stale" and
+nothing else — which was the right answer to the wrong question, and the code
+said so in a docstring that called clock skew "somebody else's finding" while
+nobody else made it. A collector whose clock is wrong, or one an attacker holds,
+bought itself unlimited freshness by adding to a number.
+
+A signed record dated more than `--max-future-skew` seconds past `as_of` is now
+`INTEGRITY_EVIDENCE_FROM_FUTURE`, and it is **inadmissible**, not a warning. The
+severity follows from what freshness *is*: the entire argument for trusting the
+timestamp is that it is covered by the chain, the chain by the signature, and a
+replayer holds neither key — they can re-send the bytes and cannot re-date them.
+A record dated after the instant it was scored breaks that argument at the root.
+Whatever produced it was not reading the same clock as the rest of the evidence,
+so every age computed against it is a guess, including the ones that came back
+clean.
+
+It is a separate reason code from `INTEGRITY_EVIDENCE_STALE` because the two
+have different remedies — one is "you are re-feeding an archive", the other is
+"fix NTP on the collector, or find out why it thinks it is next year" — and a
+shared code makes both unguessable.
+
+The default tolerance is 300 seconds, which is what Kerberos has used for
+decades for the same purpose: it absorbs ordinary NTP disagreement between two
+hosts and nothing more. Zero would make every slightly-fast collector
+inadmissible, which is a time-synchronisation problem delivered as a tampering
+alert; an hour would let a wrong clock buy an hour of unearned freshness. Like
+the window itself, it only applies to signature-verified records, and it answers
+`None` rather than `False` when freshness is off — not checked is not "checked
+and fine".
+
+`--evidence-as-of` takes a **finite** float. It used to be `type=float`, and
+`float("nan")` succeeds, so `--evidence-as-of nan` silently switched the whole
+freshness bound off: every comparison against a NaN is false, `enabled` went
+false, the "freshness bound" line never printed, and the run exited zero having
+skipped the one check the operator had gone out of their way to ask for. An
+argument value must never be able to turn a control off quietly — the same
+argument C4-05 made for `positive_int`. `--max-future-skew` is validated the
+same way, and `Limits` refuses a non-finite or negative value directly, because
+the CLI is only one of the doors into it.
+
 **This lowers CH06's coverage confidence on every existing deployment, and that
 is the intended reading.** A session with integrity evidence and no freshness
 bound now reports `degraded` rather than `evaluated`, because replay was not

@@ -134,6 +134,10 @@ _OPTIONAL_COUNT_FIELDS = frozenset({"max_rejects"})
 _OPTIONAL_RATIO_FIELDS = frozenset({"max_reject_ratio"})
 # Integer fields where zero is meaningful rather than a disabled bound.
 _NONNEGATIVE_INT_FIELDS = frozenset({"max_reject_ratio_floor"})
+# Fields measured in seconds rather than in things counted. Finite and >= 0:
+# zero is a real setting (tolerate no skew at all) and a non-finite value would
+# disable the bound rather than widen it, which is the R-13 fault one layer up.
+_NONNEGATIVE_SECONDS_FIELDS = frozenset({"max_future_skew_s"})
 
 
 @dataclass(frozen=True)
@@ -249,6 +253,14 @@ class Limits:
     max_approvals_per_session: int = 1_000
     max_collector_keys: int = 1_000
     max_keyfile_bytes: int = 1_048_576
+    # R-13. How far past --evidence-as-of a signature-verified record may be
+    # dated before it is INTEGRITY_EVIDENCE_FROM_FUTURE. Five minutes, which is
+    # the tolerance Kerberos has used for decades for the same reason: it
+    # absorbs ordinary NTP disagreement between two hosts and nothing more.
+    # Zero would make every slightly-fast collector inadmissible; an hour would
+    # let a wrong clock buy an hour of unearned freshness. Only meaningful when
+    # a freshness bound is set, since without one nothing is aged at all.
+    max_future_skew_s: float = 300.0
     # ---- the seen-stream ledger -----------------------------------------
     # The one piece of state Cohaera keeps between runs, so it is also the one
     # that can grow without an operator noticing. A stream id is producer-chosen,
@@ -289,6 +301,14 @@ class Limits:
                 if not math.isfinite(value) or not 0.0 <= float(value) <= 1.0:
                     raise LimitsError(
                         f"{f.name} must be within 0.0..1.0, got {value!r}")
+            elif f.name in _NONNEGATIVE_SECONDS_FIELDS:
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise LimitsError(
+                        f"{f.name} must be a number of seconds, got {value!r}")
+                if not math.isfinite(value) or float(value) < 0.0:
+                    raise LimitsError(
+                        f"{f.name} must be a finite number of seconds >= 0, "
+                        f"got {value!r}")
             else:
                 floor = 0 if f.name in _NONNEGATIVE_INT_FIELDS else 1
                 if isinstance(value, bool) or not isinstance(value, int):

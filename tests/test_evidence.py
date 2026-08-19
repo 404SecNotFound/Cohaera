@@ -90,6 +90,7 @@ from cohaera.evidence import (
     POLICY_SIGNATURE_SCHEMA,
     R_CHAIN_BROKEN,
     R_FRESHNESS_UNVERIFIABLE,
+    R_FROM_FUTURE,
     R_KEY_EXPIRED,
     R_KEY_NOT_YET_VALID,
     R_KEY_REVOKED,
@@ -140,6 +141,8 @@ from cohaera.limits import (
     DEFECT_APPROVAL_TYPE,
     DEFECT_INTEGRITY_TYPE,
     DEFECT_RECEIPT_TYPE,
+    Limits,
+    LimitsError,
 )
 from cohaera.model import Event, Session
 from cohaera.validate import IngestReport
@@ -1780,11 +1783,78 @@ def test_a_stream_inside_the_bound_is_not_stale():
 
 def test_a_future_dated_record_is_not_reported_as_stale():
     """Clock skew is somebody else's finding. Calling it replay would be wrong
-    in the one direction that costs an analyst their trust in the code."""
+    in the one direction that costs an analyst their trust in the code.
+
+    It is somebody else's finding, and R-13 is where somebody else finally makes
+    it: see the two tests below. This one holds the line that STALE stays
+    STALE -- an archive replay and a wrong clock are separate remedies and a
+    shared code makes both unguessable.
+    """
     signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
     state = _run(signed, freshness=Freshness(max_age_s=60.0, as_of=0.0)
                  ).for_session("sess-1")
     assert R_STALE not in state.codes
+
+
+def test_a_record_dated_a_year_ahead_is_inadmissible_rather_than_fresh():
+    """R-13, reproduced.
+
+    ``_records`` is stamped at t=1000; ``as_of`` is a year earlier, so every
+    record is dated a year in the future. Before this, ``stale()`` returned
+    False and nothing else was computed, so the session read exactly like one
+    whose records were written a second ago -- a collector with a wrong clock,
+    or one an attacker holds, bought unlimited freshness by adding to a number.
+
+    Inadmissible, not a warning, because the whole argument for trusting the
+    timestamp is that it is signed and a replayer cannot re-date it. A record
+    dated after the instant it was scored breaks that argument at the root.
+    """
+    year = 365 * 24 * 3600
+    signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
+    state = _run(signed, freshness=Freshness(max_age_s=3600.0,
+                                             as_of=1000.0 - year,
+                                             max_future_skew_s=300.0)
+                 ).for_session("sess-1")
+    assert R_FROM_FUTURE in state.codes
+    assert R_FROM_FUTURE in state.inadmissible
+    assert R_STALE not in state.codes, "a year ahead is not three months old"
+    assert state.furthest_future_s is not None
+    assert state.furthest_future_s >= year
+
+
+def test_ordinary_clock_disagreement_is_inside_the_skew_and_says_nothing():
+    """The reason the tolerance is not zero.
+
+    Two hosts running NTP disagree by milliseconds and occasionally by seconds.
+    A bound with no tolerance would make every collector whose clock runs a
+    little fast inadmissible, which is a finding about the estate's time
+    synchronisation delivered as a tampering alert.
+    """
+    signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
+    state = _run(signed, freshness=Freshness(max_age_s=3600.0, as_of=990.0,
+                                             max_future_skew_s=300.0)
+                 ).for_session("sess-1")
+    assert R_FROM_FUTURE not in state.codes
+    assert R_STALE not in state.codes
+    assert state.furthest_future_s is None
+
+
+def test_future_skew_is_not_answered_when_freshness_is_off():
+    """``None``, never ``False``. Not checked is not checked and fine."""
+    assert Freshness().from_future(1e12) is None
+    assert Freshness(max_age_s=60.0).from_future(1e12) is None
+    off = Freshness(max_age_s=60.0, as_of=0.0, max_future_skew_s=300.0)
+    assert off.from_future(None) is None
+    assert off.from_future(float("nan")) is None
+
+
+def test_the_skew_tolerance_is_read_as_a_magnitude():
+    """A negative tolerance would invert the bound and report every record as
+    from the future, which is the C4-05 shape: a number tightening a control
+    that instead removes it."""
+    f = Freshness(max_age_s=60.0, as_of=0.0, max_future_skew_s=-300.0)
+    assert f.from_future(100.0) is False
+    assert f.from_future(400.0) is True
 
 
 def test_freshness_over_an_unsigned_chain_is_reported_as_unverifiable():
@@ -2075,7 +2145,46 @@ def test_cli_freshness_flags_reach_the_verdict(tmp_path, capsys):
                      "--evidence-as-of", "1785700000"]) == EXIT_OK
     prov = json.loads(capsys.readouterr().out.strip())["data"]["provenance"]
     assert prov["evidence_freshness"] == {
-        "max_age_s": 3600.0, "as_of": 1785700000.0, "enabled": True}
+        "max_age_s": 3600.0, "as_of": 1785700000.0, "enabled": True,
+        "max_future_skew_s": 300.0}
+
+
+@pytest.mark.parametrize("value", ["nan", "NaN", "inf", "-inf", "Infinity"])
+def test_a_nonfinite_evidence_as_of_is_refused_at_the_boundary(tmp_path, value):
+    """R-13's second half.
+
+    ``--evidence-as-of`` was ``type=float``, and ``float("nan")`` succeeds, so
+    argparse reported nothing. Every comparison against a NaN is false:
+    ``Freshness.enabled`` went false, the "freshness bound" line never printed,
+    and the run exited ZERO having silently skipped the one check the operator
+    had gone out of their way to ask for. Exit 2, as a usage error, because an
+    argument value must never be able to turn a control off quietly.
+    """
+    telemetry, _m, _s, _sig = _policy_fixture(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        cli_main(["score", str(telemetry), "--evidence-max-age", "3600",
+                  "--evidence-as-of", value])
+    assert exc.value.code == 2
+
+
+def test_a_nonfinite_future_skew_is_refused_too(tmp_path):
+    """The same argument for the bound R-13 added. An infinite tolerance is not
+    a wide tolerance, it is no tolerance being enforced."""
+    telemetry, _m, _s, _sig = _policy_fixture(tmp_path)
+    for value in ("inf", "nan", "-1"):
+        with pytest.raises(SystemExit) as exc:
+            cli_main(["score", str(telemetry), "--evidence-max-age", "3600",
+                      "--max-future-skew", value])
+        assert exc.value.code == 2
+
+
+def test_a_nonfinite_skew_cannot_reach_limits_by_any_other_route():
+    """The CLI is one door. Limits refuses it directly as well, because a
+    --limits-file or an embedding caller is another."""
+    for value in (float("nan"), float("inf"), -1.0):
+        with pytest.raises(LimitsError):
+            Limits(max_future_skew_s=value)
+    assert Limits(max_future_skew_s=0.0).max_future_skew_s == 0.0
 
 
 # ---------------------------------------------------------------------------
