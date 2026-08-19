@@ -306,11 +306,19 @@ def test_the_classifiers_name_every_python_ci_actually_runs():
 
 def test_the_review_response_accounts_for_every_finding():
     """A response document that quietly drops a finding is worse than none: it
-    reads as coverage while being a selection. Every ID the review raised has
-    to appear, and each must say what happened rather than only naming it."""
+    reads as coverage while being a selection. Every ID either review raised
+    has to appear, and each must say what happened rather than only naming it.
+
+    Both series, because the second review was missed once already: the file
+    accounted for all 21 of the first review's findings and none of the second
+    review's 22, while presenting itself as the place every finding is
+    accounted for. Exactly the failure it exists to prevent.
+    """
     text = (REPO / "REVIEW-RESPONSE.md").read_text(encoding="utf-8")
     for n in range(1, 22):
         assert f"R-{n:02d}" in text, f"REVIEW-RESPONSE.md does not mention R-{n:02d}"
+    for n in range(1, 23):
+        assert f"F-{n:02d}" in text, f"REVIEW-RESPONSE.md does not mention F-{n:02d}"
     for section in ("Declined, with reasons", "Deferred", "What is still open"):
         assert section in text, f"missing section: {section}"
     # The open list is the part most likely to rot into a boast.

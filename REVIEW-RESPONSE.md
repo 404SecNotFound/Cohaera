@@ -3,7 +3,9 @@
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Response to the external review of `f3acbf53`
+# Response to the external reviews
+
+## The first review, of `f3acbf53`
 
 An external reviewer read the whole repository at
 [`f3acbf53`](https://github.com/404SecNotFound/Cohaera/commit/f3acbf53d364ef6c811b6d7f6cd479f4c0c947cc)
@@ -24,13 +26,17 @@ was closed by argument.
 
 ## Summary
 
-| | Count |
-|---|---:|
-| Findings raised | 21 |
-| Accepted as real | 21 |
-| Closed | 16 |
-| Closed in the defect, architecture written down | 4 |
-| Deliberately declined, with reasons | 1 |
+| | First review | Second review |
+|---|---:|---:|
+| Findings raised | 21 | 22 |
+| Accepted as real | 21 | 22 |
+| Closed | 16 | 19 |
+| Closed in the defect, architecture written down | 4 | — |
+| Accepted, not closable in this repository | — | 2 |
+| Deliberately declined, with reasons | 1 | 1 |
+
+Of the second review's 22, **fourteen were already fixed** by the first
+review's work and were invisible because it had not been merged.
 
 ## The findings
 
@@ -148,6 +154,89 @@ Named here rather than left to be discovered:
   proves nothing about network isolation.
 - **No signed release or attestation.** The build is reproducible; nothing signs
   it yet.
+
+## The second review, of `main` at `21068b6`
+
+A different reviewer read the default branch six days later and did something
+more useful than describing defects: they shipped **eight executable
+reproduction probes**. Twenty-two findings, of which thirteen were marked
+"Reconfirmed".
+
+They were reconfirmed against a tree that had never received the fix. Every
+correction above lived on an unmerged branch, and the reviewer noted the
+symptom without being able to see the cause — *"its last four commits only
+update CI and development dependencies, so earlier application findings
+remain."*
+
+That is not a flaw in the review. It read the default branch, which is the
+correct thing to read, and it is the reason this work is now merged: **anything
+not on `main` does not exist to a reader.**
+
+The probes were run against the fixed tree rather than reasoned about. Six
+reproduced.
+
+| ID | Sev | Finding | What happened |
+|---|---|---|---|
+| F-01 | High | Declared argument digest overrides captured arguments | **Closed.** The digest over the arguments Cohaera saw is authoritative; a call whose two identities disagree is bindable by nothing |
+| F-02 | High | Post-execution approval suppresses CH04 | **Closed.** The approval *record* must be observed before the call starts. An ordering that cannot be established is not permission |
+| F-03 | High | Partial unauthenticated sidecar controls ordering | **Closed.** Only a chained sidecar may order events, and `attested` now means a signature verified rather than "a sidecar was present" |
+| F-04 | High | Truncated response supports a confidence-1.0 absence claim | **Closed.** Absence abstains with `FINAL_RESPONSE_TRUNCATED`; a disclosure found in a surviving prefix is still sound |
+| F-05 | High | Agent-supplied receipt described as provider truth | **Closed** by R-01 and R-17 before this review ran: complete binding required, and each adapter path declares its own assurance level |
+| F-06 | High | Continuation does not prove boundary continuity | **Closed** by R-02 |
+| F-07 | High | Unverified or unscored records advance ledger state | **Closed** by R-03, in its defect half; the transactional remedy is declined above |
+| F-08 | High | Concurrent writers lose updates | **Closed** by R-04 |
+| F-09 | High | Sparse signatures label an unsigned tail verified | **Closed** by R-05 |
+| F-10 | High | Run ID omits trust configuration | **Closed** by R-06 |
+| F-11 | High | Policy signature second-read race | **Closed** by R-07 |
+| F-12 | High | Committed topology and tests conflict | **Closed** by R-08 for the topology. A clean-build record still does not exist |
+| F-13 | High for claims | Synthetic, partly circular evaluation | **Accepted, not closed.** Same as R-09 |
+| F-14 | Med-High | Arbitrary chain strings amplify output 12.14x | **Closed.** `chain` and `prev` must be SHA-256 digests. Measured 12.15x before, 0.17x after |
+| F-15 | Med-High | Approval completeness and policy binding are weak | **Closed** by R-10 for completeness and by F-02 for timing. An in-band approval is still reported as a claim, not an authorisation fact |
+| F-16 | Med | Coverage promises a local scanner that does not exist | **Closed.** The remedy now says why capturing `tool_result` is not enough. No scanner was added: a detector generating its own taint evidence would be grading its own work |
+| F-17 | Med | Memory and signature budgets are miscalibrated | **Closed** by R-11 and R-12 |
+| F-18 | Med | Clocks, grammar, clustering and labels distort evidence | **Closed** by R-13, R-14, R-15 and R-16 |
+| F-19 | Med | Release is not locked, reproducible or attested | **Closed** by R-18 in its reproducibility half. Attestation and a signed release remain open |
+| F-20 | Med | Exabeam proof absent, Observra baseline stale | **Accepted, not closed.** The positioning is corrected; the integration is not built |
+| F-21 | Low-Med | Parser, schema, rule count and documents drift | **Closed** by R-20 |
+| F-22 | Low-Med | Core trust modules are too large | **Declined**, same as R-21 and for the same reasons |
+
+**Fourteen were already fixed and invisible. Six were real and are fixed here.
+Two are accepted and cannot be closed by editing this repository.**
+
+All eight probes are permanent regressions in `tests/test_review_probes.py`.
+The condition they are held to is the reviewer's own: every probe fails closed
+or returns an explicit non-evaluated state, and no producer-only record can
+create a high-confidence contradiction.
+
+### What the six had in common
+
+Four of them were one mistake wearing four faces: **a producer-supplied value
+was treated as a fact.** The digest an approval binds to, the moment an
+approval was granted, the order events happened in, and whether a response was
+complete — each was something the producer said, and each was believed.
+
+F-01 is the one worth dwelling on, because it defeated this project's own
+headline fix. R-01 established that an approval must bind completely to the
+call. F-01 observed that the producer chooses the value being bound to. A
+complete binding to an attacker-chosen digest is not a weaker guarantee than an
+incomplete one; it is the same guarantee with a more convincing shape.
+
+F-04 is worth dwelling on for a different reason. It is the objection this
+project was founded on — a check that cannot fully run reporting itself as
+clean — occurring inside the project, in a check whose entire output is an
+absence claim, at full confidence, with the truncation recorded as a defect one
+field away and ignored.
+
+### The strategic finding, independently reached twice
+
+Both reviews arrived at the same correction: do not pitch this as a behavioural
+detector, because that layer ships. The second added that Uber's ADR now
+supplies production sensing and two-tier detection as well.
+
+[POSITIONING.md](POSITIONING.md) was written after the first review and before
+the second arrived, and the second's recommended framing is close to
+word-for-word what it already says. Two independent reviewers reaching one
+conclusion is worth more than either statement of it.
 
 ## Verifying this document
 
