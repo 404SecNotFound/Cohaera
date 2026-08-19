@@ -5,8 +5,15 @@
 
 # Documentation map
 
-Sixteen documents, about 57,000 words. This page exists so you never have to
-guess which one answers your question.
+Every document this repository ships. This page exists so you never have to
+guess which one answers your question, and `tests/test_readme.py` fails if a
+tracked document is missing from it.
+
+(There used to be a document count and a word total in this paragraph. Nothing
+derived either of them, they had already drifted past the number of rows below,
+and this project's own rule is that a number nothing keeps true is a number that
+is already wrong. Both are gone rather than corrected, because the correction
+would drift again on the next commit.)
 
 Each row says what question the document answers, not what it contains.
 
@@ -26,6 +33,7 @@ Each row says what question the document answers, not what it contains.
 | [THREAT-MODEL](THREAT-MODEL.md) | What does it trust, and what survives an attacker who controls the telemetry? |
 | [SECURITY](../SECURITY.md) | How do I report something, what is in scope, and what does the supply chain look like? |
 | [REVIEW-RESPONSE](../REVIEW-RESPONSE.md) | Two external reviews raised 43 findings. What happened to every one, and which recommendations were declined and why? |
+| [PRIOR-ART](PRIOR-ART.md) | Who did all of this first? The coverage contract is a port, the evaluation card is a model card, and the last section bounds what is actually new to three narrow things. |
 
 ## If you are integrating it
 

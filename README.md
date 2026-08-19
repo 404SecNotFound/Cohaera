@@ -67,8 +67,9 @@ answer in. Every number below is derived from the evaluation card by
 
 **Fifteen seconds.**
 
-> Agent telemetry is becoming a security data source, and almost nobody is
-> asking whether it can be trusted. Cohaera grades the evidence before anything
+> Agent telemetry is becoming a security data source. Several projects are now
+> building agent records that are worth believing; almost nothing grades the
+> records a deployment already has. Cohaera grades the evidence before anything
 > correlates on it — verified, partially verified, or inadmissible. And when a
 > check cannot run, it says *not evaluated* with a reason code instead of
 > reporting clean. Silence is not safety.
@@ -80,7 +81,7 @@ answer in. Every number below is derived from the evaluation card by
 > its own transcript, replay a stale approval, or claim a tool call it never
 > made. Cohaera is an evidence-quality layer that sits in front of correlation.
 > It verifies signature chains, binds tool arguments to what actually executed,
-> and normalises agent and MCP evidence into correlation-ready features.
+> and extracts correlation-ready features from agent and MCP evidence.
 >
 > The part that matters most is the coverage contract. A check that lacks the
 > evidence to run is *forbidden* from returning clean — it returns
@@ -205,8 +206,9 @@ validated.
 - [Known limitations](#known-limitations)
 - [Relationship to the upstream projects](#relationship-to-the-upstream-projects)
 
-**Other documents** — [docs/README.md](docs/README.md) maps all sixteen by the
-question each one answers. The four read most often:
+**Other documents** — [docs/README.md](docs/README.md) maps every one of them by
+the question it answers, and a test fails if a tracked document is missing from
+it. The four read most often:
 
 | | |
 |---|---|
@@ -573,6 +575,44 @@ egress because `post` is inside `postmortem`. Whole-token matching fixed those.
 It cannot fix the general case: `sync_to_partner` is egress and `sync_local_cache`
 is not, and no lexical rule separates them. See
 [`content/manifest/`](content/manifest/example_capability_manifest.json).
+
+**The deployed taxonomy exists. It is untrusted by default, and it is unsigned.**
+This section used to rest on the premise that no deployment has adopted a
+declared tool-capability or effect taxonomy. That premise is wrong. MCP's
+`ToolAnnotations` are in the **stable** protocol schema —
+`schema/2025-11-25/schema.ts`, the revision the specification repository's own
+README points at — and carry `readOnlyHint`, `destructiveHint`, `idempotentHint`
+and `openWorldHint`. That is a tool-capability and effect taxonomy, normatively
+specified, and therefore present in every conformant SDK.
+
+The schema's own note on that type is where the premise moves to:
+
+> NOTE: all properties in ToolAnnotations are **hints**.
+> They are not guaranteed to provide a faithful description of
+> tool behavior (including descriptive properties like `title`).
+>
+> Clients should never make tool use decisions based on ToolAnnotations
+> received from untrusted servers.
+
+The restated claim is true, checkable, and stronger than the one it replaces.
+The specification conditions the annotations on server trust and supplies no
+mechanism for establishing it: searching the whole stable schema for
+`signature`, `attestation`, `provenance`, `digest`, `hash` or `integrity`
+returns nothing relevant — not on `ToolAnnotations`, not on `Tool`, not
+anywhere. There is no publisher identity, no manifest digest, and nothing that
+binds a declaration to the party that made it. This is the same objection
+Cohaera already makes to `reversible` arriving on the event, and it is why the
+manifest is loaded out of band: the operator chose the file, and nobody chose
+the hint.
+
+**The manifest itself is not novel either.** MCP SEP-3140 proposes a JWS-signed
+capability manifest bound to a discoverable publisher identity, with a
+signature-covered trust block carrying effect, egress, data sensitivity and
+reversibility per tool. That is this feature, proposed into the protocol, by a
+vendor, with a proof of concept in the same pull request. If it lands, the right
+move for this project is to consume it rather than compete with it.
+[docs/PRIOR-ART.md](docs/PRIOR-ART.md) §6 has the comparison and the two
+differences that are real rather than a maturity gap.
 
 ---
 
@@ -1044,6 +1084,12 @@ prevention claim collapses.
 
 ## Prior work
 
+Two tables, because for a long time there was only one and it cited nine papers
+and zero specifications. That imbalance was itself a claim — that the ideas here
+came out of research rather than out of decades of security tooling — and it was
+the wrong one. [docs/PRIOR-ART.md](docs/PRIOR-ART.md) is the full search, with
+what was read marked separately from what was only cited.
+
 | Idea borrowed | Source |
 |---|---|
 | Two-axis anomaly split: order violation vs semantic drift | TraceAegis, [arXiv:2510.11203](https://arxiv.org/abs/2510.11203) |
@@ -1055,6 +1101,29 @@ prevention claim collapses.
 | Attempted privilege expansion as a detection signal | Progent, [arXiv:2504.11703](https://arxiv.org/abs/2504.11703) |
 | Task-disjoint evaluation splits | MCPShield, [arXiv:2605.11053](https://arxiv.org/abs/2605.11053) |
 | Hash-chained tamper-evident audit trail | AEGIS, [arXiv:2603.12621](https://arxiv.org/abs/2603.12621) |
+
+And the half that is a port rather than a contribution:
+
+| Idea that already existed | Where |
+|---|---|
+| `not evaluated` as a result value distinct from clean, and from inapplicable | MITRE / CIS OVAL results schema, `ResultEnumeration` |
+| Four distinct ways of having no verdict, with `notchecked` excluded from scoring and `unknown` not | XCCDF 1.2, NISTIR 7275 Rev 4 |
+| A machine-readable "could not evaluate, because X" on the finding itself | AWS Security Hub `Compliance.Status` and `StatusReasons[].ReasonCode` |
+| `UNKNOWN` as a peer of `OK` rather than a variety of it | Nagios, now Monitoring Plugins, exit code 3 |
+| A first-class "not known yet" carried alongside the assertions | OpenVEX `under_investigation` |
+| A rule declaring the fields it needs in order to mean anything | Elastic Security `required_fields`, `related_integrations` |
+| "This rule could not fully run" as an execution state | Elastic `partial failure`; Microsoft Sentinel `SentinelHealth`; Google SecOps rule health |
+| A mandatory blind-spots section in every detection | [Palantir ADS Framework](https://github.com/palantir/alerting-detection-strategy-framework) |
+| Data-source quality dimensions rolled into a confidence score | [DeTT&CT](https://github.com/rabobank-cdc/DeTTECT) |
+| An "insufficient data" verdict on a finding's evidence | OCSF `verdict_id: 7` |
+| A card reporting intended use, evaluation data and caveats | Model cards, Mitchell et al., [arXiv:1810.03993](https://arxiv.org/abs/1810.03993) |
+| Precision at a realistic base rate as the headline number | Axelsson, the base-rate fallacy, DOI 10.1145/357830.357849 |
+| The pitfall list the evaluation card is trying to satisfy | Arp et al., *Dos and Don'ts of Machine Learning in Computer Security*, DOI 10.1145/3643456 |
+| Abstention as a first-class classifier behaviour | Chow 1970; Geifman and El-Yaniv, [arXiv:1705.08500](https://arxiv.org/abs/1705.08500); Transcend and Transcendent |
+| A graded certainty scale for digital evidence | Casey 2002, the C-Scale |
+| `verified_prefix` is a **consistency proof** | Crosby and Wallach 2009; RFC 9162 |
+| A signed, per-tool declaration of effect, egress and reversibility | [MCP SEP-3140](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/3140) |
+| Grading a record by how it was obtained | [Agent Action Capsule](https://github.com/action-state-group/agent-action-capsule), the `effect_attestation` and `provenance` registries |
 
 ---
 
@@ -1114,7 +1183,20 @@ hide is a defect.
 - **Tool classification is a keyword guess** unless you supply a capability
   manifest. It has been wrong in both directions in every review round. The
   manifest is the fix; without one, `coverage.classification_confidence` says how
-  much of the verdict rests on the guess.
+  much of the verdict rests on the guess. MCP's stable schema already carries
+  `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`, and
+  Cohaera does not read them — they arrive from the server being classified, and
+  the schema itself says clients should never make tool use decisions on
+  annotations from untrusted servers. Consuming them in band at the same
+  precedence as observra's `reversible` flag, with a coverage code of their own,
+  is the obvious next step and is not built.
+- **The coverage contract is a port, not an invention.** `not evaluated` has
+  been a distinct result value in MITRE OVAL's results schema since the 5.x
+  line, XCCDF enumerates four different ways of having no verdict, AWS Security
+  Hub ships `NOT_AVAILABLE` with a reason code, and a Nagios plugin has exited
+  `UNKNOWN` for decades. [docs/PRIOR-ART.md](docs/PRIOR-ART.md) is the search,
+  and its last section bounds what is actually new here to three narrow things,
+  none of them a research contribution.
 - **CH04 cannot distinguish an ignored guardrail from an enforced one unless
   something declares which it is.** With no declaration the session reports
   `POLICY_SEMANTICS_UNDECLARED` and the finding claims only the sequence. With
