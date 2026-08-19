@@ -185,12 +185,27 @@ unremarkable, and it is the state every public corpus and every uninstrumented
 deployment is in. CH06 and CH07 behave correctly by contrast: both decline at
 100% and name `event_integrity` and `effect_receipt` as missing.
 
-**Not fixed here.** This branch does not touch `src/cohaera/**`. The behaviour
-is pinned by `test_ch04_contract_does_not_charge_for_absent_guardrail_evidence`
-so it cannot change silently, and `run_external.py` raises it as a flag on
-every run. The test is worded so that fixing the engine breaks it — if it
-fails, update the scope statement and this page rather than reversing the
-assertion.
+**Found here, fixed in the engine.** The behaviour above is what this harness
+measured before the fix. `coverage()` now adds both surfaces unconditionally,
+and a session with no policy evidence anywhere declines at zero confidence with
+reason `NO_POLICY_EVIDENCE`, naming `policy_semantics` and `approval_binding` as
+missing — the same shape CH06 and CH07 already had.
+
+The pinning test was worded so that fixing the engine would break it, and it
+did. The instruction it carried was followed rather than the assertion being
+reversed to keep it green: it is now
+`test_ch04_now_charges_for_absent_guardrail_evidence`, asserting the corrected
+contract, and `test_the_runner_no_longer_flags_the_ch04_gap` asserts the audit
+has gone quiet — which is only worth anything because the first test fails if
+it goes quiet for the wrong reason.
+
+One nuance the fix had to preserve. Silence in the event stream cannot separate
+"governed, and nothing tripped" from "no policy instrumentation at all". The
+only thing that can is the operator's capability manifest, so a manifest
+declaring a `policies` section keeps CH04 `evaluated` on a quiet session, with
+an assumption recorded; nothing declaring a control anywhere declines. On a
+public corpus, which declares nothing, CH04 declines — so **it remains
+un-validatable externally**, and the table in section 1 is unchanged.
 
 ---
 

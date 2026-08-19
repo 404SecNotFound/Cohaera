@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from cohaera.checks import (
     ALL_CHECKS,
     CHECK_FAMILIES,
+    R_NO_POLICY_EVIDENCE,
     SURFACE_APPROVAL,
     SURFACE_EFFECT_RECEIPT,
     SURFACE_EVENT_INTEGRITY,
@@ -371,20 +372,25 @@ def test_the_three_unvalidatable_checks_lack_their_evidence_surfaces():
                         SURFACE_EVENT_INTEGRITY, SURFACE_EFFECT_RECEIPT}
 
 
-def test_ch04_contract_does_not_charge_for_absent_guardrail_evidence():
-    """A finding about the ENGINE, pinned so it cannot regress silently.
+def test_ch04_now_charges_for_absent_guardrail_evidence():
+    """The engine finding this branch surfaced, now asserted from the other side.
 
-    On a session with a consequential call and no policy events at all, CH04's
-    coverage contract does not list ``policy_semantics`` or ``approval_binding``
-    among its required surfaces, and therefore reports nothing missing. The
-    required list is gated on whether the session HAS policy events, so the one
-    state that costs CH04 nothing is the state where no guardrail evidence
-    exists whatsoever -- which is the state every public corpus is in.
+    This test used to pin a defect. On a session with a consequential call and
+    no policy events at all, CH04's coverage contract listed neither
+    ``policy_semantics`` nor ``approval_binding`` among its required surfaces
+    and therefore reported nothing missing -- the required list was gated on
+    whether the session ALREADY HAD policy events, so the one state that cost
+    CH04 nothing was the state where no guardrail evidence existed whatsoever,
+    which is the state every public corpus is in.
 
-    This test asserts the CURRENT behaviour, and it is deliberately worded so
-    that fixing the engine breaks it. If it fails, read the message: the fix is
-    to update the scope statement and docs/EXTERNAL-VALIDATION.md, not to
-    reverse the assertion.
+    It was deliberately worded so that fixing the engine would break it. The
+    engine was fixed on claude/cohaera-ch04-coverage, this broke, and the
+    instruction it carried was followed: the assertion was not reversed to
+    keep it passing, it was rewritten to assert the corrected behaviour and
+    this page's section 3 was rewritten with it.
+
+    CH04 now behaves like CH06 and CH07 on evidence it does not have: it
+    declines, at zero confidence, naming both absent surfaces.
     """
     session = build_session(_first_attack())
     assert any(call.consequential for call in session.tool_calls), (
@@ -395,21 +401,39 @@ def test_ch04_contract_does_not_charge_for_absent_guardrail_evidence():
     ch04 = {c["check"]: c for c in coverage(session, None)["checks"]}[
         "CH04_guardrail_overrun"]
 
-    assert SURFACE_POLICY_SEMANTICS not in ch04["required_surfaces"]
-    assert SURFACE_APPROVAL not in ch04["required_surfaces"]
-    assert ch04["missing_surfaces"] == []
+    assert SURFACE_POLICY_SEMANTICS in ch04["required_surfaces"]
+    assert SURFACE_APPROVAL in ch04["required_surfaces"]
+    assert sorted(ch04["missing_surfaces"]) == sorted(
+        [SURFACE_APPROVAL, SURFACE_POLICY_SEMANTICS])
+    assert ch04["status"] == "not_evaluated"
+    assert ch04["confidence"] == 0.0
+    assert R_NO_POLICY_EVIDENCE in ch04["reasons"]
 
 
-def test_the_runner_flags_the_ch04_gap():
-    """The most interesting output must actually appear in the report."""
+def test_the_runner_no_longer_flags_the_ch04_gap():
+    """The audit going quiet is the result, and it has to be asserted.
+
+    While the defect stood, this asserted that the runner surfaced CH04 as a
+    check consuming evidence it never charged itself for. With the contract
+    corrected there is nothing left to surface, and an audit that stays silent
+    is only trustworthy if something fails when it should have spoken --
+    test_ch04_now_charges_for_absent_guardrail_evidence is that something.
+    """
     sessions = stepshield.load_directory(STEPSHIELD_DIR)
     result = run(sessions, "stepshield")
+
     flags = result["scope_audit"]["flags"]
-    assert any("CH04_guardrail_overrun" in f for f in flags), (
-        "the runner did not surface the CH04 coverage gap")
+    assert not any("CH04_guardrail_overrun" in f for f in flags), (
+        f"the CH04 gap is closed but the runner still flags it: {flags}")
+
     row = result["scope_audit"]["per_check"]["CH04_guardrail_overrun"]
-    assert row["unreported_missing_surfaces"] == [
-        SURFACE_APPROVAL, SURFACE_POLICY_SEMANTICS]
+    assert row["unreported_missing_surfaces"] == []
+
+    # And it declines for the stated reason rather than going quiet by
+    # accident, which is the distinction this whole directory is about.
+    report = result["coverage"]["CH04_guardrail_overrun"]
+    assert report["declined_pct"] == 100.0
+    assert SURFACE_POLICY_SEMANTICS in report["missing_surfaces"]
 
 
 def test_ch06_and_ch07_do_decline_and_say_why():
