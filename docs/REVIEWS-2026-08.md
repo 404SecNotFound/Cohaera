@@ -47,6 +47,16 @@ re-approved retries, out-of-order stream delivery, and a key rotation with one
 session straddling the handover. The entire 420.4 false positives per 1,000
 benign sessions comes from the other four.
 
+**One qualification, found while acting on this and not visible in the card's
+section 4.** Reading `eval/evaluation-card.json` rather than the rendered table
+shows CH06's zero holds only in the `manifest` cells. With no capability
+manifest, where tool effects are guessed from names, CH06 records 24 benign hits
+on the unseen/task-disjoint cell and 32 on the family-holdout ones. CH04 and
+CH07 hold at zero across all eighteen cells. So the deployable set is two checks
+unconditionally and a third conditional on `--tool-manifest` — which is the same
+prerequisite the third converged finding is about, arriving from a different
+direction.
+
 That is not a better-tuned detector. It is a categorically different one: those
 three are **deterministic verifiers**. No baseline to fit, no learning period,
 no false-positive budget to negotiate. Shipping them fused with the behavioural
@@ -123,7 +133,7 @@ adversary attacks the *deployment*.**
 | E21 is marked `CLOSED` and E13 `half_closed`, both conditional on a *signed* stream — while the evaluation card describes chained-but-unsigned as the realistic first-adoption state. Technically accurate, operationally misleading | **Acted on** — preconditions are now explicit |
 | There is no patient adversary anywhere in the model. All corpus attacks are within-session, and the harness scores one run, so cross-session attacks are not merely unmeasured but unmeasurable | **Acted on** as a reclassification to primary known-unmitigated risk. The measurement gap is open and is the hardest item on the list |
 | Six evasion classes published in the window are absent from the catalogue | **Acted on** — E24 through E29 |
-| Findings copy attacker-controlled tool arguments into evidence and ship them to a SIEM increasingly triaged by a language model. Boundary B4 treats this as a rendering concern | **Acted on** in the threat model |
+| Findings carry producer-influenced strings into evidence and ship them to a SIEM increasingly triaged by a language model. Boundary B4 treated this as a rendering concern | **Acted on, and the finding was corrected in the process.** The review asserted that tool *arguments and results* are copied into evidence. They are not: only `arg_digest` and a status word travel, and `Reject` carries a digest rather than the record. What does travel is identifiers, identity strings, marker labels, the tool sequence and handoff chains — enough to matter, and less than was claimed. `sanitise_display` is a terminal control and is applied at two points on the record path, not to session features |
 
 **What the review rated as genuinely strong**, recorded because a review that
 only criticises is not calibrated: tests that pass when the evasion succeeds;
