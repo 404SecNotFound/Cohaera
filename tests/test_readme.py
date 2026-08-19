@@ -24,6 +24,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -361,10 +363,30 @@ def test_no_count_is_spelled_as_a_word_where_a_checker_cannot_read_it():
         + "\n  ".join(offenders))
 
 
+def _repository_is_shallow() -> bool:
+    out = subprocess.run(["git", "rev-parse", "--is-shallow-repository"],
+                         cwd=REPO, capture_output=True, text=True, check=False)
+    return out.stdout.strip() == "true"
+
+
 def test_every_commit_the_review_response_cites_exists():
     """A response document that points at commits which are not there is worse
     than one that points at nothing: it looks checkable and is not. Written
-    from a log by hand, so this is the check that it was read correctly."""
+    from a log by hand, so this is the check that it was read correctly.
+
+    SKIPS on a shallow clone, and the skip is the point rather than an
+    embarrassment. `actions/checkout` fetches one commit by default, so the
+    history this reads does not exist there -- and a check whose data is
+    absent must say which, not fail as though the claim were false and not
+    pass as though it had been verified. That is the same contract every
+    detector in this repository is held to. The CI job that runs it fetches
+    full history so the check is real where it matters; anyone with a shallow
+    clone sees a named skip.
+    """
+    if _repository_is_shallow():
+        pytest.skip(
+            "shallow clone: the cited commits are not present to check. "
+            "Run `git fetch --unshallow` to make this assertion real.")
     text = (REPO / "REVIEW-RESPONSE.md").read_text(encoding="utf-8")
     shas = sorted(set(re.findall(r"`([0-9a-f]{7,40})`", text)))
     assert shas, "REVIEW-RESPONSE.md cites no commits at all"
