@@ -272,3 +272,31 @@ def test_the_readme_points_at_the_correction():
     assert "POSITIONING.md" in readme, (
         "the README's opening argument needs its correction reachable from "
         "the same page")
+
+
+def test_the_classifiers_name_every_python_ci_actually_runs():
+    """R-18. `requires-python` had no ceiling, so the package claimed every
+    future Python including 3.14, which is released and which this project has
+    never run. A support claim nothing tests is the same defect as a README
+    count nothing derives.
+    """
+    pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    workflow = (REPO / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    tested = set(re.findall(r'"(3\.\d+)"', re.search(
+        r"python: \[([^\]]+)\]", workflow).group(1)))
+    claimed = set(re.findall(
+        r'"Programming Language :: Python :: (3\.\d+)"', pyproject))
+    assert tested == claimed, (
+        f"CI runs {sorted(tested)} and the classifiers claim {sorted(claimed)}")
+
+    ceiling = re.search(r'requires-python = ">=(\d+\.\d+),<(\d+\.\d+)"',
+                        pyproject)
+    assert ceiling, "requires-python must be bounded above as well as below"
+    floor, cap = ceiling.groups()
+    assert floor == min(tested, key=lambda v: tuple(map(int, v.split(".")))), (
+        f"the declared floor {floor} is not the lowest version CI runs")
+    highest = max(tested, key=lambda v: tuple(map(int, v.split("."))))
+    assert cap == f"{highest.split('.')[0]}.{int(highest.split('.')[1]) + 1}", (
+        f"the ceiling {cap} does not sit one minor above the highest tested "
+        f"version {highest}")

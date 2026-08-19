@@ -147,7 +147,9 @@ def test_matrix_covers_the_declared_python_floor():
     assert versions, "the test job declares no python matrix"
 
     pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
-    m = re.search(r'requires-python\s*=\s*"[^0-9]*([0-9]+\.[0-9]+)"', pyproject)
+    # R-18. requires-python is now bounded at both ends, so the pattern reads
+    # the FLOOR out of a range rather than assuming the value ends there.
+    m = re.search(r'requires-python\s*=\s*">=\s*([0-9]+\.[0-9]+)', pyproject)
     assert m, "could not read requires-python from pyproject.toml"
     floor = m.group(1)
     assert floor in versions, (

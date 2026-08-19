@@ -9,17 +9,27 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cohaera"
 version = "0.3.0"
-description = "The correlation layer for agent telemetry. Turns observra's per-event stream into correlation-grade events a SIEM can fire rules on."
+description = "Evidence quality for agent telemetry. Verifies how trustworthy an agent session is, normalises it into correlation-ready features, and measures where the detections fail."
 readme = "README.md"
-requires-python = ">=3.10"
-license = { text = "Apache-2.0" }
+# R-18. Bounded ABOVE as well as below. ">=3.10" with no ceiling claimed every
+# future Python, including 3.14 which is released and which this project has
+# never run. Raise the ceiling when the matrix does, not before.
+requires-python = ">=3.10,<3.14"
+# R-20. SPDX expression rather than the table form and the classifier, both
+# of which setuptools now warns are deprecated under PEP 639.
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Imran Hafeez" }]
 keywords = ["security", "siem", "detection-engineering", "ai-agents", "observability", "telemetry"]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Information Technology",
-  "License :: OSI Approved :: Apache Software License",
+  # R-18. One classifier per version CI actually runs. Claiming a version the
+  # matrix does not test is the same defect as a README count nothing derives.
   "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Security",
 ]
 # Deliberately zero runtime dependencies. It must run on a locked-down

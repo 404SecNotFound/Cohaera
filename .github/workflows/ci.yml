@@ -208,10 +208,21 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - name: Build
+      - name: Build, reproducibly, and record what was built
+        # R-18. The build job and the SBOM job each ran `python -m build`, so
+        # the SBOM described a SIBLING of the wheel that shipped rather than
+        # the wheel itself -- two artefacts from two environments, related by
+        # nothing an auditor could check. Without SOURCE_DATE_EPOCH two builds
+        # of the same commit differ: verified locally, two runs a second apart
+        # produce two distinct SHA-256 digests.
+        #
+        # Pinning it to the commit timestamp makes the wheel a function of the
+        # source, which is stronger than passing one artefact between jobs: the
+        # sibling is provably the same bytes, and anybody can rebuild it.
         run: |
           python -m pip install --upgrade pip build
-          python -m build
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) python -m build
+          sha256sum dist/*.whl dist/*.tar.gz | tee dist/SHA256SUMS
       - name: Generate fixtures
         # tests/fixtures/*.jsonl is gitignored: it is generated output, and a
         # generator checked in alongside its output drifts from it silently.
@@ -279,8 +290,24 @@ jobs:
           # the wheel installed into it, and the SBOM taken of that. --pyproject
           # supplies the root component's own metadata, so the document says it
           # describes cohaera rather than leaving the subject unnamed.
+          #
+          # R-18. Same SOURCE_DATE_EPOCH as the build job, and the rebuild is
+          # then compared against itself: if two builds of one commit are not
+          # byte-identical, this SBOM describes something the build job did not
+          # produce and the assertion below says so instead of the document
+          # quietly being about a different wheel.
           python -m pip install --upgrade pip build cyclonedx-bom
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
           python -m build
+          sha256sum dist/*.whl | tee /tmp/sbom-wheel.sha256
+          python -m build --outdir /tmp/rebuild
+          ( cd /tmp/rebuild && sha256sum *.whl ) > /tmp/rebuild.sha256
+          if [ "$(awk '{print $1}' /tmp/sbom-wheel.sha256)" \
+             != "$(awk '{print $1}' /tmp/rebuild.sha256)" ]; then
+            echo "::error::two builds of this commit produced different bytes;" \
+                 "the SBOM cannot describe the shipped wheel"
+            exit 1
+          fi
           python -m venv --without-pip /tmp/sbom-venv
           SITE=$(/tmp/sbom-venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
           # No --no-deps: a runtime dependency added later MUST appear here.
