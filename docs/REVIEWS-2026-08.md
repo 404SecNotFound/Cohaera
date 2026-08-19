@@ -52,7 +52,7 @@ section 4.** Reading `eval/evaluation-card.json` rather than the rendered table
 shows CH06's zero holds only in the `manifest` cells. With no capability
 manifest, where tool effects are guessed from names, CH06 records 24 benign hits
 on the unseen/task-disjoint cell and 32 on the family-holdout ones. CH04 and
-CH07 hold at zero across all eighteen cells. So the deployable set is two checks
+CH07 hold at zero across all 18 cells. So the deployable set is two checks
 unconditionally and a third conditional on `--tool-manifest` — which is the same
 prerequisite the third converged finding is about, arriving from a different
 direction.
