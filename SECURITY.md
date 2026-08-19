@@ -9,7 +9,7 @@
 
 Cohaera is a **research prototype**. It has never been run against real agent
 traffic, its numbers come from a synthetic corpus written by its own author, and
-[EVASION.md](EVASION.md) catalogues 21 constructed ways to defeat its checks, 20
+[EVASION.md](EVASION.md) catalogues 22 constructed ways to defeat its checks, 20
 of which currently work.
 
 The single most important thing to know is not a vulnerability, it is a design
@@ -38,10 +38,13 @@ Please include:
 
 - what you attacked — a check, the ingest path, the CLI, the emitted record;
 - a **reproduction**. This project reproduces every reported defect before
-  fixing it, and three of the twenty-two defects fixed so far turned out to be
-  real for a different reason than the reporter gave, with one aimed at the
-  wrong function entirely. A reproduction is not bureaucracy here, it is the
-  step that catches that;
+  fixing it, and several have turned out to be real for a different reason
+  than the reporter gave, with one aimed at the wrong function entirely. A
+  reproduction is not bureaucracy here, it is the step that catches that.
+  (R-20: this sentence used to carry a running total of defects fixed. Nothing
+  derived it, nothing could, and it was wrong within a week of being written.
+  A number that cannot be checked should not be published — which is the
+  argument this whole file makes about detector results.);
 - what an attacker gains. "Cohaera crashes" and "Cohaera reports a session as
   clean" are different severities and the second is usually worse.
 
@@ -68,9 +71,9 @@ Credit in the advisory and in [EVASION.md](EVASION.md) unless you ask otherwise.
 Not because these do not matter, but because they are **already written down**
 and a report restating them tells nobody anything new:
 
-- **Anything in [EVASION.md](EVASION.md).** Seventeen catalogued evasions, each
-  with an executable test that passes while the evasion works. A *new* evasion
-  is very much in scope. Adding detail to a catalogued one — a cheaper variant,
+- **Anything in [EVASION.md](EVASION.md).** 22 constructed evasions, each with
+  an executable test that passes while the case behaves as the file records it.
+  A *new* evasion is very much in scope. Adding detail to a catalogued one — a cheaper variant,
   a case where the stated cost is wrong — is welcome as an issue.
 - **Lexical false positives in CH02.** An honest paraphrase reads as
   concealment. That is E04, it is measured on the corpus, and it is the check's

@@ -25,6 +25,9 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+
+import readme_facts
 
 from cohaera import __version__
 from cohaera.checks import MIN_CALLS_FOR_VOCABULARY_JUDGEMENT
@@ -722,7 +725,10 @@ def render_card(results: dict[str, Any], seed: int, summary: dict,
     add("  attack prevalence and is published only so the two can be compared.")
     add(f"- **No adaptive attacker.** Every attack here is one of "
         f"{len(gen.ATTACK_KINDS)} fixed shapes.")
-    add("  EVASION.md catalogues seventeen ways to defeat these checks. Exactly one")
+    # R-20. Derived. This said "seventeen" while the file listed twenty-two, and
+    # a number spelled in words is a number no checker reads.
+    add(f"  EVASION.md catalogues {readme_facts.count_constructed_evasions()} "
+        f"ways to defeat these checks. Exactly one")
     add("  of them, E02, appears in this corpus, and only because a fix for it")
     add("  could not be graded otherwise. An attacker who has read that file scores")
     add("  differently.")

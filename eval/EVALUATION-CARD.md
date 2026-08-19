@@ -233,7 +233,7 @@ you hide is a defect.
   above it. The all-session figure moves with this corpus's artificial
   attack prevalence and is published only so the two can be compared.
 - **No adaptive attacker.** Every attack here is one of 10 fixed shapes.
-  EVASION.md catalogues seventeen ways to defeat these checks. Exactly one
+  EVASION.md catalogues 22 ways to defeat these checks. Exactly one
   of them, E02, appears in this corpus, and only because a fix for it
   could not be graded otherwise. An attacker who has read that file scores
   differently.

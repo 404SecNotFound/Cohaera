@@ -67,7 +67,7 @@ fitted on those same twelve near-identical sessions. That is a smoke test wearin
 a lab coat.
 
 So there is a file in this repository called [EVASION.md](EVASION.md) whose
-entire job is to break this one. 21 constructed evasions, 20 of them still
+entire job is to break this one. 22 constructed evasions, 20 of them still
 working, each backed by a test that passes when the evasion succeeds. Read it
 before you trust anything else here — including the entry for the one that has
 been closed, which cost 36 new false positives and says so.
@@ -975,7 +975,7 @@ prevention claim collapses.
 - [x] Sigma content pack, 14 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 833 passing across unit, hostile-input and content conformance
+- [x] Tests, 835 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 26 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger
@@ -992,9 +992,9 @@ prevention claim collapses.
 - [x] Automated VMware Workstation lab build ([lab/](lab/))
 - [ ] Streaming state with watermarks, replacing batch load
 - [x] Evidence-trust design: wire formats, verification and staging for all three P1 items ([docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md))
-- [ ] Independent effect receipts, so a logged success can be checked
-- [ ] Collector-side signing and hash chaining, AEGIS pattern
-- [ ] Approval and policy binding, so a continuation can be called a bypass
+- [x] Independent effect receipts, so a logged success can be checked — `cohaera.receipt:1`, CH07, and `tools/receipt_adapters.py`. A receipt falsifies a claimed FAILURE; it still does not confirm a success, and nothing reconciles the identifier with the provider that minted it
+- [x] Collector-side signing and hash chaining, AEGIS pattern — `cohaera.integrity:1`, CH06, `tools/collector_sign.py`, with key roles, rotation, revocation, freshness and a cross-run ledger
+- [x] Approval and policy binding, so a continuation can be called a bypass — `cohaera.approval:1` and the CH04 advisory/blocking split. An in-band approval is reported as a CLAIM, not an authorisation fact
 - [ ] Validate content against a live SIEM
 - [ ] Build AIE-COHAERA-001 natively and compare against the Cohaera-fed version
 

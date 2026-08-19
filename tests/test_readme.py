@@ -315,3 +315,47 @@ def test_the_review_response_accounts_for_every_finding():
     for admission in ("No external validation", "No independent reviewer",
                       "never been built"):
         assert admission in text, f"the open list no longer admits: {admission}"
+
+
+def test_the_evasion_counts_add_up():
+    """R-20, and the arithmetic an external reviewer noticed before anyone here
+    did. EVASION.md said 20 of 21 constructed evasions still work and,
+    separately, that two are closed. Those cannot both be true.
+
+    Neither number was a lie somebody told. Both were derived from a guess
+    about what a table row meant: "id ends in a letter" stood in for "this is a
+    remedy", which hid E22b -- an open evasion -- from the constructed count,
+    and "the cell says exactly CLOSED" missed E21, whose cell says CLOSED
+    followed by a clause. The statuses are declared per row now, and this is
+    the identity that has to hold.
+    """
+    working = readme_facts.count_working_evasions()
+    closed = readme_facts.count_closed_evasions()
+    constructed = readme_facts.count_constructed_evasions()
+    assert working + closed == constructed, (
+        f"{working} working + {closed} closed != {constructed} constructed")
+
+    counts = readme_facts.evasion_status_counts()
+    assert sum(counts.values()) == readme_facts.count_evasions()
+    assert counts["remedy"] > 0, (
+        "a remedy row is a fix exercised, not an evasion; if none are "
+        "classified as such the constructed count is inflated")
+
+
+def test_no_count_is_spelled_as_a_word_where_a_checker_cannot_read_it():
+    """R-20. SECURITY.md said "Seventeen catalogued evasions" and the
+    evaluation card said "seventeen ways" while the file listed twenty-two.
+    Both survived a fact checker that reads digits.
+    """
+    words = ("fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
+             "twenty-one", "twenty-two")
+    offenders = []
+    for path in (REPO / "SECURITY.md", REPO / "EVASION.md",
+                 REPO / "eval" / "EVALUATION-CARD.md"):
+        text = path.read_text(encoding="utf-8").lower()
+        for word in words:
+            if word in text:
+                offenders.append(f"{path.name}: {word!r}")
+    assert not offenders, (
+        "counts spelled as words cannot be checked and have drifted twice:\n  "
+        + "\n  ".join(offenders))

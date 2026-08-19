@@ -50,6 +50,66 @@ empty — which is precisely why the version has to move.
   `state_digest_read`** — the ledger state this run's replay and fork verdicts
   were actually judged against.
 
+### Fixed — the rest of the external review
+
+Twenty-one findings were raised against the merged branch. The four that
+change the output contract are above; these change behaviour, bounds or
+claims. [REVIEW-RESPONSE.md](REVIEW-RESPONSE.md) accounts for all of them,
+including the three recommended remedies that were declined.
+
+- **The ledger now proves continuity** (R-02). Advancement requires the next
+  exact sequence *and* the predecessor matching the stored head. A gap is
+  discontinuous and a mismatching head is a fork; neither reads as ordinary
+  advancement, which is what a collector omitting a batch boundary used to get.
+- **Only evidence that held may write to it** (R-03), it is transactional
+  against concurrent runs (R-04), and it is called an *observation ledger*
+  rather than claiming exactly-once scoring.
+- **Attested files are resolved once** (R-07), so the digest describes the
+  bytes that were parsed rather than whatever a second `open()` found.
+- **Freshness is bounded at both ends** (R-13). A record dated past
+  `max_future_skew_s` is inadmissible, and `--evidence-as-of` refuses `nan`,
+  which silently disabled the whole bound.
+- **Record shape is metered during the parse** (R-11). The resident estimate is
+  the larger of a byte term and a container/key term, because arrays of empty
+  maps and arrays of integers are the same size on the wire and an order of
+  magnitude apart in memory.
+- **Signature work has a wall clock as well as a count** (R-12), and
+  `SECURITY.md` publishes the measured envelope.
+- **CH01 findings say whose normal they were measured against** (R-14):
+  `baseline_scope: fleet`. One grammar over every training session, which the
+  documentation had been describing as an agent's own history.
+- **Receipt adapters give each path its own kind and assurance** (R-17). A
+  Kubernetes `uid` is no longer reported as a `resourceVersion`, and `nan` is
+  not an identifier.
+- **The lab's required probe targets an address the agent can reach** (R-08),
+  the negative property it was standing in front of is asserted, and `LAB.md`
+  no longer describes a third topology.
+- **The evaluation card reports task-cluster intervals** (R-15) and the corpus
+  must be a bijection between labels and telemetry (R-16). It also names a
+  property of itself: every family has identical counts and produces an
+  identical rate, so a family holdout here tests less than the name suggests.
+- **Counts are derived from a declared status column** (R-20). The file said
+  20 of 21 constructed evasions work and, separately, that two are closed —
+  which cannot both be true. Two inferences were wrong: an id ending in a
+  letter was read as "remedy", hiding an open evasion, and a cell had to say
+  exactly `CLOSED`, missing one that says `CLOSED` followed by a clause. The
+  truth is 22 constructed, 2 closed, 20 working.
+- **The wheel is a function of the source** (R-18). `SOURCE_DATE_EPOCH` makes
+  two builds of one commit byte-identical, which the SBOM job now proves.
+  `requires-python` is bounded above, and the classifiers name every version CI
+  runs.
+
+### Changed — what this project claims to be
+
+- **The positioning is corrected** (R-19). Agent behaviour analytics ships;
+  pitching session correlation as the missing layer was late. Cohaera is the
+  evidence-quality layer that feeds one. See
+  [POSITIONING.md](POSITIONING.md), which also carries the language this
+  project will not use about its own results — enforced by a test.
+- **A local lab** ([`lab/local/`](lab/local/)) runs the evidence path end to
+  end in about a second and commits what it produced. CI re-runs it, so a
+  change in what a verdict *says* fails a diff.
+
 ### Added
 
 - **Evidence trust (P1).** Three sidecar schemas the collector can emit and
@@ -520,7 +580,7 @@ empty — which is precisely why the version has to move.
   of COH-R12 is the one exception, and it reached the card only as a side
   effect of the `producer_flag` ablation rather than by design; see
   `eval/README.md`.
-- **21 constructed evasions are catalogued and 20 still work**, on purpose:
+- **22 constructed evasions are catalogued and 20 still work**, on purpose:
   `tests/test_evasion.py` asserts they do, so that closing one without updating
   the catalogue fails the build.
 - **Cohaera still holds the whole run in memory.** `load` materialises every

@@ -961,7 +961,35 @@ if __name__ == "__main__":
         except Exception as exc:
             print(f"  ERROR     {name}: {type(exc).__name__}: {exc}")
             failed.append(name)
-    print(f"\n{len(fns) - len(failed)}/{len(fns)} evasions still work.")
+    # R-20. By STATUS, not as one number.
+    #
+    # This printed "26/26 evasions still work", which was wrong twice over. The
+    # denominator counted every function in the file, including E20b and E23b,
+    # which are REMEDIES -- they pass because the fix holds, so counting them
+    # as working evasions credits a closure to the attacker. And the numerator
+    # counted E02 and E21, which are closed, as working, because a closed
+    # evasion's test still passes: it asserts the closure.
+    #
+    # "Every function passed" and "every evasion works" are different
+    # sentences, and printing the first in the words of the second is the same
+    # defect this file exists to catch elsewhere.
+    passed = len(fns) - len(failed)
+    print(f"\n{passed}/{len(fns)} tests pass "
+          f"(a passing test means the case behaves as EVASION.md records it, "
+          f"which for a remedy or a closed evasion is the OPPOSITE of an "
+          f"evasion working).")
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+        import readme_facts
+        counts = readme_facts.evasion_status_counts()
+        print(f"EVASION.md records {readme_facts.count_constructed_evasions()} "
+              f"constructed evasions: "
+              f"{counts['working']} working, "
+              f"{counts['half_closed']} half closed, "
+              f"{counts['closed']} closed, "
+              f"plus {counts['remedy']} remedies exercised here.")
+    except Exception as exc:                      # pragma: no cover
+        print(f"(could not read EVASION.md's status column: {exc})")
     if failed:
         print("Some evasions were blocked. Update EVASION.md, then update these tests.")
     sys.exit(0)
