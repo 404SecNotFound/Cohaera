@@ -151,8 +151,12 @@
            Why  = 'analysis PULLS from the collector. If this fails the lab is not merely isolated, it is broken.' }
         @{ From = 'collector-01'; Kind = 'tcp';  Target = '10.10.10.10:22';   Expect = 'reach'
            Why  = 'the collector has a foot in the generation segment on purpose.' }
-        @{ From = 'agent-01';    Kind = 'tcp';   Target = '10.10.20.10:22';   Expect = 'reach'
-           Why  = 'the agent must be able to ship telemetry to the collector.' }
+        @{ From = 'agent-01';    Kind = 'tcp';   Target = '10.10.10.20:22';   Expect = 'reach'
+           Why  = 'the agent must be able to ship telemetry to the collector. R-08: this row named 10.10.20.10 -- the collector''s COLLECTION-side address -- which agent-01 has no interface on, no route to, and cannot be forwarded to because NoForwarding asserts the collector is not a router. The build failed its own required positive probe. The collector has a foot in the generation segment precisely so that this address, 10.10.10.20, is the one the agent uses.' }
+        @{ From = 'agent-01';    Kind = 'tcp';   Target = '10.10.20.10:22';   Expect = 'blocked'
+           Why  = 'and the property the impossible row above was hiding. The agent reaches the collector on the shared generation segment ONLY. If it can also reach the collection segment then the boundary is not a boundary, telemetry and the thing producing it are on the same side of it, and a compromised agent can rewrite the archive it is being judged from.' }
+        @{ From = 'agent-01';    Kind = 'tcp';   Target = '10.10.20.30:22';   Expect = 'blocked'
+           Why  = 'the same property stated against the host it protects: agent-01 must never reach the scoring host.' }
         @{ From = 'agent-01';    Kind = 'https'; Target = 'https://api.anthropic.com/v1/messages'; Expect = 'reach'; Advisory = $true
            Why  = 'the agent needs the LLM API. Advisory: this is the one row that depends on the outside world.' }
         @{ From = 'agent-01';    Kind = 'https'; Target = 'https://example.com'; Expect = 'blocked'

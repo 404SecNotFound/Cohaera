@@ -48,10 +48,27 @@ build VMs before running it.
 
 | VM | Role | vCPU | RAM | Disk | Network |
 |---|---|---:|---:|---:|---|
-| `agent-01` | Runs the instrumented agent and AgentDojo suites | 4 | 8 GB | 40 GB | 10.10.10.10/24, egress allowlisted |
-| `collector-01` | observra webhook receiver, OTel collector, JSONL archive | 2 | 4 GB | 100 GB | 10.10.20.10/24 |
-| `analysis-01` | Cohaera, corpus labelling, scoring | 4 | 16 GB | 100 GB | 10.10.30.10/24, no internet |
-| `siem-01` | Rule authoring and replay. Phase 5 only. | 4 | 16 GB | 200 GB | 10.10.40.10/24 |
+| `agent-01` | Runs the instrumented agent and AgentDojo suites | 4 | 8 GB | 40 GB | NAT + 10.10.10.10/24 (generation), egress allowlisted |
+| `collector-01` | observra webhook receiver, OTel collector, JSONL archive | 2 | 4 GB | 100 GB | 10.10.10.20/24 (generation) **and** 10.10.20.10/24 (collection) |
+| `analysis-01` | Cohaera, corpus labelling, scoring | 4 | 16 GB | 100 GB | 10.10.20.30/24 (collection), no internet |
+| `siem-01` | Rule authoring and replay. Phase 5 only. | 4 | 16 GB | 200 GB | 10.10.30.10/24 (analysis) |
+
+> **These addresses are the ones in `lab/lab.config.psd1`, and that file is the
+> only place they are decided.** R-08: this table used to describe a different
+> lab — collector on 10.10.20.10 alone, analysis on 10.10.30.10, SIEM on
+> 10.10.40.10 — and the commands below followed it. An operator working from
+> this page configured endpoints the built lab does not have, watched a
+> scenario produce nothing, and had no way to tell a broken network from a
+> detector that declined to fire. Two addresses that disagree are worse than
+> one address that is wrong.
+>
+> **Why the collector has two.** It is the boundary between generation and
+> collection, and a boundary needs a foot on each side. `agent-01` ships
+> telemetry to **10.10.10.20**, the generation-side address — it has no route
+> to the collection segment and must not have one. `analysis-01` pulls from
+> **10.10.20.10**, the collection-side address. IP forwarding is off on the
+> collector, so nothing reaches through it; the archive is handed across, not
+> routed across.
 
 Base image: Ubuntu Server 24.04 LTS on all four. Ubuntu 22.04 also works.
 
@@ -200,7 +217,7 @@ table inet filter {
     ip daddr 10.10.10.1 udp dport 53 accept
 
     # telemetry to the collector
-    ip daddr 10.10.20.10 tcp dport 8080 accept
+    ip daddr 10.10.10.20 tcp dport 8080 accept
 
     # hosted LLM API
     ip daddr @llm_api tcp dport 443 accept
@@ -251,7 +268,11 @@ on it, and a research audience will ask.
 ```bash
 # from agent-01: should SUCCEED
 curl -sS -o /dev/null -w '%{http_code}\n' https://api.anthropic.com/v1/messages
-nc -zv 10.10.20.10 8080
+nc -zv 10.10.10.20 8080   # the collector's GENERATION-side address
+
+# from agent-01: should FAIL. The agent has no business on the
+# collection segment, and if it can reach it the boundary is decorative.
+nc -zv -w2 10.10.20.10 8080 ; echo "exit=$?"
 
 # from agent-01: should FAIL and appear in the log
 curl -m 5 https://example.com ; echo "exit=$?"
@@ -335,7 +356,7 @@ That tuple is what turns a pile of JSONL into a dataset.
 python -m agentdojo.scripts.benchmark --suite workspace --limit 1
 
 # ship it
-scp /var/log/observra/run.jsonl analyst@10.10.30.10:~/corpus/smoke.jsonl
+scp /var/log/observra/run.jsonl analyst@10.10.20.30:~/corpus/smoke.jsonl
 
 # on analysis-01
 PYTHONPATH=src python3 -m cohaera.cli score ~/corpus/smoke.jsonl

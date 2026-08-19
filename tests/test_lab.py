@@ -269,3 +269,116 @@ def test_the_manual_list_no_longer_claims_the_probes_are_manual():
     assert "Virtual Network Editor" in verify, (
         "the genuinely-manual host-only check was dropped; the probes pass "
         "just as happily on a bridged segment")
+
+
+# ---------------------------------------------------------------------------
+# R-08. A required positive probe that no routing table could satisfy.
+# ---------------------------------------------------------------------------
+
+_NIC = re.compile(r"@\{\s*Net\s*=\s*'([^']+)';\s*Ip\s*=\s*'([\d.]+)/\d+'\s*\}")
+_VM_NAME = re.compile(r"Name\s*=\s*'([^']+)'")
+
+
+def interfaces() -> dict[str, set[str]]:
+    """Every VM's static addresses, by name, read out of the Vms block."""
+    body = config()
+    start = body.index("Vms = @(")
+    block = body[start:body.index("# Isolation, as assertions", start)]
+    out: dict[str, set[str]] = {}
+    current = ""
+    for line in block.splitlines():
+        name = _VM_NAME.search(line)
+        if name:
+            current = name.group(1)
+            out[current] = set()
+        for _net, ip in _NIC.findall(line):
+            if current:
+                out[current].add(ip)
+    return out
+
+
+def _subnet(address: str) -> str:
+    return ".".join(address.split(".")[:3])
+
+
+def test_every_required_positive_probe_is_on_a_segment_the_source_can_reach():
+    """R-08, reproduced as a rule rather than as one corrected address.
+
+    The matrix required ``agent-01`` to reach ``10.10.20.10:22`` -- the
+    collector's COLLECTION-side address. ``agent-01`` has one static interface,
+    on the generation segment, and its default route is NAT. ``NoForwarding``
+    asserts the collector is a boundary rather than a router, so nothing carries
+    that packet either. The build could only ever fail its own required check.
+
+    The address was not the defect. Believing a host can reach a segment it has
+    no interface on was, and one corrected address does not stop the next one.
+    So this asserts the property: every ``reach`` row must name a target on a
+    subnet the source host actually has an address on, or be an advisory row
+    that leaves the lab entirely.
+    """
+    nics = interfaces()
+    unreachable = []
+    for source, kind, target, expect in probes():
+        if expect != "reach" or kind in ("https", "dns"):
+            continue
+        host = target.split(":")[0]
+        if not host[0].isdigit():
+            continue
+        if _subnet(host) not in {_subnet(ip) for ip in nics.get(source, set())}:
+            unreachable.append(
+                f"{source} -> {target}: {source} has "
+                f"{sorted(nics.get(source, set())) or 'no static address'}, "
+                f"none of them on {_subnet(host)}.0/24")
+    assert not unreachable, (
+        "these rows require a route that the declared interfaces cannot "
+        "provide, and no forwarding is permitted:\n  " + "\n  ".join(unreachable))
+
+
+def test_the_agent_is_asserted_off_the_collection_segment():
+    """The property the impossible row was standing in front of.
+
+    An agent that can reach the collection segment can reach the archive it is
+    being judged from. That is the boundary the whole lab exists to create, and
+    until R-08 nothing asserted it -- the row in that position was a positive
+    one, pointed at the same segment, and could not pass.
+    """
+    rows = [r for r in probes() if r[0] == "agent-01"]
+    collection = [r for r in rows if r[2].startswith("10.10.20.")]
+    assert collection, "nothing constrains agent-01's access to collection"
+    assert all(r[3] == "blocked" for r in collection), (
+        "agent-01 must not be asserted to reach the collection segment")
+    assert {r[2].split(":")[0] for r in collection} >= {"10.10.20.10",
+                                                        "10.10.20.30"}, (
+        "assert it against both hosts on that segment: the collector's foot "
+        "there and the scoring host")
+
+
+def test_the_agent_can_still_ship_telemetry_to_the_collector():
+    """And the positive half, which the lab is useless without."""
+    rows = [r for r in probes()
+            if r[0] == "agent-01" and r[2].startswith("10.10.10.20")]
+    assert rows, "nothing asserts the agent can reach the collector at all"
+    assert all(r[3] == "reach" for r in rows)
+
+
+def test_the_documentation_addresses_agree_with_the_built_lab():
+    """R-08's other half. ``LAB.md`` described a third topology -- collector on
+    10.10.20.10 alone, analysis on 10.10.30.10, SIEM on 10.10.40.10 -- and its
+    commands followed it. An operator configuring endpoints the built lab does
+    not have reads a silent scenario as a detector that declined to fire.
+    """
+    doc = (REPO / "LAB.md").read_text(encoding="utf-8")
+    section = doc[doc.index("| VM | Role |"):doc.index("Base image:")]
+    # Only the table's own rows. The prose beneath it quotes the addresses the
+    # stale version named, and a check that cannot tell a correction from the
+    # thing it corrects would forbid explaining the fix.
+    table = "\n".join(line for line in section.splitlines()
+                      if line.startswith("|"))
+    declared = set(re.findall(r"10\.10\.\d+\.\d+", table))
+    built = {ip for ips in interfaces().values() for ip in ips}
+    assert declared <= built, (
+        f"LAB.md's hardware table names addresses the lab does not build: "
+        f"{sorted(declared - built)}")
+    assert built <= declared, (
+        f"LAB.md's hardware table omits addresses the lab does build: "
+        f"{sorted(built - declared)}")
