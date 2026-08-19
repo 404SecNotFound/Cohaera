@@ -2508,6 +2508,29 @@ def test_r13_a_non_object_record_from_the_stream_is_still_quarantined(tmp_path):
 
 
 def _integrity(stream, seq):
+    """A CHAINED sidecar. F-03.
+
+    This used to emit `{scheme, stream_id, seq}` and nothing else, which is a
+    stream name and a number the producer wrote. The R-11 tests below then
+    asserted that such a sequence outranks the wall clock -- and the argument
+    for why it should, in `_ordering`'s own docstring, is that "a sequence
+    inside a stream is covered by the hash chain and the signature over its
+    head, so it cannot be reordered without detection". That argument needs the
+    chain, and the fixture did not have one, so the tests were asserting the
+    doctrine over evidence that could not support it.
+
+    The chain values here are synthetic and unverified, which is the honest
+    level for these tests: they are about ORDERING, and ordering requires the
+    sidecar to be chained, not to be signed. A stream that is chained and
+    unsigned is a real and documented state -- see `evidence_status`'s
+    `chained_unsigned`.
+    """
+    return {"scheme": "cohaera.integrity:1", "stream_id": stream, "seq": seq,
+            "prev": f"{seq:064x}", "chain": f"{seq + 1:064x}"}
+
+
+def _unchained_integrity(stream, seq):
+    """A sidecar carrying a sequence and nothing that makes it checkable."""
     return {"scheme": "cohaera.integrity:1", "stream_id": stream, "seq": seq}
 
 

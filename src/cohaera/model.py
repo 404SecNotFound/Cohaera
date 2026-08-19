@@ -30,6 +30,8 @@ from . import evidence, validate
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest
 from .evidence import (
     ARGS_ABSENT,
+    ARGS_CONFIRMED,
+    ARGS_CONTRADICTED,
     ARGS_DECLARED,
     ARGS_RECOMPUTED,
     Approval,
@@ -39,7 +41,12 @@ from .evidence import (
 )
 from .identity import CorrelationKey, canonical, digest
 from .identity import verdict_id as _verdict_id
-from .limits import DEFAULT_LIMITS, DEFECT_RESPONSE_TEXT_TYPE, Limits
+from .limits import (
+    DEFAULT_LIMITS,
+    DEFECT_RESPONSE_TEXT_LENGTH,
+    DEFECT_RESPONSE_TEXT_TYPE,
+    Limits,
+)
 from .validate import (
     json_safe,  # re-exported: part of the public API
     marker_list,
@@ -592,7 +599,20 @@ def _argument_identity(data: dict[str, Any]) -> tuple[str | None, str, bool]:
     args = data.get("tool_args")
     computed = evidence.arg_digest(args) if args is not None else None
     if declared and computed:
-        return declared, ARGS_DECLARED, declared != computed
+        # F-01. The RECOMPUTED value is returned in both branches, and that is
+        # the fix. It used to return `declared` unconditionally here, so a
+        # producer that emitted arguments for one call and the digest of
+        # another had the digest of another believed -- and an approval written
+        # for the other call covered this one.
+        #
+        # When they agree the two values are equal and the choice is moot; the
+        # source records that both were present, which is a stronger artefact
+        # than either alone. When they disagree the captured arguments are what
+        # the call did, and the source says the producer contradicted itself,
+        # which makes the call unbindable rather than bindable-to-the-lie.
+        if declared == computed:
+            return computed, ARGS_CONFIRMED, False
+        return computed, ARGS_CONTRADICTED, True
     if declared:
         return declared, ARGS_DECLARED, False
     if computed:
@@ -614,9 +634,18 @@ class ApprovalMatch:
     approval: Approval
     binding: str
     fresh: bool | None
+    # F-02. Was the approval RECORD observed before the call it covers started?
+    #
+    # True, False, or None when nothing could order the two. Distinct from
+    # ``fresh``, which asks only whether the approval's own declared window
+    # contains the call -- and ``granted_at`` is a number the producer writes.
+    # An approval emitted after the call completed, backdated to before it,
+    # satisfies ``fresh`` completely and is a retroactive authorisation.
+    observed_before_call: bool | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {"binding": self.binding, "fresh": self.fresh,
+                "observed_before_call": self.observed_before_call,
                 **self.approval.as_dict()}
 
 
@@ -895,8 +924,16 @@ class Session:
                     arg_digest=adigest,
                     arg_digest_source=asource,
                     arg_digest_disagrees=adisagrees,
-                    start_stream=e.integrity.stream_id if e.integrity else None,
-                    start_seq=e.integrity.seq if e.integrity else None,
+                    # F-03. Only from a CHAINED sidecar. A stream id and a
+                    # sequence with no `prev` and no `chain` are two numbers
+                    # the producer wrote, and letting them order events hands
+                    # the producer the decision CH03 and CH04 rest on.
+                    start_stream=(e.integrity.stream_id
+                                  if e.integrity and e.integrity.chained
+                                  else None),
+                    start_seq=(e.integrity.seq
+                               if e.integrity and e.integrity.chained
+                               else None),
                 )
                 started = len(calls)
                 calls.append(tc)
@@ -1018,6 +1055,23 @@ class Session:
         """True if a model_response carried a response_text of the wrong type."""
         return DEFECT_RESPONSE_TEXT_TYPE in self.integrity_defects
 
+    @property
+    def response_text_truncated(self) -> bool:
+        """True if a model_response was longer than the bound and was cut. F-04.
+
+        The truncation was always recorded as a field defect and nothing acted
+        on it. CH02's whole conclusion is "this text does not mention the
+        action", and a text that was cut short cannot support that conclusion
+        about the part that was cut -- while the check reported full
+        confidence. A disclosure sitting thirty-three characters past the cap
+        produced a CRITICAL concealment finding.
+
+        Note the asymmetry this enables and the fix depends on: finding a
+        disclosure in a truncated prefix is still sound. Only the ABSENCE
+        conclusion is unsupportable.
+        """
+        return DEFECT_RESPONSE_TEXT_LENGTH in self.integrity_defects
+
     # ---- security-relevant counters -------------------------------------
     @property
     def injection_markers(self) -> list[str]:
@@ -1087,14 +1141,52 @@ class Session:
         return self._cached("approvals", build)
 
     @property
-    def _approvals_by_span(self) -> dict[str, list[Approval]]:
-        def build() -> dict[str, list[Approval]]:
-            index: dict[str, list[Approval]] = {}
-            for a in self.approvals:
+    def _approvals_by_span(self) -> dict[str, list[tuple[Approval, Event]]]:
+        """Each approval WITH the record that carried it. F-02.
+
+        The record's own observed position is the only thing that can tell a
+        pre-authorisation from a retroactive one, and the ``Approval`` object
+        carries nothing but what the producer declared about itself.
+        """
+        def build() -> dict[str, list[tuple[Approval, Event]]]:
+            index: dict[str, list[tuple[Approval, Event]]] = {}
+            seen = 0
+            for e in self.ordered_events:
+                if seen >= self.limits.max_approvals_per_session:
+                    break
+                a = e.approval
+                if a is None:
+                    continue
+                seen += 1
                 if a.subject.span_id:
-                    index.setdefault(a.subject.span_id, []).append(a)
+                    index.setdefault(a.subject.span_id, []).append((a, e))
             return index
         return self._cached("approvals_by_span", build)
+
+    @staticmethod
+    def _observed_before(record: Event, call: ToolCall) -> bool | None:
+        """Did this approval record arrive before the call started? F-02.
+
+        Sequence first, for the reason every other ordering decision here uses
+        it: a position inside a collector stream is covered by the hash chain
+        and the signature over its head, and a wall clock is a number the
+        producer chooses. Clock only as a fallback, and ``None`` when neither
+        can answer -- which is not permission. See ``covering_approval``.
+        """
+        integrity = record.integrity
+        if (integrity is not None and integrity.chained
+                and integrity.seq is not None
+                and call.start_seq is not None
+                and integrity.stream_id == call.start_stream):
+            return integrity.seq < call.start_seq
+        started = call.started_at
+        if started is None or not record.timestamp_valid:
+            return None
+        # A NaN start reaches here as an unusable comparison, so guard it the
+        # same way: an ordering that cannot be established is not an ordering.
+        if started != started:                    # NaN
+            return None
+        return record.timestamp <= started
 
     def approvals_for(self, call: ToolCall) -> list[ApprovalMatch]:
         """Every approval naming this call's span, and how well each one bound.
@@ -1109,10 +1201,17 @@ class Session:
         if not call.span_id:
             return []
         out: list[ApprovalMatch] = []
-        for a in self._approvals_by_span.get(call.span_id, ()):
+        for a, record in self._approvals_by_span.get(call.span_id, ()):
             if a.subject.tool_id and a.subject.tool_id != call.name:
                 continue
-            if (a.subject.arg_digest and call.arg_digest
+            if call.arg_digest_source in evidence.ARGS_UNBINDABLE:
+                # F-01. The call's own two argument identities disagree, so
+                # there is no value here for an approval to bind to. Reported
+                # as a mismatch rather than dropped: an approval was presented
+                # against a call the telemetry cannot describe, and that is a
+                # stronger statement than "no approval was presented".
+                binding = evidence.BOUND_ARG_MISMATCH
+            elif (a.subject.arg_digest and call.arg_digest
                     and a.subject.arg_digest != call.arg_digest):
                 binding = evidence.BOUND_ARG_MISMATCH
             elif a.subject.complete and call.arg_digest:
@@ -1127,8 +1226,10 @@ class Session:
                 # it got -- so this value no longer covers anything, it only
                 # annotates. See evidence.BINDING_TRUSTED.
                 binding = evidence.BOUND_SPAN_ONLY
-            out.append(ApprovalMatch(approval=a, binding=binding,
-                                     fresh=a.covers_clock(call.started_at)))
+            out.append(ApprovalMatch(
+                approval=a, binding=binding,
+                fresh=a.covers_clock(call.started_at),
+                observed_before_call=self._observed_before(record, call)))
         return out
 
     def covering_approval(self, call: ToolCall) -> ApprovalMatch | None:
@@ -1143,11 +1244,27 @@ class Session:
         returned by ``approvals_for`` and still reported, because "an approval
         was presented and did not constrain this call" is a stronger statement
         than "no approval was presented" -- it is just not coverage.
+
+        F-02 adds a fourth, and it is the one a producer could walk past most
+        easily. The approval RECORD has to have been observed before the call
+        started. ``fresh`` checks the approval's declared window against the
+        call, and every value in that window is a number the producer writes:
+        an approval emitted after the call completed, backdated to before it,
+        passes ``fresh`` perfectly. That is a retroactive authorisation, it is
+        exactly how a completed bypass would be papered over, and it used to
+        silence CH04 completely.
+
+        ``observed_before_call is None`` -- nothing could order the two -- does
+        NOT cover the call either. An ordering Cohaera cannot establish is not
+        an ordering in its favour, and the alternative is a producer omitting
+        the sequence to buy the benefit of the doubt.
         """
         for m in self.approvals_for(call):
             if m.approval.decision != evidence.DECISION_ALLOW:
                 continue
             if m.binding not in evidence.BINDING_TRUSTED or m.fresh is False:
+                continue
+            if m.observed_before_call is not True:
                 continue
             return m
         return None

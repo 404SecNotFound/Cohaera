@@ -157,9 +157,29 @@ VALID_DECISIONS = frozenset({DECISION_ALLOW, DECISION_DENY})
 
 # Where a call's argument identity came from. Same shape as ``klass_source``,
 # and for the same reason: one of these is a fact and the others are weaker.
-ARGS_DECLARED = "producer_declared"    # the producer stated a digest
+#
+# F-01. There used to be three of these and the ordering between them was
+# wrong in the one case that matters. A producer emits BOTH `arg_digest` and
+# `tool_args`; the declared digest was taken whenever it was present, with the
+# disagreement recorded as a flag nothing acted on. So a call sending to the
+# attacker, declaring the digest of a send to Alice, inherited Alice's approval
+# and CH04 stayed silent -- which defeats the whole point of requiring a
+# complete binding, because the producer chooses the value being bound to.
+#
+# The digest of arguments Cohaera actually saw is the authoritative one. It is
+# the only one that describes the call rather than describing what the producer
+# would like the call to be taken for.
+ARGS_CONFIRMED = "declared_and_recomputed"  # both present, and they agree
 ARGS_RECOMPUTED = "recomputed"         # Cohaera hashed the captured args
+ARGS_DECLARED = "producer_declared"    # the producer stated a digest, no args
+ARGS_CONTRADICTED = "producer_contradicted"  # both present, and they DISAGREE
 ARGS_ABSENT = "none"
+
+# A call whose two argument identities disagree cannot be bound by anything.
+# Not "bound weakly" -- an approval or receipt naming either digest is naming a
+# call the telemetry itself cannot agree on, and no honest emitter produces
+# this. See model.ToolCall.arg_digest_disagrees.
+ARGS_UNBINDABLE = frozenset({ARGS_CONTRADICTED})
 
 DIGEST_PREFIX = "sha256:"
 
@@ -314,6 +334,23 @@ class Integrity:
     def signed(self) -> bool:
         return self.sig is not None and self.key_id is not None
 
+    @property
+    def chained(self) -> bool:
+        """Does this sidecar actually place the record in a chain? F-03.
+
+        ``stream_id`` and ``seq`` alone are two numbers the producer wrote.
+        What makes a sequence position checkable is ``prev`` and ``chain``:
+        with them the position is covered by the hash chain, and the chain by
+        whatever signature reaches it, so a record cannot be moved without the
+        move being detectable. Without them the sequence is a preference.
+
+        The distinction was not being drawn, so ordering -- which CH03 and CH04
+        both rest on -- accepted a sequence from a sidecar carrying neither. A
+        producer emitting `{scheme, stream_id, seq}` and nothing else decided
+        what happened before what.
+        """
+        return bool(self.prev) and bool(self.chain)
+
     @classmethod
     def parse(cls, obj: Any, limits: Limits = DEFAULT_LIMITS
               ) -> tuple[Integrity | None, tuple[str, ...]]:
@@ -352,8 +389,20 @@ class Integrity:
         ), ()
 
 
+# A SHA-256 hex digest is 64 characters. F-14: `prev` and `chain` are outputs
+# of `hashlib.sha256().hexdigest()` and nothing else, and accepting any length
+# of hex turned a bounded field into an unbounded one that is then copied into
+# the verdict and multiplied across every session in the run. Twelve records
+# carrying a 64 KiB chain each produced 788 KB of input and 9.58 MB of output:
+# a 12.15x amplification against a SIEM that bills by ingest, from accepted
+# input, at exit code zero.
+CHAIN_HEX_CHARS = 64
+
+
 def _hex_or_none(value: Any) -> str | None:
     if not isinstance(value, str) or isinstance(value, bool) or not value:
+        return None
+    if len(value) != CHAIN_HEX_CHARS:
         return None
     try:
         int(value, 16)
@@ -2198,7 +2247,28 @@ class SessionIntegrity:
 
     @property
     def attested(self) -> bool:
-        """Did every record in this session carry a sidecar?"""
+        """Did a verified signature attest to this session's records? F-03.
+
+        This used to be "did every record carry a sidecar", which is a
+        different question with a much weaker answer, and it was published
+        under a word every reader takes to mean the stronger one. A stream of
+        producer-written sidecars with no ``chain``, no ``prev`` and no
+        signature reported ``attested: true``.
+
+        The old question is still worth asking and is now ``sidecars_complete``.
+        This one is about who vouched for the bytes.
+        """
+        return self.signatures_verified > 0 and not self.inadmissible
+
+    @property
+    def sidecars_complete(self) -> bool:
+        """Did every record in this session carry a sidecar at all?
+
+        The question ``attested`` used to answer. Selective stripping is what
+        it catches: a session where some records carry integrity evidence and
+        others do not is the shape an attacker produces by removing the
+        evidence from the records they edited.
+        """
         return self.with_integrity > 0 and self.without_integrity == 0
 
     @property
@@ -2270,6 +2340,7 @@ class SessionIntegrity:
             "signature_covers_final": self.signature_covers_final,
             "replayed_streams": self.replayed_streams[:cap],
             "attested": self.attested,
+            "sidecars_complete": self.sidecars_complete,
         }
 
 

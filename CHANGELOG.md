@@ -50,6 +50,48 @@ empty — which is precisely why the version has to move.
   `state_digest_read`** — the ledger state this run's replay and fork verdicts
   were actually judged against.
 
+### Fixed — a second external review, with executable proofs
+
+A second reviewer read `main` and shipped eight reproduction probes rather
+than eight assertions. Six reproduced. Four of the six are one root cause:
+**a producer-supplied value was being treated as a fact.**
+
+- **Captured arguments are authoritative** (F-01). An event carries both
+  `tool_args` and `arg_digest`, and the declared digest won whenever it was
+  present — the disagreement was recorded as a flag nothing acted on. A call
+  sending to an attacker, declaring the digest of a send to Alice, inherited
+  Alice's approval and CH04 said nothing. This defeated the whole point of
+  requiring a complete binding: the producer chose the value being bound to.
+  The digest over the arguments Cohaera saw now wins, and a call whose two
+  identities disagree is bindable by nothing.
+- **An approval must be observed before the call it covers** (F-02).
+  `granted_at` is a number the producer writes, so an approval emitted after
+  the call completed and backdated to before it satisfied the freshness window
+  perfectly and silenced the bypass.
+- **Only a chained sidecar may order events** (F-03). `stream_id` and `seq`
+  with no `prev` and no `chain` are two numbers the producer wrote, and they
+  were deciding whether a consequential call happened before or after the
+  control governing it. `attested` also stops meaning "every record carried a
+  sidecar" — a much weaker question, published under the stronger one's name.
+  That question is now `sidecars_complete`.
+- **An absence claim abstains on truncated text** (F-04). This one is this
+  project's founding objection appearing inside the project. A response cut at
+  the cap was recorded as a defect and the defect was then ignored, so CH02
+  concluded "the agent did not disclose" from text it had not finished
+  reading, at confidence 1.0 and severity critical. A disclosure found in a
+  surviving prefix is still sound; only the absence conclusion is not.
+- **`chain` and `prev` must be SHA-256 digests** (F-14). Any length of hex was
+  accepted and copied into the verdict, so twelve records carrying 64 KiB each
+  turned 788 KB of input into 9.58 MB of output at exit code zero. Now 0.17x.
+- **CH03 no longer promises a scanner that does not exist** (F-16). It told
+  operators to capture `tool_result` "so Cohaera can scan locally". Cohaera
+  does not scan locally, and an operator who captured it got the same verdict
+  and the same remedy with no way to learn why.
+
+All eight probes are permanent regressions in `tests/test_review_probes.py`,
+which is the reviewer's own success condition: every probe fails closed or
+returns an explicit non-evaluated state.
+
 ### Fixed — the rest of the external review
 
 Twenty-one findings were raised against the merged branch. The four that

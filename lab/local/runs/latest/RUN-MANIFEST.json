@@ -27,7 +27,7 @@
           "schema": "cohaera:0.3",
           "session_id": "lab-01-normal",
           "triggered_rules": [],
-          "verdict_id": "fe44f32604d97ef392a8edc6b033c97f"
+          "verdict_id": "b2286b5245da3cf19a164dc90ffdcf28"
         }
       ]
     },
@@ -48,7 +48,7 @@
           "triggered_rules": [
             "CH06_evidence_integrity"
           ],
-          "verdict_id": "f3fe4a70ac6c4ad3675e8013293daaca"
+          "verdict_id": "141c754ad5b947db0fac42125d7cb5d6"
         }
       ]
     },
@@ -72,7 +72,7 @@
             "CH02_concealment_gap",
             "CH06_evidence_integrity"
           ],
-          "verdict_id": "e026c2a7bc6096119266df8e03ffe6e3"
+          "verdict_id": "67bea127fb3f0cf167977958031fa828"
         }
       ]
     }
@@ -96,7 +96,7 @@
           "schema": "cohaera:0.3",
           "session_id": "lab-01-normal",
           "triggered_rules": [],
-          "verdict_id": "50a85f85cc63b6af7c9ebe9f0550ba7b"
+          "verdict_id": "33ef08791775f55120b9ad324b472a79"
         }
       ],
       "why": "Known agent, expected tool, exactly bound approval, effect completes, response discloses it."
@@ -145,7 +145,7 @@
           "triggered_rules": [
             "CH06_evidence_integrity"
           ],
-          "verdict_id": "ce38c507ddeba958c43728995d3b2ad1"
+          "verdict_id": "fcaccd0218a362c137be02605e47f1bd"
         }
       ],
       "why": "State 1's behaviour, with one record edited after it was signed."
@@ -168,7 +168,7 @@
           "triggered_rules": [
             "CH07_reported_failure_with_effect_receipt"
           ],
-          "verdict_id": "31d4ad3eb30960d1e4bfe2855e88bde4"
+          "verdict_id": "03b41a3f234d2e7def3b1ac8ec4f96d8"
         }
       ],
       "why": "Agent reports failure; an exactly bound provider receipt says otherwise."
@@ -191,7 +191,7 @@
           "triggered_rules": [
             "CH07_effect_receipt_partially_bound"
           ],
-          "verdict_id": "f12fd94c49cd4c74ca4021a49b60f9f1"
+          "verdict_id": "0d110a3640fe5c8338bfe7e2b39da2d5"
         }
       ],
       "why": "The same claim with an incomplete binding, which must NOT contradict."
@@ -212,7 +212,7 @@
           "schema": "cohaera:0.3",
           "session_id": "lab-05-partial-attestation",
           "triggered_rules": [],
-          "verdict_id": "3c976615b494bbed220149cfc631cc4b"
+          "verdict_id": "a531711f77ac3c756a012d3c94c6589c"
         }
       ],
       "why": "A long session signed at every fourth record, leaving an unsigned tail."

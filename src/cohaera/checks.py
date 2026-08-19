@@ -40,6 +40,7 @@ from typing import Any
 
 from .capabilities import CapabilityManifest
 from .evidence import (
+    ARGS_UNBINDABLE,
     BINDING_CONTEXT,
     BINDING_TRUSTED,
     BOUND_ARG_MISMATCH,
@@ -564,9 +565,16 @@ def _ordering(call: ToolCall, event: Event) -> str:
     when it is strictly unequal, and INDETERMINATE otherwise -- reported, never
     silently resolved.
     """
-    seq_a, seq_b = call.start_seq, event.integrity.seq if event.integrity else None
+    # F-03. `chained` throughout: a stream id and a sequence with no `prev`
+    # and no `chain` are two numbers the producer wrote, and this function is
+    # exactly where letting them win hands the producer the ordering CH03 and
+    # CH04 rest on. call.start_seq is already gated the same way in the model.
+    _sidecar = event.integrity
+    _chained = _sidecar is not None and _sidecar.chained
+    seq_a = call.start_seq
+    seq_b = _sidecar.seq if _sidecar is not None and _chained else None
     stream_a = call.start_stream
-    stream_b = event.integrity.stream_id if event.integrity else None
+    stream_b = _sidecar.stream_id if _sidecar is not None and _chained else None
     if (seq_a is not None and seq_b is not None
             and stream_a is not None and stream_a == stream_b):
         if seq_a == seq_b:
@@ -620,8 +628,9 @@ class _References:
         for event in events:
             self.count += 1
             integrity = event.integrity
-            stream = integrity.stream_id if integrity else None
-            seq = integrity.seq if integrity else None
+            chained = integrity is not None and integrity.chained
+            stream = integrity.stream_id if integrity is not None and chained else None
+            seq = integrity.seq if integrity is not None and chained else None
             if stream is not None and seq is not None:
                 low = self.min_seq.get(stream)
                 if low is None or seq < low:
@@ -790,6 +799,22 @@ def ch02_concealment_gap(session: Session,
     response = session.final_response
     if response is None:
         return []          # not clean: see coverage()
+    if session.response_text_truncated:
+        # F-04. This check's entire output is an ABSENCE claim -- "the response
+        # does not mention what the agent did" -- and the response was cut
+        # short before Cohaera saw the end of it. The truncation was recorded
+        # as a field defect and then ignored, so a disclosure thirty-three
+        # characters past the cap produced a CRITICAL concealment finding at
+        # confidence 1.0.
+        #
+        # That is the objection this project was started over, appearing inside
+        # the project: a check that could not finish reading, reporting itself
+        # as having read. Abstain, and let coverage say why.
+        #
+        # Only the absence direction is affected. A disclosure FOUND in a
+        # truncated prefix is still a disclosure, which is why
+        # `ambiguous_disclosures` below is left alone.
+        return []
 
     consequential = session.consequential_calls
     if not consequential:
@@ -1251,7 +1276,8 @@ def ch04_guardrail_overrun(session: Session,
         # Keyed on the sequence pulled out first, so the comparison key cannot
         # be a narrowing mypy has already lost by the time the lambda runs.
         sequenced = [(e.integrity.seq, e) for e in events
-                     if e.integrity is not None and e.integrity.seq is not None]
+                     if e.integrity is not None and e.integrity.chained
+                     and e.integrity.seq is not None]
         earliest[etype] = min(sequenced)[1] if sequenced else events[0]
     if not earliest:
         return []
@@ -1722,6 +1748,14 @@ def _receipt_binding(call: ToolCall) -> str:
         return BOUND_NONE
     if b.tool_id and b.tool_id != call.name:
         return BOUND_NONE
+    if call.arg_digest_source in ARGS_UNBINDABLE:
+        # F-01. The CALL's own two argument identities disagree, so there is
+        # nothing here for a receipt to bind to and a contradiction resting on
+        # it would be an accusation built on evidence the producer wrote both
+        # halves of. A receipt matching the declared digest of a call whose
+        # captured arguments say otherwise is exactly the shape of a producer
+        # manufacturing the evidence used to accuse it.
+        return BOUND_ARG_MISMATCH
     if b.arg_digest and call.arg_digest and b.arg_digest != call.arg_digest:
         return BOUND_ARG_MISMATCH
     if b.complete and call.span_id and call.arg_digest:
@@ -1901,6 +1935,10 @@ SURFACE_APPROVAL = "approval_binding"
 R_NO_BASELINE = "NO_BENIGN_BASELINE_FITTED"
 R_BASELINE_VOCABULARY_MISMATCH = "BASELINE_VOCABULARY_MISMATCH"
 R_NO_RESPONSE = "NO_FINAL_RESPONSE_TEXT"
+# F-04. Present, and not all of it. Distinct from absent, because the operator
+# remedy is different: absent needs cold-path capture turned on, truncated
+# needs a bound raised.
+R_TRUNCATED_RESPONSE = "FINAL_RESPONSE_TRUNCATED"
 R_BAD_RESPONSE = "FINAL_RESPONSE_WRONG_TYPE"
 R_NO_TOOL_RESULT = "NO_TOOL_RESULT_CAPTURED"
 R_NO_SCANNER = "NO_INJECTION_SCANNER_EVIDENCE"
@@ -2237,7 +2275,26 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
 
     # ---- CH02 -----------------------------------------------------------
     required = [SURFACE_FINAL_RESPONSE, SURFACE_TOOL_CLASS, SURFACE_CORRELATION_KEY]
-    if session.final_response is None:
+    if session.final_response is not None and session.response_text_truncated:
+        # F-04. Present but incomplete, which is a third state the contract did
+        # not have. Reported as not_evaluated rather than degraded: the missing
+        # part is not a fraction of the answer, it is the part that would have
+        # falsified it.
+        contracts.append(CheckContract(
+            check="CH02_concealment_gap", status=STATUS_NOT_EVALUATED,
+            confidence=0.0, required_surfaces=required,
+            present_surfaces=[SURFACE_TOOL_CLASS, SURFACE_CORRELATION_KEY],
+            missing_surfaces=[SURFACE_FINAL_RESPONSE],
+            reasons=[R_TRUNCATED_RESPONSE],
+            remedies=[f"Raise max_response_chars above "
+                      f"{limits.max_response_chars}, or have the adapter "
+                      f"emit the final response in full. A concealment finding "
+                      f"needs the whole text: the disclosure it would be "
+                      f"looking for may be in the part that was cut."],
+            assumptions=["A truncated response cannot support an absence "
+                         "claim. A disclosure found inside the surviving "
+                         "prefix is still sound."]))
+    elif session.final_response is None:
         reasons = [R_BAD_RESPONSE] if session.response_text_rejected else [R_NO_RESPONSE]
         contracts.append(CheckContract(
             check="CH02_concealment_gap", status=STATUS_NOT_EVALUATED, confidence=0.0,
@@ -2292,8 +2349,24 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
                               SURFACE_CORRELATION_KEY],
             missing_surfaces=[SURFACE_INJECTION_SCANNER],
             reasons=[R_NO_SCANNER],
-            remedies=["Emit has_injection_patterns on scanned events, or capture "
-                      "tool_result so Cohaera can scan locally."],
+            # F-16. The second half of this used to read "or capture
+            # tool_result so Cohaera can scan locally", and Cohaera does not
+            # scan locally. An operator who captured the result got the same
+            # not_evaluated verdict, the same remedy, and no way to find out
+            # why. A remedy that does not work is worse than no remedy: it
+            # spends the operator's effort and their trust.
+            #
+            # Not replaced with a local scanner. Cohaera VERIFIES evidence and
+            # does not manufacture it, and a regex pass of its own would be a
+            # new source of exactly the false confidence E09 already describes
+            # -- with the added problem that the detector would then be
+            # grading its own scanner's output.
+            remedies=["Emit has_injection_patterns on the events whose results "
+                      "were scanned, from a scanner that runs where the content "
+                      "arrives. Cohaera does not scan content itself: capturing "
+                      "tool_result does not enable this check, and a detector "
+                      "that generated its own taint evidence would be grading "
+                      "its own work."],
             assumptions=["No marker field in the stream means no scanner ran, not "
                          "that nothing was found; see EVASION.md E09."]))
     else:

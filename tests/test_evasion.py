@@ -918,7 +918,12 @@ def test_evasion_23b_the_collector_sequence_does_take_the_tie_back():
     hash chain and the signature over its head, so the tie is settled by
     something the producer cannot restamp."""
     def integrity(seq):
-        return {"scheme": "cohaera.integrity:1", "stream_id": "c1", "seq": seq}
+        # F-03. Chained. A sequence with no `prev` and no `chain` is a number
+        # the producer wrote, and this remedy's whole claim is that the
+        # COLLECTOR's ordering outranks the clock the producer chose. That
+        # claim needs the chain the sequence sits in.
+        return {"scheme": "cohaera.integrity:1", "stream_id": "c1", "seq": seq,
+                "prev": f"{seq:064x}", "chain": f"{seq + 1:064x}"}
 
     guardrail = ev("cost_threshold_exceeded", 5.0, session_cost_usd=0.9)
     guardrail = Event(raw={**guardrail.raw, "integrity": integrity(10)})

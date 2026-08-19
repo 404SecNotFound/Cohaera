@@ -3036,12 +3036,12 @@ def test_a_stale_generation_never_overwrites_a_newer_ledger(tmp_path):
     assert stale.generation == fresh.generation == 1
 
     fresh.streams["other"] = SeenStream(stream_id="other", first_seq=0,
-                                        last_seq=1, head="ab")
+                                        last_seq=1, head="ab" * 32)
     fresh.save()
     assert StreamLedger.load(path).generation == 2
 
     stale.streams["mine"] = SeenStream(stream_id="mine", first_seq=0,
-                                       last_seq=1, head="cd")
+                                       last_seq=1, head="cd" * 32)
     with pytest.raises(LedgerError, match="generation"):
         stale.save()
     after = StreamLedger.load(path)
