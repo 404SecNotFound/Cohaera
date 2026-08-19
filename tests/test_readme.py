@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import readme_facts
+import release_gate
 
 import cohaera
 import cohaera.model
@@ -508,3 +509,44 @@ def test_the_readme_leads_with_the_honest_false_positive_number():
         "the prevalence-dependent figure is published as a headline again")
     assert "precision at 0.1% attack prevalence" in readme, (
         "recall without a base-rate projection is a result that does not exist")
+
+
+# ---------------------------------------------------------------------------
+# R-18's other half: a release that agrees with itself.
+# ---------------------------------------------------------------------------
+
+def test_the_release_is_internally_consistent():
+    """Five places name a version and nothing compared them until now.
+
+    A reproducible build makes the wheel a function of the source. It says
+    nothing about whether that source agrees with itself, and a release where
+    four files agree and one does not is worse than one where all five are
+    wrong: the disagreement is invisible until somebody is debugging production
+    against the wrong changelog.
+    """
+    found = release_gate.problems()
+    assert not found, "the release is not internally consistent:\n  " + \
+        "\n  ".join(found)
+
+
+def test_the_release_gate_catches_a_tag_that_does_not_match():
+    assert release_gate.problems(tag="v9.9.9"), (
+        "a tag naming a different version must be refused")
+    assert release_gate.problems(tag="0.3.0"), (
+        "a tag without the v prefix must be refused")
+
+
+def test_the_release_notes_state_a_false_positive_rate():
+    """CHANGELOG.md's own preamble promises this: 'a detection release that
+    only reports recall is a marketing document.' A promise nothing checks is
+    a preference, and this project has published a recall figure without its
+    denominator before."""
+    changelog = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+    version = re.search(r'^version = "([^"]+)"',
+                        (REPO / "pyproject.toml").read_text(encoding="utf-8"),
+                        re.M).group(1)
+    section = changelog.split(f"## [{version}]", 1)[-1].split("\n## [", 1)[0]
+    assert "benign" in section, (
+        "the release notes report no false-positive rate against a benign "
+        "denominator")
+    assert not release_gate.problems()

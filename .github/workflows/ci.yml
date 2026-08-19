@@ -183,6 +183,16 @@ jobs:
         # tests/test_ci_config.py.
         run: python lab/local/run.py --check
 
+      - name: The release is internally consistent
+        # R-18. A reproducible build makes the wheel a function of the source
+        # and says nothing about whether that source agrees with itself about
+        # which release it is. Five places name a version -- pyproject, the
+        # package, CITATION.cff, the changelog, the tag -- and nothing compared
+        # them. Four agreeing and one not is worse than five wrong, because the
+        # disagreement stays invisible until somebody debugs production against
+        # the wrong changelog.
+        run: python tools/release_gate.py
+
       - name: README claims match the repository
         # C4-11. The README said "188 passing" against a tree with 197 and
         # listed one roadmap item twice. A number nothing keeps true is the one

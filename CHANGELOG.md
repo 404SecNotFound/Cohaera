@@ -18,8 +18,34 @@ reports recall is a marketing document.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.0] — 2026-08-19
+
 Pre-alpha. The evaluation card is regenerated on every change and CI fails on
 any diff, so the numbers below are derived rather than claimed.
+
+### What this release measures
+
+Stated first, because this file's own preamble says a detection release that
+only reports recall is a marketing document.
+
+| | |
+|---|---|
+| Corpus | Synthetic, written by the detector's author. Not validation. |
+| Target-attributable recall | 100% on the unseen / task-disjoint / manifest cell |
+| False positives | **420.4 per 1,000 benign sessions** |
+| Projected precision at 0.1% attack prevalence | **0.238%** |
+| Known evasions | 22 constructed, 20 still working, each with a test |
+| Independent validation | None |
+
+At a realistic base rate almost every alert this release produces is benign.
+The checks that fire cleanly are the evidence-integrity ones; the behavioural
+ones are noisy, and the card names which and why.
+
+**Two external reviews were closed in this release** — 43 findings between
+them, accounted for one by one in [REVIEW-RESPONSE.md](REVIEW-RESPONSE.md),
+including the three recommended remedies that were declined and why.
 
 ### Breaking — the output contract moved to `cohaera:0.3`
 
@@ -640,5 +666,6 @@ First tagged version, and the first with an evaluation card. See
 include a false-positive rate that is not usable in a SOC and a name-only
 condition where recall falls by 46.7 points.
 
-[Unreleased]: https://github.com/404SecNotFound/Cohaera/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/404SecNotFound/Cohaera/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/404SecNotFound/Cohaera/releases/tag/v0.3.0
 [0.2.0]: https://github.com/404SecNotFound/Cohaera/releases/tag/v0.2.0
