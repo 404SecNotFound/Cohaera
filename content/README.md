@@ -4,7 +4,7 @@ Rules and mappings that consume `cohaera_session_verdict` records.
 
 ```
 content/
-  sigma/     13 Sigma rules, validated, converted and conformance-tested
+  sigma/     14 Sigma rules, validated, converted and conformance-tested
   manifest/  example capability manifest: exact tool ID -> declared effects
   aie/       LogRhythm AIE rule specifications + the build-vs-buy comparison
   parser/    Exabeam field map + notes on observra issue #108
@@ -44,7 +44,7 @@ analytics rules work today. Zero correlation rules can fire."*
 
 ## Sigma
 
-Thirteen rules, all validating against the required-field set with real UUIDs.
+Every rule validates against the required-field set with real UUIDs.
 
 | Rule | Level | Check | Expressible upstream? |
 |---|---|---|---|

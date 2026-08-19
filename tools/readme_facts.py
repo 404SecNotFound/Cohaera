@@ -40,6 +40,7 @@ REPO = Path(__file__).resolve().parent.parent
 README = REPO / "README.md"
 EVASION = REPO / "EVASION.md"
 SECURITY = REPO / "SECURITY.md"
+CONTENT_README = REPO / "content" / "README.md"
 CHANGELOG = REPO / "CHANGELOG.md"
 SIGMA = REPO / "content" / "sigma"
 CHECKS = REPO / "src" / "cohaera" / "checks.py"
@@ -209,7 +210,33 @@ def card_headline_fpr_pct() -> str:
 
 
 def card_headline_fp_per_1000() -> str:
+    """The ALL-sessions figure. Kept only so the two can be compared.
+
+    Not the number to plan against, and the evaluation card says so in as many
+    words: it moves with the corpus's artificial attack prevalence. The README
+    published this one -- derived, checked, and 136 lower than the honest
+    figure, so nothing ever flagged it. A checker enforcing the wrong number is
+    worse than no checker, because it converts a mistake into a guarantee.
+    """
     return f"{_metrics()['false_positives_per_1000_sessions']:.0f}"
+
+
+def card_headline_fp_per_1000_benign() -> str:
+    """The prevalence-free figure, and the one to plan capacity against."""
+    return f"{_metrics()['false_positives_per_1000_benign_sessions']:.1f}"
+
+
+def card_precision_at_low_base_rate() -> str:
+    """Projected precision at 0.1% attack prevalence.
+
+    The single most useful number in the whole evaluation, and it was not in
+    the README at all. Recall is not the product: at a realistic base rate
+    almost every alert is benign, and a reader who sees 100% recall without
+    this sees a result that does not exist.
+    """
+    rows = _metrics()["base_rate_projection"]
+    row = min(rows, key=lambda r: r["attack_prevalence"])
+    return f"{row['precision'] * 100:.3f}"
 
 
 def card_name_only_recall_pct() -> str:
@@ -337,6 +364,14 @@ CLAIMS = (
           count_constructed_evasions),
     Claim("README constructed evasions", README,
           re.compile(r"(\d+) constructed evasions"), count_constructed_evasions),
+    Claim("README benign false positives per 1000", README,
+          re.compile(r"per 1000 \*\*benign\*\* sessions \| \*\*([\d.]+)\*\*"),
+          card_headline_fp_per_1000_benign),
+    Claim("README precision at a realistic base rate", README,
+          re.compile(r"precision at 0\.1% attack prevalence \| \*\*([\d.]+)%\*\*"),
+          card_precision_at_low_base_rate),
+    Claim("content Sigma rules", CONTENT_README,
+          re.compile(r"sigma/\s+(\d+) Sigma rules"), count_sigma_rules),
     # R-20. The sentence carries a third number -- how many are closed -- and
     # nothing checked it. That is where the file's arithmetic broke: 20 working
     # and 2 closed cannot both be right against a total of 21, and only two of
@@ -385,9 +420,6 @@ CLAIMS = (
     Claim("README headline false positive rate", README,
           re.compile(r"\| false positive rate \| \*\*([\d.]+)%\*\*"),
           card_headline_fpr_pct),
-    Claim("README headline FP per 1000", README,
-          re.compile(r"\| false positives per 1000 sessions \| \*\*(\d+)\*\*"),
-          card_headline_fp_per_1000),
     Claim("README name-only recall", README,
           re.compile(r"recall falls to ([\d.]+)%"), card_name_only_recall_pct),
     Claim("README family_holdout false positive rate", README,

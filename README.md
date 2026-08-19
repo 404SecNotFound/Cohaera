@@ -22,6 +22,43 @@
 
 ---
 
+## What this is, in one screen
+
+Cohaera reads agent telemetry and answers a question most detection layers skip:
+**is the record trustworthy enough to draw a conclusion from?** It verifies
+collector signatures and chain continuity, checks that approvals and provider
+receipts bind to the exact call they claim, and — when it cannot establish
+something — says which check could not run and why, instead of reporting clean.
+
+It is **pre-alpha research software**. Read the numbers before the prose:
+
+| | |
+|---|---|
+| What is measured | A synthetic corpus, written by the detector's author |
+| Target-attributable recall | 100% on the headline cell |
+| False positives | **420.4 per 1,000 benign sessions** |
+| Projected precision at 0.1% attack prevalence | **0.238%** |
+| Known ways to defeat it | 22 catalogued, 20 still working, each with a test |
+| External validation | **None.** No live SIEM, no independent labels, no second reviewer |
+
+That false-positive rate is not a typo and it is not buried. At a realistic base
+rate almost every alert this produces is benign. The checks that fire cleanly
+are the evidence-integrity ones; the behavioural ones are noisy and
+[the card says exactly which and why](eval/EVALUATION-CARD.md).
+
+### Where to start
+
+| If you are… | Read |
+|---|---|
+| Deciding whether the thinking is any good | [The night watchman](#the-night-watchman) below, then [EVASION.md](EVASION.md) — the catalogue of ways to beat it |
+| Evaluating it as a detection layer | [POSITIONING.md](POSITIONING.md), then the [evaluation card](eval/EVALUATION-CARD.md) |
+| Trying to run it | [Quick start](#quick-start) — about two minutes |
+| Auditing the security claims | [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) and [docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md) |
+| Checking how it responds to criticism | [REVIEW-RESPONSE.md](REVIEW-RESPONSE.md) — 43 external findings across two reviews |
+| Looking for everything else | [docs/README.md](docs/README.md) — the full map |
+
+---
+
 ## The night watchman
 
 Imagine a night watchman. Very diligent. Every time something happens in the
@@ -120,13 +157,17 @@ validated.
 - [Prior work](#prior-work)
 - [Roadmap](#roadmap)
 - [Known limitations](#known-limitations)
-- [Known evasions](EVASION.md)
-- [Positioning](POSITIONING.md) — what this is a layer of, what it is not, and the language it holds itself to
-- [Review response](REVIEW-RESPONSE.md) — twenty-one external findings, what happened to each, and the three recommendations that were declined
-- [Threat model](docs/THREAT-MODEL.md) — what this trusts, and what survives an attacker who controls the telemetry
-- [Evidence trust](docs/EVIDENCE-TRUST.md) — the wire formats for collector integrity, effect receipts, approval binding, the trust store and signed policy files, and what they measured
-- [Security policy](SECURITY.md) — reporting, scope, supply chain
 - [Relationship to the upstream projects](#relationship-to-the-upstream-projects)
+
+**Other documents** — [docs/README.md](docs/README.md) maps all sixteen by the
+question each one answers. The four read most often:
+
+| | |
+|---|---|
+| [EVASION.md](EVASION.md) | 22 ways to defeat this, 20 still working, each with a test |
+| [POSITIONING.md](POSITIONING.md) | What layer this is, what it is not, and the language it will not use |
+| [REVIEW-RESPONSE.md](REVIEW-RESPONSE.md) | Two external reviews, 43 findings, what happened to each |
+| [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) | What it trusts, and what survives a hostile producer |
 
 ---
 
@@ -306,8 +347,19 @@ next to. Headline, `task_disjoint` with a capability manifest:
 |---|---|
 | recall | **100%** (all 10 attack shapes caught) |
 | false positive rate | **42.0%** |
-| false positives per 1000 sessions | **284** |
+| false positives per 1000 **benign** sessions | **420.4** |
+| projected precision at 0.1% attack prevalence | **0.238%** |
 | false positives on *plain* benign sessions | **0 / 96** |
+
+The third row used to read "false positives per 1000 sessions | 284", which is
+a different and friendlier number: it divides by a population that is a third
+attacks, because this corpus needs enough of them to measure. It moves with a
+prevalence no deployment has. The evaluation card says in as many words never
+to plan against it, and the README published it anyway — derived and checked,
+so nothing flagged it. A checker enforcing the wrong number is worse than no
+checker.
+
+The fourth row is the one to read twice. Recall is not the product.
 
 Both halves matter. Cohaera separates clean benign traffic from everything else
 perfectly, and cannot separate a hard benign session from an attack at all: every
@@ -975,7 +1027,7 @@ prevention claim collapses.
 - [x] Sigma content pack, 14 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 851 passing across unit, hostile-input and content conformance
+- [x] Tests, 854 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 26 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger
