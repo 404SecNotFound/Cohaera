@@ -1928,7 +1928,7 @@ def write(out_dir: Path, seed: int = SEED) -> dict[str, object]:
 def write_sample(specs: list[SessionSpec], out_dir: Path) -> int:
     """One session per (family, kind), committed so the corpus is auditable.
 
-    The full corpus is 9 MB of generated telemetry and is deliberately NOT in
+    The full corpus is about 41 MB of generated telemetry and is deliberately NOT in
     git: it is deterministic from the seed, so committing it stores nothing that
     ``generate.py`` does not already encode. But "regenerate it and read it" is a
     worse offer than "read it", and a reviewer should be able to see what a

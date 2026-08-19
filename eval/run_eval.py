@@ -714,8 +714,12 @@ def render_card(results: dict[str, Any], seed: int, summary: dict,
         "absurd.** Real")
     add("  prevalence is orders of magnitude lower, and precision falls with it. At a")
     add("  realistic base rate the false positive counts in section 3 dominate")
-    add("  completely. `false_positives_per_1000_sessions` in the JSON is the number")
-    add("  to plan capacity against, not precision.")
+    add("  completely. Plan capacity against")
+    add("  `false_positives_per_1000_benign_sessions`, never against precision and")
+    add("  never against `false_positives_per_1000_sessions` -- this paragraph used")
+    add("  to recommend the second, contradicting section 5 four hundred lines")
+    add("  above it. The all-session figure moves with this corpus's artificial")
+    add("  attack prevalence and is published only so the two can be compared.")
     add(f"- **No adaptive attacker.** Every attack here is one of "
         f"{len(gen.ATTACK_KINDS)} fixed shapes.")
     add("  EVASION.md catalogues seventeen ways to defeat these checks. Exactly one")
@@ -746,9 +750,29 @@ def render_card(results: dict[str, Any], seed: int, summary: dict,
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--seed", type=int, default=gen.SEED)
-    ap.add_argument("--no-generate", action="store_true",
-                    help="score the committed corpus instead of regenerating it")
+    ap.add_argument("--reuse-generated", "--no-generate", action="store_true",
+                    dest="no_generate",
+                    help="reuse the corpus already in eval/corpus/data instead "
+                         "of regenerating it. NOT the same as scoring a "
+                         "committed corpus: that directory is gitignored and "
+                         "absent from a clean checkout, so this fails with an "
+                         "instruction until a generating run has happened. "
+                         "--no-generate is the old name and still works.")
     args = ap.parse_args(argv)
+
+    if args.no_generate and not any(DATA.glob("*.jsonl")):
+        # R-20. This path advertised itself as "score the committed corpus",
+        # and the corpus is not committed -- eval/corpus/data is gitignored
+        # because it is 41 MB and deterministic from its seed. On a clean
+        # checkout the command died in `read_text` with a FileNotFoundError
+        # naming one file, which reads as a broken repository rather than as a
+        # step that has not been run. CI always generates first, so nothing
+        # ever exercised it.
+        print(f"{DATA} has no corpus to reuse. It is generated rather than "
+              f"committed: run `python eval/run_eval.py` with no arguments "
+              f"once, then --reuse-generated will score what that produced.",
+              file=sys.stderr)
+        return 2
 
     if not args.no_generate:
         # The committed sample is regenerated here too, not only by
@@ -787,7 +811,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  unseen/task_disjoint/manifest   "
           f"recall {headline['recall']['value']:.1%}  "
           f"FPR {headline['false_positive_rate']['value']:.1%}  "
-          f"FP/1000 {headline['false_positives_per_1000_sessions']}")
+          f"FP/1000 benign "
+          f"{headline['false_positives_per_1000_benign_sessions']}")
     print(f"  unseen/task_disjoint/name_only  "
           f"recall {blind['recall']['value']:.1%}  "
           f"FPR {blind['false_positive_rate']['value']:.1%}  "

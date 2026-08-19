@@ -773,8 +773,17 @@ def _add_common(p: argparse._ActionsContainer) -> None:
                    help=f"Maximum JSON container depth "
                         f"(default {DEFAULT_LIMITS.max_nesting_depth}).")
     p.add_argument("--max-events", type=positive_int, metavar="N",
-                   help=f"Maximum records read per run "
-                        f"(default {DEFAULT_LIMITS.max_events_total}).")
+                   # R-20. It said "records read", and it is not that. It caps
+                   # ACCEPTED events; the bound on records read is
+                   # max_records_total, which is a different number and is not
+                   # exposed here. An operator who set this believing it capped
+                   # reading got a weaker bound than they asked for.
+                   help=f"Maximum ACCEPTED events per run (default "
+                        f"{DEFAULT_LIMITS.max_events_total}). This is not the "
+                        f"number of records READ -- that is max_records_total, "
+                        f"currently {DEFAULT_LIMITS.max_records_total}, and a "
+                        f"file of pure garbage is bounded by it rather than by "
+                        f"this.")
     p.add_argument("--max-sessions", type=positive_int, metavar="N",
                    help=f"Maximum sessions assembled per run "
                         f"(default {DEFAULT_LIMITS.max_sessions}).")

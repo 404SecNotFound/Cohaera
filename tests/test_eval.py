@@ -1392,3 +1392,21 @@ def test_the_card_says_the_intervals_are_wider_than_wilson():
             / "eval" / "EVALUATION-CARD.md").read_text(encoding="utf-8")
     assert "bootstrap over tasks" in card
     assert "independent tasks" in card
+
+
+def test_the_card_never_recommends_the_prevalence_dependent_figure():
+    """R-20. The renderer said to plan against
+    `false_positives_per_1000_benign_sessions` in one section and against
+    `false_positives_per_1000_sessions` in another, four hundred lines apart.
+    Both sentences read as guidance and only one is right: the all-session
+    figure moves with this corpus's artificial 33% attack prevalence, so
+    planning against it understates the load by the same factor.
+    """
+    card = (Path(__file__).resolve().parent.parent
+            / "eval" / "EVALUATION-CARD.md").read_text(encoding="utf-8")
+    for line in card.splitlines():
+        if "false_positives_per_1000_sessions" not in line:
+            continue
+        assert ("never against" in line or "compared" in line
+                or "benign" in line), (
+            f"this line recommends the prevalence-dependent figure: {line!r}")

@@ -172,10 +172,17 @@ class SequenceGrammar:
     START = "<START>"
     END = "<END>"
 
-    def __init__(self) -> None:
+    # R-14. One grammar over every training session, and the name says so. A
+    # future per-agent or peer-group model sets this to what it actually scoped
+    # by; a reader of the verdict can then tell the two apart without knowing
+    # which version produced it.
+    SCOPE_FLEET = "fleet"
+
+    def __init__(self, scope: str = SCOPE_FLEET) -> None:
         self.bigrams: Counter[tuple[str, str]] = Counter()
         self.unigrams: Counter[str] = Counter()
         self.sessions_fitted = 0
+        self.scope = scope
 
     def fit(self, sessions: Iterable[Session]) -> SequenceGrammar:
         for s in sessions:
@@ -420,6 +427,22 @@ def ch01_sequence_order(session: Session, grammar: SequenceGrammar | None,
             "observed_sequence_truncated": dropped_seq,
             "baseline_sessions": grammar.sessions_fitted,
             "baseline_hash": grammar.fingerprint(),
+            # R-14. WHOSE normal this was measured against, stated on the
+            # finding rather than left for a reader to assume. `fleet` means
+            # one grammar fitted over every session in the baseline, with no
+            # scoping by agent, owner, role, workflow, tenant or time -- so a
+            # transition that is ordinary for the finance agent is ordinary for
+            # the incident-response agent too, and a rare action by an agent
+            # that has never done it is not rare if some other agent does it
+            # daily. The documentation talks about an agent's own history; the
+            # implementation trains one workload-wide model, and the gap
+            # between those two sentences belongs in the output.
+            #
+            # Per-agent and peer-group baselines are the fix and they are a
+            # design change: they need a minimum-sample rule, time decay, and a
+            # corpus that has more than one population in it. Naming the scope
+            # is what stops the current model being read as the eventual one.
+            "baseline_scope": grammar.scope,
         },
     )]
 

@@ -21,7 +21,7 @@ lab/*.local.psd1
 # it -- but a POSIX advisory lock file is a fact about one process, not a result.
 lab/local/runs/**/*.lock
 
-# The generated evaluation corpus: 9 MB, deterministic from the seed in
+# The generated evaluation corpus: about 41 MB, deterministic from the seed in
 # eval/corpus/generate.py, so committing it would store nothing the generator
 # does not already encode. Regenerate with `python eval/corpus/generate.py`.
 # A readable sample (one session per family x kind) IS committed, at

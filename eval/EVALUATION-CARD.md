@@ -226,8 +226,12 @@ you hide is a defect.
 - **Attack prevalence is 33%, which is absurd.** Real
   prevalence is orders of magnitude lower, and precision falls with it. At a
   realistic base rate the false positive counts in section 3 dominate
-  completely. `false_positives_per_1000_sessions` in the JSON is the number
-  to plan capacity against, not precision.
+  completely. Plan capacity against
+  `false_positives_per_1000_benign_sessions`, never against precision and
+  never against `false_positives_per_1000_sessions` -- this paragraph used
+  to recommend the second, contradicting section 5 four hundred lines
+  above it. The all-session figure moves with this corpus's artificial
+  attack prevalence and is published only so the two can be compared.
 - **No adaptive attacker.** Every attack here is one of 10 fixed shapes.
   EVASION.md catalogues seventeen ways to defeat these checks. Exactly one
   of them, E02, appears in this corpus, and only because a fix for it
