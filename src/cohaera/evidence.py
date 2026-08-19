@@ -89,6 +89,8 @@ import json
 import math
 import os
 import tempfile
+import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -1465,6 +1467,24 @@ NO_FRESHNESS = Freshness()
 
 LEDGER_SCHEMA = "cohaera.stream_ledger:1"
 
+# R-04. POSIX advisory locking, where the platform has it. Imported here rather
+# than at the point of use so that the one place that asks "can this host
+# actually exclude a concurrent writer" is a module-level fact and not a
+# try/except buried in a method. Where it is missing, the generation guard below
+# still turns a lost update into a refusal -- it cannot PREVENT the race, but it
+# will not let a run report success having silently dropped another run's work.
+try:
+    import fcntl
+    HAVE_FILE_LOCKING = True
+except ImportError:                                        # pragma: no cover
+    HAVE_FILE_LOCKING = False
+
+# How long to wait for another run to finish with the ledger before giving up.
+# Not a Limits field on purpose: config_hash exists so two runs that disagree
+# about what they refused to PARSE are known to be incomparable, and how long a
+# run was willing to queue says nothing about the records it scored.
+LEDGER_LOCK_WAIT_S = 30.0
+
 # How the incoming stream stood against what the ledger remembered.
 SEEN_NEW = "new"                  # never scored before
 SEEN_ADVANCED = "advanced"        # continues from exactly where scoring stopped
@@ -1487,6 +1507,49 @@ BOUNDARY_NOT_COMPARED = "not_compared"   # new stream, or an overlap rather than
 
 class LedgerError(ValueError):
     """The ledger file is not a ledger. Refuse it; do not half-load it."""
+
+
+def _acquire_ledger_lock(handle: Any, lock_file: Path, wait_s: float) -> None:
+    """Take the exclusive lock, or say why the run is not starting. R-04.
+
+    Non-blocking with a deadline rather than a blocking ``flock``: a run that
+    hangs forever behind a stuck peer is indistinguishable from a run that is
+    working, and a scheduled job that never returns is worse than one that
+    fails. The wait exists because the ordinary case is a peer that is nearly
+    finished, not a deadlock.
+    """
+    if not HAVE_FILE_LOCKING:                              # pragma: no cover
+        return
+    deadline = time.monotonic() + max(0.0, wait_s)
+    while True:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except OSError:
+            if time.monotonic() >= deadline:
+                raise LedgerError(
+                    f"{lock_file}: another run has held the seen-stream ledger "
+                    f"for more than {wait_s:g}s. Runs sharing a ledger "
+                    f"serialise on purpose -- two runs scoring the same stream "
+                    f"at once would each read the position before the other "
+                    f"wrote it, and neither would see the replay. Wait for the "
+                    f"other run, or give this one its own --seen-streams file."
+                ) from None
+            time.sleep(0.05)
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Make a rename durable, not just the bytes it points at.
+
+    Best effort: some filesystems refuse to open a directory for this, and
+    failing a completed save over it would be worse than the missing guarantee.
+    """
+    with contextlib.suppress(OSError, AttributeError):
+        fd = os.open(str(directory or "."), os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
 @dataclass(frozen=True)
@@ -1602,11 +1665,19 @@ class StreamLedger:
 
     def __init__(self, streams: dict[str, SeenStream] | None = None,
                  path: Path | None = None,
-                 limits: Limits = DEFAULT_LIMITS) -> None:
+                 limits: Limits = DEFAULT_LIMITS,
+                 generation: int = 0) -> None:
         self.streams: dict[str, SeenStream] = dict(streams or {})
         self.path = path
         self.limits = limits
         self.loaded = streams is not None
+        # R-04. The generation this instance was READ at. A save writes
+        # generation + 1 and first checks that the file on disk is still at the
+        # one that was read; anything else means another writer got in, and the
+        # record of what it scored is not ours to overwrite.
+        self.generation = generation
+        # True when this instance holds the exclusive lock for its path.
+        self.locked_exclusively = False
         self.evicted = 0
         self.budget_exhausted = False
         self.verdicts: list[SeenVerdict] = []
@@ -1779,16 +1850,123 @@ class StreamLedger:
             # here because a partial write is a real failure mode and silently
             # trusting half a ledger is worse than refusing it.
             "digest": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+            # R-04. Monotonic, and deliberately OUTSIDE the digest above. The
+            # digest answers "is this file whole"; the generation answers "did
+            # somebody else write since I read". Folding the second into the
+            # first would make every ledger written before this version fail to
+            # load, which would delete the replay memory of every deployment
+            # that upgrades -- exactly the state deleting the ledger achieves.
+            # A ledger with no generation field reads as 0.
+            "generation": self.generation + 1,
             "streams": body,
         }
 
+    @staticmethod
+    def lock_path_for(path: str | Path) -> Path:
+        """The sidecar this ledger's writers exclude each other on.
+
+        A sidecar rather than the ledger file itself, and that is not a style
+        choice. ``save`` finishes with ``os.replace``, which swaps the inode --
+        a lock held on the ledger's own descriptor would protect a file that is
+        no longer at that name the moment the first writer finishes. The sidecar
+        is never replaced, so it stays the same object for every writer.
+        """
+        p = Path(path)
+        return p.with_name(p.name + ".lock")
+
+    @classmethod
+    @contextlib.contextmanager
+    def locked(cls, path: str | Path, limits: Limits = DEFAULT_LIMITS,
+               wait_s: float = LEDGER_LOCK_WAIT_S) -> Iterator[StreamLedger]:
+        """Load a ledger under an exclusive lock held until the block exits.
+
+        R-04. ``save`` was atomic and the read-modify-write around it was not.
+        Two runs on one host would both load, both score, and both replace: the
+        second one's file has no record of the first one's streams, so the next
+        replay of those streams is undetectable and nothing said so. Reproduced
+        with two processes and a barrier -- it loses an update every time, and
+        which one it loses is a coin flip.
+
+        THE LOCK IS HELD FOR THE WHOLE RUN, NOT JUST THE WRITE, and that is the
+        expensive choice made deliberately. Locking only around the write would
+        stop updates being lost and would NOT stop the thing the ledger exists
+        to catch: two runs scoring the same stream concurrently both read
+        ``last_seq`` before either wrote, so both call it advancement and
+        neither sees the other. That is a replay, and a replay-detector that
+        cannot see a replay because it was busy is not worth the file it keeps.
+        The cost is that concurrent runs sharing one ledger serialise. A ledger
+        IS a serialisation point; the alternative is losing the guarantee.
+
+        SINGLE HOST ONLY. ``flock`` is advisory and local. It does not travel
+        over NFS or SMB in any way worth relying on, and it says nothing about a
+        second Cohaera host with its own copy -- which the class docstring
+        already lists as a limit and EVASION.md catalogues. The generation guard
+        in ``save`` is what remains when the lock cannot be taken or was not
+        honoured: it cannot prevent the race, but it refuses to overwrite a
+        newer file rather than reporting success having dropped it.
+        """
+        p = Path(path)
+        lock_file = cls.lock_path_for(p)
+        with lock_file.open("a+b") as handle:
+            _acquire_ledger_lock(handle, lock_file, wait_s)
+            ledger = cls.load(p, limits=limits)
+            ledger.locked_exclusively = HAVE_FILE_LOCKING
+            try:
+                yield ledger
+            finally:
+                if HAVE_FILE_LOCKING:
+                    with contextlib.suppress(OSError):
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def _on_disk_generation(self, target: Path) -> int:
+        """The generation of the file as it stands right now, or 0 if absent.
+
+        Read fresh rather than remembered: the whole question is whether the
+        file changed under us.
+        """
+        if not target.exists():
+            return 0
+        try:
+            with target.open("rb") as fh:
+                blob = fh.read(self.limits.max_ledger_bytes + 1)
+            obj = strict_json_loads(blob.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError):
+            # Unreadable is not "generation 0". Refusing here would mask a
+            # corrupt ledger as a concurrency problem; leave it to load(), which
+            # says what is actually wrong with the file.
+            return -1
+        generation = obj.get("generation") if isinstance(obj, dict) else None
+        return generation if isinstance(generation, int) and not isinstance(
+            generation, bool) and generation >= 0 else 0
+
     def save(self) -> None:
-        """Atomic replace. Same discipline as the quarantine ledger (C5-06):
-        a run that dies mid-write must not leave a ledger that is neither the
-        old one nor the new one."""
+        """Atomic replace, and refuse to replace something newer than what was read.
+
+        Same durability discipline as the quarantine ledger (C5-06): a run that
+        dies mid-write must not leave a ledger that is neither the old one nor
+        the new one. R-04 adds the other half -- a run that succeeds must not
+        leave a ledger missing another run's work.
+        """
         if self.path is None:
             return
         target = Path(self.path)
+        current = self._on_disk_generation(target)
+        if current != self.generation:
+            # Refused loudly rather than merged quietly. A merge would have to
+            # guess which of two disagreeing histories for a stream is the real
+            # one, and guessing wrong writes the wrong reference for every run
+            # afterwards. Losing an update loudly is recoverable; losing it
+            # silently is the bug this replaces.
+            raise LedgerError(
+                f"{target}: the ledger on disk is at generation {current} and "
+                f"this run read generation {self.generation}. Another run wrote "
+                f"it while this one was scoring, and overwriting would discard "
+                f"whatever that run recorded -- so the streams it scored would "
+                f"replay undetected. Re-run this input; the ledger on disk is "
+                f"intact and is the newer of the two."
+                + ("" if HAVE_FILE_LOCKING else
+                   " This host has no file locking, so runs sharing a ledger "
+                   "cannot exclude each other and must not be run concurrently."))
         blob = json.dumps(self.as_document(), indent=2, sort_keys=True) + "\n"
         if len(blob.encode("utf-8")) > self.limits.max_ledger_bytes:
             raise LedgerError(
@@ -1804,10 +1982,16 @@ class StreamLedger:
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp, target)
+            # The rename itself has to reach the disk, not just the bytes it
+            # points at. Without this a crash after a successful save can leave
+            # the directory entry pointing at the OLD ledger, which is the same
+            # lost update arriving by a different route.
+            _fsync_directory(target.parent)
         except BaseException:
             with contextlib.suppress(OSError):
                 os.unlink(tmp)
             raise
+        self.generation += 1
 
     @classmethod
     def load(cls, path: str | Path,
@@ -1871,7 +2055,14 @@ class StreamLedger:
                 last_seen_at=_finite(spec.get("last_seen_at")),
                 key_ids=tuple(k for k in keys if isinstance(k, str))
                 if isinstance(keys, list) else ())
-        return cls(streams=streams, path=p, limits=limits)
+        # R-04. A ledger written before generations existed has no field and
+        # reads as 0, which is correct: the first save under the new code writes
+        # generation 1 and every writer afterwards agrees on the sequence.
+        generation = obj.get("generation")
+        if not isinstance(generation, int) or isinstance(generation, bool) \
+                or generation < 0:
+            generation = 0
+        return cls(streams=streams, path=p, limits=limits, generation=generation)
 
     def summary(self) -> dict[str, Any]:
         return {

@@ -99,6 +99,38 @@ any diff, so the numbers below are derived rather than claimed.
   **No evaluation-card number moved**: the corpus emits complete bindings on
   every receipt and approval, so the fix changes what would happen to a
   real producer's partial evidence and changes nothing about the measurement.
+- **Two runs sharing a ledger silently discarded each other's work (R-04).**
+  `save()` was atomic — mkstemp, fsync, `os.replace` — and the read-modify-write
+  around it was not. Two processes on one host each loaded, each scored, and each
+  replaced; the file left behind had no record of whichever finished first. A
+  two-process test loses an update on most runs, and which one it loses is a coin
+  flip. A stream missing from the ledger is a stream whose next replay is
+  undetectable, and both runs exited zero.
+
+  `StreamLedger.locked()` holds an exclusive `flock` on a `<ledger>.lock` sidecar
+  from load until the run finishes. A sidecar because `os.replace` swaps the
+  inode, so a lock on the ledger's own descriptor protects a file that is no
+  longer at that name. **Held for the whole run, not just the write**, and the
+  cost is deliberate: locking only the write would stop updates being lost and
+  would not stop the thing the ledger exists to catch, since two runs scoring the
+  same stream would each read the position before the other wrote it and neither
+  would see the replay. Runs sharing a ledger now serialise. The wait is bounded
+  (30s) and ends in a refusal rather than a hang.
+
+  A monotonic `generation` is the backstop for when the lock was not taken or is
+  not honoured — `flock` is advisory, local, and does not travel over NFS. A save
+  whose parent generation is not what is on disk is **refused**, loudly, rather
+  than merged: a merge would have to guess which of two disagreeing histories for
+  a stream is real, and guessing wrong writes the wrong reference for every run
+  afterwards. The generation sits outside the digest on purpose, so ledgers
+  written before this version still load — folding it in would force every
+  upgrading deployment to delete its replay memory.
+
+  `os.replace` is now followed by an fsync of the containing directory, so a
+  crash cannot leave the directory entry pointing at the old ledger.
+  **Single host only**, stated in the docstring: this is a file lock, not a
+  distributed transaction, and a second Cohaera host with its own ledger is
+  unchanged and still catalogued in `EVASION.md`.
 - **A stream could be continued from a boundary nothing had ever scored, and
   the fabrication became the reference (R-02).** `StreamLedger.compare` judged a
   continuation with one test — `first_seq > previous.last_seq` — which

@@ -35,6 +35,7 @@ import hashlib
 import json
 import os
 import random
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -2573,6 +2574,186 @@ def test_an_undeclared_boundary_advances_but_never_reads_as_checked(tmp_path):
     assert verdict.boundary == "unstated"
     assert verdict.boundary != "match"
     assert R_STREAM_BOUNDARY_UNVERIFIED not in INADMISSIBLE
+
+
+# R-04. Concurrency. The write was atomic and the read-modify-write around it
+# was not, so two runs on one host each loaded, each scored, and each replaced --
+# and the file left behind had no record of whichever one finished first.
+
+_CONCURRENT_WORKER = """
+import sys, base64
+sys.path.insert(0, {root!r})
+sys.path.insert(0, {src_root!r})
+from cohaera import ed25519
+from cohaera.evidence import (StreamLedger, StreamVerifier, TrustStore,
+                              TRUST_STORE_SCHEMA, ROLE_COLLECTOR, LedgerError)
+from cohaera.model import Event
+from tools.collector_sign import key_id_for, sign_stream
+
+secret = bytes.fromhex("ab" * 32)
+public = ed25519.public_key(secret)
+kid = key_id_for(public)
+keys = TrustStore.from_obj({{"scheme": TRUST_STORE_SCHEMA, "keys": {{
+    kid: {{"key": base64.b64encode(public).decode(), "roles": [ROLE_COLLECTOR]}}}}}})
+records = [{{"event_type": "tool_start", "session_id": "s", "timestamp": 1000.0 + i,
+            "span_id": "sp-%d" % i, "tool_name": "alert_read",
+            "data": {{"action": "invoke_tool"}}}} for i in range(3)]
+
+stream_id = sys.argv[1]
+try:
+    with StreamLedger.locked({path!r}, wait_s=25.0) as ledger:
+        v = StreamVerifier(keys=keys, ledger=ledger, run_id=stream_id)
+        for raw in sign_stream(records, stream_id, secret, kid):
+            e = Event(raw=raw)
+            v.observe(e.raw, e.integrity, "s")
+        v.finalise()
+        ledger.stamp(stream_id)
+        ledger.save()
+    print("saved")
+except LedgerError as exc:
+    print("refused")
+"""
+
+
+def test_two_concurrent_runs_both_reach_the_ledger(tmp_path):
+    """R-04, reproduced and closed.
+
+    Two processes, two different streams, one ledger, started together. Before
+    the lock this lost an update on most runs: both loaded the same state, both
+    scored, and the second ``os.replace`` wrote a file with no trace of the
+    first. A stream missing from the ledger is a stream whose next replay is
+    undetectable, and nothing anywhere said so -- both runs exited zero.
+
+    The acceptance is that both are present, or that one visibly refuses.
+    Serialising is the intended outcome and not a compromise: two runs scoring
+    the same stream at once would each read the position before the other wrote
+    it, so neither would see the replay, and a replay detector that misses a
+    replay because it was busy is not worth keeping.
+    """
+    path = tmp_path / "seen.json"
+    root = str(Path(__file__).resolve().parent.parent)
+    script = _CONCURRENT_WORKER.format(root=root, src_root=str(Path(root) / "src"),
+                                       path=str(path))
+    running = [subprocess.Popen([sys.executable, "-c", script, sid],
+                                stdout=subprocess.PIPE, text=True)
+               for sid in ("stream-A", "stream-B")]
+    outs = [proc.communicate(timeout=90)[0].strip() for proc in running]
+
+    assert all(proc.returncode == 0 for proc in running)
+    assert set(outs) <= {"saved", "refused"}
+    final = StreamLedger.load(path)
+    saved = [sid for sid, out in zip(("stream-A", "stream-B"), outs, strict=True)
+             if out == "saved"]
+    for stream_id in saved:
+        assert stream_id in final.streams, (
+            f"{stream_id} reported success and is not in the ledger; its next "
+            f"replay is undetectable and nothing said so")
+    assert len(saved) == 2, (
+        "both runs should serialise on the lock and both should land")
+
+
+def test_a_stale_generation_never_overwrites_a_newer_ledger(tmp_path):
+    """The backstop for when the lock was not taken or is not honoured.
+
+    ``flock`` is advisory and local -- it does not travel over NFS, and a
+    process that opens the file without asking for it is not stopped by it. The
+    generation makes that case loud instead of silent: a save whose parent is
+    not what is on disk is refused, so the run fails rather than reporting
+    success having discarded another run's work.
+    """
+    path = tmp_path / "seen.json"
+    _scored(sign_stream(_records(3), "stream-a", SECRET, KEY_ID), path)
+
+    stale = StreamLedger.load(path)          # both read the same generation
+    fresh = StreamLedger.load(path)
+    assert stale.generation == fresh.generation == 1
+
+    fresh.streams["other"] = SeenStream(stream_id="other", first_seq=0,
+                                        last_seq=1, head="ab")
+    fresh.save()
+    assert StreamLedger.load(path).generation == 2
+
+    stale.streams["mine"] = SeenStream(stream_id="mine", first_seq=0,
+                                       last_seq=1, head="cd")
+    with pytest.raises(LedgerError, match="generation"):
+        stale.save()
+    after = StreamLedger.load(path)
+    assert "other" in after.streams, "the newer write must survive"
+    assert "mine" not in after.streams
+
+
+def test_the_generation_advances_once_per_save(tmp_path):
+    path = tmp_path / "seen.json"
+    ledger = StreamLedger(streams={}, path=path)
+    assert ledger.generation == 0
+    ledger.save()
+    assert ledger.generation == 1
+    assert StreamLedger.load(path).generation == 1
+    ledger.save()
+    assert StreamLedger.load(path).generation == 2
+
+
+def test_a_ledger_written_before_generations_existed_still_loads(tmp_path):
+    """Upgrading must not delete a deployment's replay memory.
+
+    The generation is deliberately outside the digest for this reason: folding
+    it in would make every pre-existing ledger fail to load, and a failed load
+    is refused, so the operator's only way forward would be to delete the file --
+    which is exactly the state an attacker who deleted it wants.
+    """
+    path = tmp_path / "seen.json"
+    _scored(sign_stream(_records(3), "stream-a", SECRET, KEY_ID), path)
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    del doc["generation"]
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+    ledger = StreamLedger.load(path)
+    assert ledger.generation == 0
+    assert "stream-a" in ledger.streams
+    ledger.save()                                  # and it can be written again
+
+
+def test_the_lock_is_a_sidecar_rather_than_the_ledger_itself(tmp_path):
+    """``save`` ends in ``os.replace``, which swaps the inode.
+
+    A lock held on the ledger's own descriptor would be protecting a file that
+    is no longer at that name the moment the first writer finishes, so the
+    second writer would take a lock on a different object and both would
+    proceed. The sidecar is never replaced.
+    """
+    path = tmp_path / "seen.json"
+    assert StreamLedger.lock_path_for(path) == tmp_path / "seen.json.lock"
+    with StreamLedger.locked(path) as ledger:
+        ledger.save()
+    assert (tmp_path / "seen.json.lock").exists()
+    assert path.exists()
+
+
+def test_waiting_for_a_held_lock_ends_in_a_refusal_rather_than_a_hang(tmp_path):
+    """A scheduled run that never returns is worse than one that fails.
+
+    The alarm is the test. Deleting the deadline from ``_acquire_ledger_lock``
+    does not make this assertion false, it makes it never evaluate -- the run
+    blocks forever and CI reports a job timeout hours later instead of a failing
+    test. A guard that can only be caught by a hang is a guard nobody will
+    notice regressing, so the hang is converted into a failure here.
+    """
+    path = tmp_path / "seen.json"
+
+    def _too_slow(signum, frame):
+        raise AssertionError(
+            "acquiring a held lock did not give up; the wait has no deadline")
+
+    with StreamLedger.locked(path):
+        previous = signal.signal(signal.SIGALRM, _too_slow)
+        signal.setitimer(signal.ITIMER_REAL, 5.0)
+        try:
+            with pytest.raises(LedgerError, match="another run has held"):
+                with StreamLedger.locked(path, wait_s=0.1):
+                    pass
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0.0)
+            signal.signal(signal.SIGALRM, previous)
 
 
 def test_without_a_ledger_the_absence_is_stated(tmp_path):

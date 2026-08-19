@@ -389,7 +389,12 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
     ledger: StreamLedger | None = None
     if args.seen_streams:
         try:
-            ledger = StreamLedger.load(args.seen_streams, limits)
+            # R-04. Under an exclusive lock held until this run finishes, so
+            # that two runs sharing a ledger cannot each read the position
+            # before the other writes it. The stack releases it on every exit
+            # path, including the error returns below.
+            ledger = stack.enter_context(
+                StreamLedger.locked(args.seen_streams, limits))
         except (LedgerError, OSError) as exc:
             # Refused, not started fresh. An unreadable ledger scores every
             # stream as new, which is precisely the state an attacker who
@@ -398,7 +403,11 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
                  f"{sanitise_display(str(exc), 400)}")
             return EXIT_ERROR
         _err(f"[cohaera] seen-stream ledger {sanitise_display(args.seen_streams, 160)}: "
-             f"{len(ledger.streams)} stream(s) previously scored")
+             f"{len(ledger.streams)} stream(s) previously scored, "
+             f"generation {ledger.generation}"
+             + ("" if ledger.locked_exclusively else
+                " (WARNING: no file locking on this host, so concurrent runs "
+                "sharing this ledger cannot exclude each other)"))
 
     report = IngestReport(source=str(args.telemetry))
     correlator = _correlator(args, limits)
