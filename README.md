@@ -5,11 +5,12 @@
 
 <h1 align="center">Cohaera</h1>
 
-<p align="center"><b>The correlation layer for agent telemetry.</b></p>
+<p align="center"><b>Evidence quality for agent telemetry.</b></p>
 
 <p align="center">
   <i>From Latin <b>cohaerere</b>, to hang together.<br/>
-  Does the agent's behaviour hang together?</i>
+  Does the agent's behaviour hang together &mdash; and can you trust<br/>
+  the record that says so?</i>
 </p>
 
 <p align="center">
@@ -74,6 +75,33 @@ been closed, which cost 36 new false positives and says so.
 > The first principle is that you must not fool yourself, and you are the
 > easiest person to fool.
 
+### One correction to the story above
+
+The box is real and nobody is reading it. That part holds.
+
+What does not hold is the conclusion this project drew from it for its first
+year: that reading the box is the *missing layer*. It is not missing any more.
+Exabeam's [Agent Behavior Analytics](https://www.exabeam.com/capabilities/agent-behavior-analytics/)
+baselines agent behaviour, tracks first-time actions and role drift, covers MCP
+activity, and correlates agents with the users and entities around them. Sold
+to that audience, "somebody should read the box" is a description of their
+product.
+
+The gap that has *not* closed is one layer down, and it is the more interesting
+one. Whoever reads the box is trusting that the notes are the notes the
+watchman wrote. In agent telemetry the watchman usually runs inside the process
+he is watching.
+
+**So: Cohaera's job is not to be the reader. It is to make the notes worth
+reading — and to say so out loud when they are not.** Signed collector chains,
+exact call binding, provider receipts that can falsify a claimed failure,
+replay and fork memory, and a coverage contract on every check that cannot run.
+Those become inputs to a behavioural engine rather than a competitor to one.
+
+[**POSITIONING.md**](POSITIONING.md) has the layer table, the claim language
+this project holds itself to, and the honest statement of what is not
+validated.
+
 ---
 
 ## Contents
@@ -93,6 +121,7 @@ been closed, which cost 36 new false positives and says so.
 - [Roadmap](#roadmap)
 - [Known limitations](#known-limitations)
 - [Known evasions](EVASION.md)
+- [Positioning](POSITIONING.md) — what this is a layer of, what it is not, and the language it holds itself to
 - [Threat model](docs/THREAT-MODEL.md) — what this trusts, and what survives an attacker who controls the telemetry
 - [Evidence trust](docs/EVIDENCE-TRUST.md) — the wire formats for collector integrity, effect receipts, approval binding, the trust store and signed policy files, and what they measured
 - [Security policy](SECURITY.md) — reporting, scope, supply chain
@@ -945,7 +974,7 @@ prevention claim collapses.
 - [x] Sigma content pack, 14 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 793 passing across unit, hostile-input and content conformance
+- [x] Tests, 796 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 26 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -196,3 +197,78 @@ def test_the_parser_field_map_declares_the_schema_the_detector_emits():
     assert declared == cohaera.model.SESSION_SCHEMA, (
         f"the field map documents {declared} and the detector emits "
         f"{cohaera.model.SESSION_SCHEMA}")
+
+
+# ---------------------------------------------------------------------------
+# R-19. The language the project holds itself to, enforced.
+# ---------------------------------------------------------------------------
+
+# Each entry is (pattern, why it overstates). Matched case-insensitively across
+# tracked Markdown. POSITIONING.md is exempt because it is the file that LISTS
+# them; a rule that forbids naming the rule cannot be written down.
+_OVERSTATEMENTS = [
+    (r"validated detector",
+     "nothing here has been validated against traffic this project did not "
+     "generate; the corpus is a regression suite"),
+    (r"production[- ]ready evidence",
+     "the review scored production readiness 3.5/10 and the reasons are open"),
+    (r"proof of causation",
+     "CH03 is temporal association. Coexistence is not causation and calling "
+     "it proof is the single easiest overstatement to make here"),
+    (r"provider[- ]confirmed effect",
+     "no adapter reconciles an identifier with the provider that minted it. "
+     "It is provider-RETURNED until something asks the provider"),
+    (r"missing behaviou?ral layer",
+     "that layer ships. See POSITIONING.md"),
+    (r"verified session",
+     "a session is verified_complete or verified_prefix, and the distinction "
+     "is what R-05 was about"),
+]
+
+_EXEMPT = {"POSITIONING.md", "CHANGELOG.md"}
+
+
+def _tracked_markdown() -> list[Path]:
+    out = subprocess.run(["git", "ls-files", "*.md"], cwd=REPO,
+                         capture_output=True, text=True, check=True)
+    return [REPO / line for line in out.stdout.split()
+            if Path(line).name not in _EXEMPT]
+
+
+def test_documentation_does_not_use_the_language_it_bans():
+    """R-19. POSITIONING.md lists the phrases this project will not use about
+    its own results. A style rule nothing enforces is a preference, and the
+    whole argument of this repository is that a claim should be kept true by
+    something other than the author's memory.
+
+    CHANGELOG.md is exempt alongside POSITIONING.md: a changelog entry
+    describing the removal of a phrase has to be able to name it.
+    """
+    found = []
+    for path in _tracked_markdown():
+        text = path.read_text(encoding="utf-8")
+        for pattern, why in _OVERSTATEMENTS:
+            for match in re.finditer(pattern, text, re.I):
+                line = text[:match.start()].count("\n") + 1
+                found.append(f"{path.relative_to(REPO)}:{line} "
+                             f"{match.group(0)!r} -- {why}")
+    assert not found, (
+        "documentation uses language POSITIONING.md rules out:\n  "
+        + "\n  ".join(found))
+
+
+def test_the_positioning_file_says_what_this_is_not():
+    """The file is load-bearing: the README points at it for the correction to
+    its own opening story. A stub would be worse than nothing."""
+    text = (REPO / "POSITIONING.md").read_text(encoding="utf-8")
+    assert len(text.split()) > 400, "too short to carry the argument"
+    for required in ("Agent Behavior Analytics", "Evidence quality",
+                     "Do not use", "EVALUATION-CARD.md"):
+        assert required in text, f"POSITIONING.md no longer mentions {required}"
+
+
+def test_the_readme_points_at_the_correction():
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    assert "POSITIONING.md" in readme, (
+        "the README's opening argument needs its correction reachable from "
+        "the same page")
