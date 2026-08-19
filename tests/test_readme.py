@@ -306,11 +306,19 @@ def test_the_classifiers_name_every_python_ci_actually_runs():
 
 def test_the_review_response_accounts_for_every_finding():
     """A response document that quietly drops a finding is worse than none: it
-    reads as coverage while being a selection. Every ID the review raised has
-    to appear, and each must say what happened rather than only naming it."""
+    reads as coverage while being a selection. Every ID either review raised
+    has to appear, and each must say what happened rather than only naming it.
+
+    Both series, because the second review was missed once already: the file
+    accounted for all 21 of the first review's findings and none of the second
+    review's 22, while presenting itself as the place every finding is
+    accounted for. Exactly the failure it exists to prevent.
+    """
     text = (REPO / "REVIEW-RESPONSE.md").read_text(encoding="utf-8")
     for n in range(1, 22):
         assert f"R-{n:02d}" in text, f"REVIEW-RESPONSE.md does not mention R-{n:02d}"
+    for n in range(1, 23):
+        assert f"F-{n:02d}" in text, f"REVIEW-RESPONSE.md does not mention F-{n:02d}"
     for section in ("Declined, with reasons", "Deferred", "What is still open"):
         assert section in text, f"missing section: {section}"
     # The open list is the part most likely to rot into a boast.
@@ -383,15 +391,48 @@ def test_every_commit_the_review_response_cites_exists():
     full history so the check is real where it matters; anyone with a shallow
     clone sees a named skip.
     """
+    text = (REPO / "REVIEW-RESPONSE.md").read_text(encoding="utf-8")
+    linked = sorted(set(re.findall(
+        r"\[`([0-9a-f]{7,40})`\]\(https://github\.com/[^)]+/commit/([0-9a-f]{7,40})\)",
+        text)))
+    assert linked, "REVIEW-RESPONSE.md cites no commits at all"
+    # Prefix, not equality: a citation may show an abbreviated SHA and link the
+    # full one, which is normal and is how the reviewed-revision link is
+    # written. What must never happen is the text naming one commit and the
+    # link going to another.
+    mismatched = [(a, b) for a, b in linked
+                  if not (a.startswith(b) or b.startswith(a))]
+    assert not mismatched, (
+        f"a citation's text and its link point at different commits: "
+        f"{mismatched}")
+
+    shas = [a for a, _ in linked]
     if _repository_is_shallow():
         pytest.skip(
             "shallow clone: the cited commits are not present to check. "
             "Run `git fetch --unshallow` to make this assertion real.")
-    text = (REPO / "REVIEW-RESPONSE.md").read_text(encoding="utf-8")
-    shas = sorted(set(re.findall(r"`([0-9a-f]{7,40})`", text)))
-    assert shas, "REVIEW-RESPONSE.md cites no commits at all"
-    missing = [s for s in shas
-               if subprocess.run(["git", "cat-file", "-t", s], cwd=REPO,
-                                 capture_output=True, text=True, check=False
-                                 ).stdout.strip() != "commit"]
-    assert not missing, f"cited but not in this repository: {missing}"
+
+    resolved = [s for s in shas
+                if subprocess.run(["git", "cat-file", "-t", s], cwd=REPO,
+                                  capture_output=True, text=True, check=False
+                                  ).stdout.strip() == "commit"]
+    if not resolved:
+        # None of them resolve. The commits were squash-merged, so they are
+        # not ancestors of `main`; a clone reaches them only through the branch
+        # ref that is deliberately left in place, and a clone that does not
+        # have that ref cannot see them at all. Their permanent home is the
+        # pull request, which `git clone` does not fetch.
+        #
+        # Reported as "could not look" rather than "not there", because those
+        # are different answers and this repository's whole argument is that
+        # collapsing them is how a false negative gets a green tick.
+        pytest.skip(
+            "none of the cited commits are present locally: they were "
+            "squash-merged and are reachable only through the pre-merge "
+            "branch ref or the pull request. The links in REVIEW-RESPONSE.md "
+            "still resolve on GitHub; this check cannot verify them from here.")
+
+    missing = [s for s in shas if s not in resolved]
+    assert not missing, (
+        f"some cited commits resolve and these do not, so the citations are "
+        f"not all from the same history: {missing}")
