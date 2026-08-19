@@ -26,6 +26,7 @@ weaker than executing the script, and they are much stronger than nothing.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -382,3 +383,99 @@ def test_the_documentation_addresses_agree_with_the_built_lab():
     assert built <= declared, (
         f"LAB.md's hardware table omits addresses the lab does build: "
         f"{sorted(built - declared)}")
+
+
+# ---------------------------------------------------------------------------
+# The local lab, and the committed evidence it produces.
+# ---------------------------------------------------------------------------
+
+LOCAL_RUN = LAB / "local" / "runs" / "latest" / "RUN-MANIFEST.json"
+
+
+def local_manifest() -> dict:
+    return json.loads(LOCAL_RUN.read_text(encoding="utf-8"))
+
+
+def test_the_local_lab_has_a_committed_run():
+    """The point of the local lab is that its output is in the repository. A
+    lab whose results live only on the author's machine is a claim."""
+    assert LOCAL_RUN.is_file(), "no committed run manifest"
+    assert (LAB / "local/runs/latest/RESULTS.md").is_file()
+    assert (LAB / "local/runs/latest/verdicts.jsonl").is_file()
+
+
+def test_the_committed_run_demonstrates_each_state_distinctly():
+    """Six states of one workflow. If two of them produce the same output the
+    demonstration is not demonstrating anything, and that is a failure worth
+    catching before somebody is shown it."""
+    doc = local_manifest()
+    outcomes = {}
+    for state in doc["states"]:
+        for verdict in state["verdicts"]:
+            outcomes[state["state"]] = (
+                tuple(verdict["triggered_rules"]),
+                verdict["evidence_status"],
+            )
+    assert len(outcomes) == 6, f"expected six states, found {sorted(outcomes)}"
+    assert len(set(outcomes.values())) == len(outcomes), (
+        f"two states produce identical output: {outcomes}")
+
+
+def test_the_bound_receipt_contradicts_and_the_unbound_one_does_not():
+    """R-01, as a product behaviour rather than as a unit test.
+
+    The two states carry the same claim -- the agent says the refund failed --
+    and the same provider identifier. One binds to the exact span, tool and
+    argument digest; the other names no arguments. Before R-01 both produced
+    the same critical contradiction.
+    """
+    doc = local_manifest()
+    by_state = {s["state"]: s["verdicts"][0] for s in doc["states"]
+                if s["verdicts"]}
+    bound = by_state["04-contradiction"]
+    unbound = by_state["04b-unbound-receipt"]
+    assert "CH07_reported_failure_with_effect_receipt" in bound["triggered_rules"]
+    assert "CH07_reported_failure_with_effect_receipt" not in unbound["triggered_rules"], (
+        "an incomplete binding must never carry a contradiction")
+    assert "CH07_effect_receipt_partially_bound" in unbound["triggered_rules"], (
+        "and it must not vanish either: absent is a different fact, not a "
+        "weaker one, and an analyst should still see the receipt")
+
+
+def test_the_unsigned_tail_is_a_prefix_and_not_a_verified_session():
+    """R-05, likewise. The state signed at every fourth record, read while the
+    tail was still being written, must not claim its last records were
+    attested."""
+    doc = local_manifest()
+    partial = next(s for s in doc["states"]
+                   if s["state"].startswith("05"))
+    assert partial["verdicts"][0]["evidence_status"] == "verified_prefix"
+
+    normal = next(s for s in doc["states"] if s["state"].startswith("01"))
+    assert normal["verdicts"][0]["evidence_status"] == "verified_complete", (
+        "and a fully signed stream must still reach complete, or the fix has "
+        "made every session look partial")
+
+
+def test_the_ledger_tells_a_replay_from_a_fork():
+    """The two cases that need memory between runs, and that every other check
+    passes because the records really are genuine."""
+    doc = local_manifest()
+    codes = {entry["pass"]: entry["integrity_codes"] for entry in doc["ledger"]}
+    assert codes["first"] == [], "the first pass of a fresh stream is clean"
+    assert "INTEGRITY_STREAM_REPLAYED" in codes["replay"]
+    assert "INTEGRITY_STREAM_FORKED" in codes["fork"]
+    assert "INTEGRITY_STREAM_REPLAYED" not in codes["fork"], (
+        "a rewritten history is not a re-feed, and collapsing the two would "
+        "make the more serious one invisible")
+
+
+def test_the_local_lab_does_not_claim_to_be_the_isolated_one():
+    """Two labs, one of which has never been built. Saying so is the difference
+    between a reproducible demonstration and an overstated one."""
+    readme = (LAB / "local" / "README.md").read_text(encoding="utf-8")
+    lowered = readme.lower()
+    assert "network" in lowered and "not" in lowered
+    assert "eval/EVALUATION-CARD.md" in readme, (
+        "it must point at the efficacy numbers rather than let six sessions "
+        "stand in for them")

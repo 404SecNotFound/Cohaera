@@ -2659,6 +2659,16 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
 
     return {
         "schema": COVERAGE_SCHEMA,
+        # R-05, second half. `evidence_status` was stamped on every FINDING and
+        # nowhere else, so a session that triggered nothing said nothing about
+        # whether its own telemetry had been established -- and the quiet
+        # session is exactly where it matters. "This agent did nothing unusual"
+        # rests on records, and a reader has no way to ask which ones unless
+        # something happens to have gone wrong. It belongs in coverage because
+        # it is the same kind of statement as the rest of this object: not what
+        # the agent did, but how much of the answer Cohaera was in a position
+        # to give.
+        "evidence_status": evidence_status(session),
         "checks_total": len(contracts),
         "checks_evaluated": evaluated,
         "checks_degraded": degraded,

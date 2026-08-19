@@ -1,0 +1,18 @@
+{
+  "digest": "79928057bf5cde948b2a4a287bdb6894f3b0473c93a4f60c55d2c6f5a42b2852",
+  "generation": 3,
+  "scheme": "cohaera.stream_ledger:1",
+  "streams": {
+    "lab-collector-01-01-normal": {
+      "first_seq": 0,
+      "head": "143faefb958ec9a240458b65b7cee70ffd0e5e3889b42f4bad75f078ebdde68f",
+      "key_ids": [
+        "ed25519:ed6a47a39da869b5"
+      ],
+      "last_run_id": "8c9d4e413323c82de80a04c6",
+      "last_seen_at": 1785720000.0,
+      "last_seq": 9,
+      "runs": 3
+    }
+  }
+}

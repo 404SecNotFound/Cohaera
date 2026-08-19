@@ -164,6 +164,19 @@ jobs:
           git diff --exit-code -- eval/EVALUATION-CARD.md eval/evaluation-card.json \
                                   eval/corpus/sample.jsonl eval/corpus/sample.labels.jsonl
 
+      - name: The local lab still produces what is committed
+        # lab/local/ runs the evidence path end to end -- sign, score, replay,
+        # fork -- and its output is committed. Re-running it here is what makes
+        # that output evidence rather than a screenshot: a change that quietly
+        # alters what a verdict SAYS fails this diff instead of surviving until
+        # somebody reads the file. Deterministic by construction, so a failure
+        # here is a real behaviour change and never flake.
+        #
+        # A step inside an existing job rather than a job of its own, so the
+        # ruleset's required checks stay the same nine -- see
+        # tests/test_ci_config.py.
+        run: python lab/local/run.py --check
+
       - name: README claims match the repository
         # C4-11. The README said "188 passing" against a tree with 197 and
         # listed one roadmap item twice. A number nothing keeps true is the one

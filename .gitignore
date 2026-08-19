@@ -16,6 +16,11 @@ telemetry.jsonl
 lab/generated/
 lab/*.local.psd1
 
+# The local lab's ledger lock. Everything else under lab/local/runs/ IS
+# committed on purpose -- it is the evidence the run produced and CI re-derives
+# it -- but a POSIX advisory lock file is a fact about one process, not a result.
+lab/local/runs/**/*.lock
+
 # The generated evaluation corpus: 9 MB, deterministic from the seed in
 # eval/corpus/generate.py, so committing it would store nothing the generator
 # does not already encode. Regenerate with `python eval/corpus/generate.py`.
