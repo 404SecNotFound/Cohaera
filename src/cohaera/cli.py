@@ -39,7 +39,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from . import __version__
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest, ManifestError
@@ -57,7 +57,7 @@ from .evidence import (
     StreamLedger,
     TrustStore,
     TrustStoreError,
-    file_sha256,
+    stream_sha256,
     verify_policy_signature,
 )
 from .identity import Correlator, run_id
@@ -149,6 +149,9 @@ def _limits_from(args: argparse.Namespace) -> Limits:
 
 def _load_manifest(path: str | None,
                    limits: Limits = DEFAULT_LIMITS) -> CapabilityManifest:
+    """One read. The manifest carries the digest of the bytes it was parsed
+    from, so nothing downstream has to resolve the path again -- see R-07 and
+    ``CapabilityManifest.from_bytes``."""
     if not path:
         return EMPTY_MANIFEST
     manifest = CapabilityManifest.from_file(path, limits=limits)
@@ -179,10 +182,18 @@ def _load_keys(path: str | None,
     return store
 
 
-def _attest_policy(path: str | None, sig_path: str | None, artifact: str,
-                   store: TrustStore, max_bytes: int,
+def _attest_policy(digest: str | None, sig_path: str | None, artifact: str,
+                   store: TrustStore,
                    limits: Limits = DEFAULT_LIMITS) -> PolicyAttestation:
     """Verify a detached signature over one operator-supplied file.
+
+    R-07. This used to take a PATH and open it, having been called with a file
+    the caller had already read -- two reads of a name where there should be one
+    read of a file. A rename in the window between them left Cohaera scoring one
+    manifest while attesting the digest of another, and the signature still
+    held, because it was checked against whichever bytes the second read found.
+    It now takes the digest of the exact bytes the caller parsed or is about to
+    parse, and has no way to look at the filesystem at all.
 
     Returns an attestation in every case, including the case where nothing was
     supplied, because ``POLICY_SIGNATURE_ABSENT`` in the verdict is the point:
@@ -193,10 +204,9 @@ def _attest_policy(path: str | None, sig_path: str | None, artifact: str,
     An operator who passed --tool-manifest-sig asked for the file to be checked,
     and scoring on it anyway would answer a question they did not ask.
     """
-    if not path or not sig_path:
+    if not digest or not sig_path:
         return PolicyAttestation(artifact=artifact, status=P_ABSENT)
     signature = PolicySignature.from_file(sig_path, limits=limits)
-    digest = file_sha256(path, max_bytes)
     return verify_policy_signature(signature, digest, artifact, store)
 
 
@@ -224,6 +234,21 @@ def _budget_exceeded(report: IngestReport, limits: Limits) -> str:
 
 
 def cmd_score(args: argparse.Namespace) -> int:
+    """R-07. The stack owns every descriptor opened for an artefact that is both
+    hashed and read.
+
+    An artefact whose signature Cohaera checks has to be hashed and parsed from
+    the same bytes, and a path is not bytes -- resolving it twice is a race an
+    atomic rename wins every time. The fix is to resolve it once and keep the
+    descriptor, which means something has to own that descriptor across the run.
+    This wrapper does, so that every early return below closes it without each
+    of them having to remember to.
+    """
+    with contextlib.ExitStack() as stack:
+        return _score(args, stack)
+
+
+def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
     try:
         limits = _limits_from(args)
     except LimitsError as exc:
@@ -259,14 +284,27 @@ def cmd_score(args: argparse.Namespace) -> int:
     # normal looks like. Editing either changes every verdict without touching a
     # single telemetry record, which is why they are attested before they are
     # used rather than after.
+    # R-07. The baseline is opened ONCE, here, and the same descriptor is what
+    # `load` reads further down. It is hashed only when a signature was supplied,
+    # which keeps the max_input_bytes error confined to the attestation path it
+    # has always belonged to: without a signature there is nothing to disagree
+    # with, and the reader's own budget stops an oversize file by truncating it
+    # rather than by refusing.
+    #
+    # The manifest needs no descriptor. It was already read whole and bounded by
+    # _load_manifest, and it carries the digest of exactly those bytes.
+    baseline_fh: BinaryIO | None = None
     try:
+        if args.baseline:
+            baseline_fh = stack.enter_context(Path(args.baseline).open("rb"))
+        baseline_digest = (
+            stream_sha256(baseline_fh, limits.max_input_bytes, str(args.baseline))
+            if baseline_fh is not None and args.baseline_sig else None)
         attestations = [
-            _attest_policy(args.tool_manifest, args.tool_manifest_sig,
-                           POLICY_ARTIFACT_MANIFEST, keys,
-                           limits.max_manifest_bytes, limits),
-            _attest_policy(args.baseline, args.baseline_sig,
-                           POLICY_ARTIFACT_BASELINE, keys,
-                           limits.max_input_bytes, limits),
+            _attest_policy(manifest.file_sha256 or None, args.tool_manifest_sig,
+                           POLICY_ARTIFACT_MANIFEST, keys, limits),
+            _attest_policy(baseline_digest, args.baseline_sig,
+                           POLICY_ARTIFACT_BASELINE, keys, limits),
         ]
     except (PolicySignatureError, OSError) as exc:
         _err(f"[cohaera] policy signature rejected: "
@@ -337,7 +375,8 @@ def cmd_score(args: argparse.Namespace) -> int:
         baseline_report = IngestReport(source=str(args.baseline))
         benign = load(args.baseline, limits=limits,
                       correlator=Correlator(None, limits=limits),
-                      manifest=manifest, report=baseline_report)
+                      manifest=manifest, report=baseline_report,
+                      fh=baseline_fh)
         # C5-07. A partial baseline used to produce a warning and then be fitted
         # anyway. That is the worst of both: CH01 is the one detector here that
         # LEARNS, its whole output is "unlike what I was shown", and quietly

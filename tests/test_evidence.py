@@ -31,7 +31,9 @@ Run: PYTHONPATH=src python3 -m pytest tests/test_evidence.py -v
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import os
 import random
 import subprocess
 import sys
@@ -129,9 +131,10 @@ from cohaera.evidence import (
     arg_digest,
     file_sha256,
     policy_signing_input,
+    stream_sha256,
     verify_policy_signature,
 )
-from cohaera.ingest import assemble
+from cohaera.ingest import assemble, read_events
 from cohaera.limits import (
     DEFAULT_LIMITS,
     DEFECT_APPROVAL_TYPE,
@@ -139,6 +142,7 @@ from cohaera.limits import (
     DEFECT_RECEIPT_TYPE,
 )
 from cohaera.model import Event, Session
+from cohaera.validate import IngestReport
 from tools.collector_sign import key_id_for, keys_document, sign_stream
 from tools.receipt_adapters import (
     ReceiptAdapterError,
@@ -1880,6 +1884,142 @@ def test_cli_refuses_to_score_when_a_supplied_signature_does_not_hold(tmp_path):
     assert cli_main(["score", str(telemetry), "--tool-manifest", str(manifest),
                      "--tool-manifest-sig", str(sig),
                      "--trust-store", str(store)]) == EXIT_ERROR
+
+
+def _swap_on_second_open(monkeypatch, target: Path, replacement: Path):
+    """Atomically replace ``target`` with ``replacement`` after its first open.
+
+    ``rename`` rather than a rewrite, because that is both the realistic attack
+    and the only version that proves anything: a descriptor already handed out
+    keeps the ORIGINAL inode, so the first reader still sees the honest bytes
+    and only a *second resolution of the path* sees the swap. A test that
+    truncated the file in place would fail against correct code too, for a
+    reason that has nothing to do with the race.
+
+    Returns a one-element list holding the number of times the path was opened.
+    """
+    real_open = Path.open
+    opens = [0]
+
+    def counting_open(self, *a, **kw):
+        if self == target:
+            opens[0] += 1
+            fh = real_open(self, *a, **kw)
+            if opens[0] == 1:
+                os.rename(replacement, self)
+            return fh
+        return real_open(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "open", counting_open)
+    return opens
+
+
+def test_the_manifest_is_parsed_and_hashed_from_the_same_bytes(tmp_path,
+                                                               monkeypatch):
+    """R-07, reproduced.
+
+    ``CapabilityManifest.from_file`` resolved the path and parsed it; the CLI
+    then resolved the SAME PATH again to hash it for the signature. A path is
+    not a file. An atomic rename in the window between the two left Cohaera
+    scoring one manifest and attesting the digest of another -- and the
+    signature held, because it was checked against whichever bytes the second
+    read happened to find. The operator's verdict then carried a VERIFIED
+    attestation for a file that had not been used.
+    """
+    _telemetry, manifest, _store, _sig = _policy_fixture(
+        tmp_path, manifest_body='{"tools":{"send":{"effects":["egress"]}}}')
+    hostile = tmp_path / "hostile.json"
+    hostile.write_text('{"tools":{"send":{"effects":["read"]}}}',
+                       encoding="utf-8")
+    honest_sha = file_sha256(manifest, 1 << 20)
+
+    opens = _swap_on_second_open(monkeypatch, manifest, hostile)
+    parsed = CapabilityManifest.from_file(manifest, limits=DEFAULT_LIMITS)
+
+    assert opens[0] == 1, (
+        "the manifest must be resolved exactly once; a second resolution is "
+        "the race")
+    assert parsed.file_sha256 == honest_sha, (
+        "the digest carried forward must describe the bytes that were parsed")
+    assert parsed.tools["send"].consequential, "the honest bytes were parsed"
+    # And the swap really did happen, so the fixture is testing something.
+    assert file_sha256(manifest, 1 << 20) != honest_sha
+
+
+def test_a_swapped_manifest_cannot_borrow_the_honest_files_attestation(
+        tmp_path, monkeypatch, capsys):
+    """The same race at the CLI boundary, which is where it mattered.
+
+    Before R-07 this run exited OK with a VERIFIED manifest attestation while
+    scoring a manifest the signature had never covered. Now the digest comes
+    from the bytes that were parsed, so the swap either goes unnoticed -- the
+    honest file was read and the honest file was attested -- or is refused. What
+    must never happen is a verified attestation over bytes that were not used.
+    """
+    telemetry, manifest, store, sig = _policy_fixture(
+        tmp_path, manifest_body='{"tools":{"send":{"effects":["egress"]}}}')
+    hostile = tmp_path / "hostile.json"
+    hostile.write_text('{"tools":{"send":{"effects":["read"]}}}',
+                       encoding="utf-8")
+    honest_sha = file_sha256(manifest, 1 << 20)
+    sig.write_text(json.dumps({
+        "scheme": POLICY_SIGNATURE_SCHEMA, "artifact": POLICY_ARTIFACT_MANIFEST,
+        "file_sha256": honest_sha, "signed_at": SIGNED_AT,
+        "key_id": POLICY_KEY_ID,
+        "sig": base64.b64encode(ed25519.sign(
+            POLICY_SECRET,
+            policy_signing_input(POLICY_ARTIFACT_MANIFEST, honest_sha,
+                                 SIGNED_AT))).decode("ascii")}),
+        encoding="utf-8")
+
+    _swap_on_second_open(monkeypatch, manifest, hostile)
+    code = cli_main(["score", str(telemetry), "--tool-manifest", str(manifest),
+                     "--tool-manifest-sig", str(sig),
+                     "--trust-store", str(store)])
+    assert code == EXIT_OK
+    prov = json.loads(capsys.readouterr().out.strip())["data"]["provenance"]
+    att = next(a for a in prov["policy_attestations"]
+               if a["artifact"] == POLICY_ARTIFACT_MANIFEST)
+    assert att["verified"]
+    assert att["file_sha256"] == honest_sha
+    assert prov["capability_manifest"]["file_sha256"] == honest_sha, (
+        "the manifest recorded in provenance must be the one that was attested")
+
+
+def test_the_baseline_is_hashed_and_read_through_one_descriptor(tmp_path,
+                                                                monkeypatch):
+    """The baseline half of R-07.
+
+    ``file_sha256`` hashed the path and ``load`` reopened it, so the same rename
+    put a different baseline into CH01's grammar than the one the signature
+    covered -- and the baseline is the file that decides what "unlike normal"
+    means for every session afterwards. Unlike the manifest it is telemetry and
+    may be large, so it is not read into memory: the descriptor is opened once,
+    hashed by streaming, rewound, and handed to the reader. An open descriptor
+    keeps its inode whatever happens to the path.
+    """
+    baseline = tmp_path / "benign.jsonl"
+    baseline.write_text(json.dumps(
+        {"event_type": "tool_start", "timestamp": 1000.0, "session_id": "b",
+         "tool_name": "read_x", "span_id": "S1"}) + "\n", encoding="utf-8")
+    hostile = tmp_path / "hostile.jsonl"
+    hostile.write_text(json.dumps(
+        {"event_type": "tool_start", "timestamp": 1000.0, "session_id": "b",
+         "tool_name": "send_email", "span_id": "S1"}) + "\n", encoding="utf-8")
+
+    opens = _swap_on_second_open(monkeypatch, baseline, hostile)
+    with baseline.open("rb") as fh:
+        digest = stream_sha256(fh, 1 << 20, "benign.jsonl")
+        events = list(read_events(baseline, report=IngestReport(), quiet=True,
+                                  fh=fh))
+
+    assert opens[0] == 1, "one open, so there is no window to rename into"
+    assert digest == hashlib.sha256(
+        json.dumps({"event_type": "tool_start", "timestamp": 1000.0,
+                    "session_id": "b", "tool_name": "read_x",
+                    "span_id": "S1"}).encode() + b"\n").hexdigest()
+    assert [e.tool_name for e in events] == ["read_x"], (
+        "the descriptor that was hashed is the one that was read")
 
 
 def test_cli_records_an_unsigned_manifest_as_unsigned(tmp_path, capsys):

@@ -221,6 +221,11 @@ class CapabilityManifest:
     # manifest, file-backed or not, because it is computed from the records.
     file_digest: str = ""
     semantic_digest: str = ""
+    # R-07. The FULL sha256 of the same bytes ``file_digest`` truncates, kept so
+    # that the caller attesting this manifest never has to reopen the path to
+    # get one. Reopening is what let the parsed manifest and the attested digest
+    # describe different files.
+    file_sha256: str = ""
 
     def __post_init__(self) -> None:
         """Seal the two mappings. COH-R05.
@@ -292,13 +297,15 @@ class CapabilityManifest:
             "policy_count": len(self.policies),
             "file_digest": self.file_digest,
             "semantic_digest": self.semantic_digest,
+            "file_sha256": self.file_sha256,
         }
 
     # ---- loading --------------------------------------------------------
 
     @classmethod
     def from_obj(cls, obj: Any, file_digest: str = "",
-                 limits: Limits = DEFAULT_LIMITS) -> CapabilityManifest:
+                 limits: Limits = DEFAULT_LIMITS,
+                 file_sha256: str = "") -> CapabilityManifest:
         if not isinstance(obj, dict):
             raise ManifestError("manifest root must be a JSON object")
         tools_raw = obj.get("tools")
@@ -444,29 +451,49 @@ class CapabilityManifest:
             meta[key] = "" if value == "" else _bounded_str(value, f"'{key}'")
 
         return cls(tools=tools, policies=policies, file_digest=file_digest,
-                   semantic_digest=semantic_digest(tools, policies), **meta)
+                   semantic_digest=semantic_digest(tools, policies),
+                   file_sha256=file_sha256, **meta)
+
+    @classmethod
+    def from_bytes(cls, blob: bytes, source: str = "<bytes>",
+                   limits: Limits = DEFAULT_LIMITS) -> CapabilityManifest:
+        """Parse and digest ONE buffer. R-07.
+
+        The split exists so that a caller can hold the bytes it read and be sure
+        that what it parsed, what it hashed, and what it verified a signature
+        over are the same bytes. ``from_file`` used to parse the path and the
+        CLI then reopened it to hash it, which is two reads of a name rather
+        than one read of a file: an atomic rename in the window between them
+        left Cohaera scoring one manifest and attesting the digest of another,
+        with the signature holding, because the signature is over whichever file
+        the second read happened to find.
+        """
+        if len(blob) > limits.max_manifest_bytes:
+            raise ManifestError(
+                f"{source}: manifest exceeds max_manifest_bytes="
+                f"{limits.max_manifest_bytes}")
+        try:
+            obj = strict_json_loads(blob.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise ManifestError(
+                f"{source}: not readable as UTF-8 JSON: {exc}") from exc
+        except RecursionError as exc:                  # deeply nested manifest
+            raise ManifestError(f"{source}: nesting too deep to parse") from exc
+        full = hashlib.sha256(blob).hexdigest()
+        return cls.from_obj(obj, file_digest=full[:16], limits=limits,
+                            file_sha256=full)
 
     @classmethod
     def from_file(cls, path: str | Path,
                   limits: Limits = DEFAULT_LIMITS) -> CapabilityManifest:
+        """One bounded read, then :meth:`from_bytes`. Never two."""
         p = Path(path)
         # Read one byte past the bound rather than stat()-ing: a FIFO or a
         # /proc file reports a size of zero and then streams forever, and the
         # point of a byte bound is that it holds for input chosen to defeat it.
         with p.open("rb") as fh:
             blob = fh.read(limits.max_manifest_bytes + 1)
-        if len(blob) > limits.max_manifest_bytes:
-            raise ManifestError(
-                f"{p}: manifest exceeds max_manifest_bytes="
-                f"{limits.max_manifest_bytes}")
-        try:
-            obj = strict_json_loads(blob.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError) as exc:
-            raise ManifestError(f"{p}: not readable as UTF-8 JSON: {exc}") from exc
-        except RecursionError as exc:                  # deeply nested manifest
-            raise ManifestError(f"{p}: nesting too deep to parse") from exc
-        return cls.from_obj(obj, file_digest=hashlib.sha256(blob).hexdigest()[:16],
-                            limits=limits)
+        return cls.from_bytes(blob, source=str(p), limits=limits)
 
 
 def semantic_digest(tools: dict[str, Capability],

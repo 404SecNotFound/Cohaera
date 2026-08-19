@@ -260,6 +260,38 @@ option into a control: refuse to run unless every supplied policy file carries a
 signature that held. Off by default, because on by default would break every
 existing deployment on the day it shipped.
 
+### One resolution per artefact
+
+A signature is over *bytes*, and a path is not bytes. Until R-07 Cohaera
+resolved each of these files twice — `CapabilityManifest.from_file` opened the
+path and parsed it, then the CLI opened the same path again to hash it for the
+signature; the baseline was hashed by path and then reopened by `load`. An
+atomic rename in the window between the two reads left Cohaera **scoring one
+file and attesting the digest of another**, with the signature holding, because
+it was checked against whichever bytes the second read happened to find. The
+verdict then carried a `POLICY_SIGNATURE_VERIFIED` attestation for a file that
+had not been used — which is worse than no attestation at all, because it is an
+assurance pointing at the wrong thing.
+
+Each artefact is now resolved once, and the two files are handled differently
+because they are different sizes:
+
+- **The manifest** is small and already read whole under `max_manifest_bytes`.
+  `CapabilityManifest.from_bytes` parses and digests one buffer, `from_file` is a
+  thin bounded read in front of it, and the manifest carries the full SHA-256 of
+  the bytes it was parsed from. Nothing downstream touches the path again.
+- **The baseline** is telemetry and may be large, so it is *not* read into
+  memory — that would give up the bounded-memory property `_bounded_lines`
+  exists to hold. Instead the descriptor is opened once, hashed by streaming,
+  rewound and handed to the reader. An open descriptor keeps its inode whatever
+  happens to the path, which closes the same window without the copy. The CLI
+  owns that descriptor for the run so every early return still releases it.
+
+The baseline is hashed only when `--baseline-sig` was supplied. Without a
+signature there is nothing for a second read to disagree with, and hashing
+unconditionally would turn an oversize baseline — which the reader's own budget
+handles by stopping early — into a refusal.
+
 ---
 
 ## 2c. P1.5 — Freshness, and the replay every other check is blind to

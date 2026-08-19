@@ -99,6 +99,25 @@ any diff, so the numbers below are derived rather than claimed.
   **No evaluation-card number moved**: the corpus emits complete bindings on
   every receipt and approval, so the fix changes what would happen to a
   real producer's partial evidence and changes nothing about the measurement.
+- **A policy file could be swapped between the read that parsed it and the read
+  that hashed it (R-07).** `CapabilityManifest.from_file` resolved the path and
+  parsed it; the CLI then resolved the same path again to hash it for the
+  signature, and the baseline was hashed by path and reopened by `load`. A path
+  is not bytes: an atomic rename in that window left Cohaera scoring one file and
+  attesting the digest of another, with the signature still holding, so the
+  verdict carried `POLICY_SIGNATURE_VERIFIED` for a file that had not been used.
+
+  Each artefact is resolved once now. `CapabilityManifest.from_bytes` parses and
+  digests a single buffer and `from_file` is a bounded read in front of it; the
+  manifest carries `file_sha256` over exactly those bytes and `_attest_policy`
+  takes a digest instead of a path, so it can no longer reach the filesystem.
+  The baseline keeps its streaming read — it is telemetry and may be large — and
+  is instead opened once, hashed through the new `stream_sha256`, rewound and
+  handed to the reader, since an open descriptor keeps its inode whatever
+  happens to the path. `load` and `read_events` take an optional descriptor for
+  that. The baseline is hashed only when `--baseline-sig` was supplied, so an
+  oversize baseline is still truncated by the reader's budget rather than
+  refused. Additive: `file_sha256` in the manifest's provenance block.
 - **`approved` in a verdict was an authorization fact and is now an approval
   claim.** Every approval Cohaera can parse arrives in band, on the stream the
   agent produces. Approvals now carry `approval_origin` (`in_band`), CH04

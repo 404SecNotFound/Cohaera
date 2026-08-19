@@ -25,9 +25,10 @@ from __future__ import annotations
 import hashlib
 import sys
 from collections.abc import Iterable, Iterator
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, BinaryIO, cast
 
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest
 from .evidence import (
@@ -106,7 +107,8 @@ class RawLine:
 
 
 def _bounded_lines(path: Path, max_bytes: int,
-                   max_total_bytes: int | None = None) -> Iterator[RawLine]:
+                   max_total_bytes: int | None = None,
+                   fh_in: BinaryIO | None = None) -> Iterator[RawLine]:
     """Yield :class:`RawLine` without ever buffering an unbounded line.
 
     ``file.readline()`` reads until a newline arrives, so a producer that never
@@ -128,7 +130,15 @@ def _bounded_lines(path: Path, max_bytes: int,
     """
     consumed = 0        # bytes pulled off the disk
     emitted = 0         # bytes in the records actually yielded
-    with path.open("rb") as fh:
+    # R-07. ``fh_in`` is an ALREADY-OPEN descriptor for this artefact, and the
+    # caller keeps ownership of it -- nullcontext rather than the file, so
+    # leaving this generator does not close a handle somebody else still holds.
+    # It exists so that a caller who has hashed a file can parse the same
+    # inode rather than the same NAME: an atomic rename between the hash and
+    # the parse changes what a path resolves to and cannot touch an open fd.
+    if fh_in is not None:
+        fh_in.seek(0)
+    with (nullcontext(fh_in) if fh_in is not None else path.open("rb")) as fh:
         buf = bytearray()
         hasher: Any = None
         nbytes = 0
@@ -206,7 +216,8 @@ def _bounded_lines(path: Path, max_bytes: int,
 
 def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
                 report: IngestReport | None = None,
-                quiet: bool = False) -> Iterator[Event]:
+                quiet: bool = False,
+                fh: BinaryIO | None = None) -> Iterator[Event]:
     """Yield Events from a JSONL file, quarantining anything that is not one.
 
     C-07 fix, kept: diagnostics go to stderr, because stdout is the JSONL stream
@@ -289,7 +300,7 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
     # for one more full line -- read, decoded, depth-scanned and hashed -- every
     # time it was checked.
     lines = _bounded_lines(p, limits.max_line_bytes,
-                           max_total_bytes=limits.max_input_bytes)
+                           max_total_bytes=limits.max_input_bytes, fh_in=fh)
     lineno = 0
     while True:
         code, detail = _budget_hit()
@@ -499,10 +510,16 @@ def load(path: str | Path, limits: Limits = DEFAULT_LIMITS,
          quiet: bool = False,
          keys: TrustStore = EMPTY_STORE,
          freshness: Freshness = NO_FRESHNESS,
-         ledger: StreamLedger | None = None) -> list[Session]:
-    """Read and group one telemetry file. The report is filled in as a side effect."""
+         ledger: StreamLedger | None = None,
+         fh: BinaryIO | None = None) -> list[Session]:
+    """Read and group one telemetry file. The report is filled in as a side effect.
+
+    ``fh``, when given, is an open descriptor for ``path`` that the caller has
+    already hashed; ``path`` is then used only for naming. See ``_bounded_lines``
+    and R-07 in the changelog.
+    """
     rep = report if report is not None else IngestReport()
-    events = list(read_events(path, limits=limits, report=rep, quiet=quiet))
+    events = list(read_events(path, limits=limits, report=rep, quiet=quiet, fh=fh))
     return assemble(events, limits=limits, correlator=correlator,
                     manifest=manifest, report=rep, quiet=quiet, keys=keys,
                     freshness=freshness, ledger=ledger)

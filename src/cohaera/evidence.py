@@ -91,7 +91,7 @@ import os
 import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from . import ed25519
 from .identity import canonical
@@ -1136,8 +1136,42 @@ class PolicyAttestation:
                 "detail": self.detail}
 
 
+def stream_sha256(fh: BinaryIO, max_bytes: int, name: str = "<stream>") -> str:
+    """Hash an ALREADY-OPEN descriptor, in bounded memory, and rewind it.
+
+    R-07. ``file_sha256`` below hashes a *name*, and a name is not a file: an
+    atomic rename between the hash and whatever reads the artefact next leaves
+    the two describing different bytes, with the signature holding over
+    whichever one the hash happened to find. Hashing the descriptor the caller
+    will go on to read closes the window without giving up streaming -- an open
+    fd keeps its inode whatever happens to the path.
+
+    The file is left positioned at zero, because the caller's next act is to
+    read it.
+    """
+    h = hashlib.sha256()
+    read = 0
+    fh.seek(0)
+    while True:
+        chunk = fh.read(1 << 20)
+        if not chunk:
+            break
+        read += len(chunk)
+        if read > max_bytes:
+            raise PolicySignatureError(
+                f"{name}: exceeds {max_bytes} bytes, so the signature over "
+                f"it cannot be checked")
+        h.update(chunk)
+    fh.seek(0)
+    return h.hexdigest()
+
+
 def file_sha256(path: str | Path, max_bytes: int) -> str:
     """Hash a file the signature claims to cover, in bounded memory.
+
+    Prefer :func:`stream_sha256` wherever the caller will also READ the
+    artefact: this function resolves the path a second time and that second
+    resolution is the R-07 race.
 
     Chunked rather than ``read_bytes()``: the baseline is telemetry and may be
     gigabytes, and reading an operator-named file whole in order to hash it is
