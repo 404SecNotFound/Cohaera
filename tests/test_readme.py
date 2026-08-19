@@ -359,3 +359,17 @@ def test_no_count_is_spelled_as_a_word_where_a_checker_cannot_read_it():
     assert not offenders, (
         "counts spelled as words cannot be checked and have drifted twice:\n  "
         + "\n  ".join(offenders))
+
+
+def test_every_commit_the_review_response_cites_exists():
+    """A response document that points at commits which are not there is worse
+    than one that points at nothing: it looks checkable and is not. Written
+    from a log by hand, so this is the check that it was read correctly."""
+    text = (REPO / "REVIEW-RESPONSE.md").read_text(encoding="utf-8")
+    shas = sorted(set(re.findall(r"`([0-9a-f]{7,40})`", text)))
+    assert shas, "REVIEW-RESPONSE.md cites no commits at all"
+    missing = [s for s in shas
+               if subprocess.run(["git", "cat-file", "-t", s], cwd=REPO,
+                                 capture_output=True, text=True, check=False
+                                 ).stdout.strip() != "commit"]
+    assert not missing, f"cited but not in this repository: {missing}"
