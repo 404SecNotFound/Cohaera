@@ -42,25 +42,25 @@ review's work and were invisible because it had not been merged.
 
 | ID | Sev | Finding | What happened | Commit |
 |---|---|---|---|---|
-| R-01 | High | Empty and partial receipt bindings are trusted | **Closed.** `BINDING_TRUSTED` is exact-binding only. Span-only is context, never authority. CH07 reports it as `CH07_effect_receipt_partially_bound` — a different fact, not a weaker one | `65b4665` |
-| R-02 | High | Ledger continuation does not prove chain continuity | **Closed.** Advancement requires the next exact sequence *and* the predecessor matching the stored head. A gap is discontinuous, a mismatching head is a fork, and neither reads as ordinary advancement | `d9f6fa5` |
-| R-03 | High | Invalid, unsigned and unscored records advance the ledger | **Closed in the defect.** Only evidence that held may write. The architecture half — durable sink acknowledgement — is declined and the concept is renamed accordingly; see §"Declined" | `1df8e5a` |
-| R-04 | High | Concurrent ledger writes lose valid state | **Closed.** Advisory file locking plus a generation guard; a stale parent cannot overwrite a newer one. Single-host, and the docstring says so | `2835d84` |
-| R-05 | High | Any verified signature marks the whole session `verified` | **Closed.** `verified_complete` and `verified_prefix` replace `verified`, which no longer exists as an output value. The signer validates `sign_every` and always signs the final record | `188cf6f` |
-| R-06 | High | Run identity omits output-affecting trust configuration | **Closed.** One canonical `trust_config_digest` over trust store, policy attestations, freshness, ledger state and correlation key version, folded into `analysis_run_id` as a required argument | `94065dd` |
-| R-07 | High | Policy signature verification is subject to file replacement | **Closed.** Each attested artefact is resolved once; the digest describes the bytes that were parsed | `14974bc` |
-| R-08 | High | The lab's required agent-to-collector route is impossible | **Closed.** The probe names the collector's generation-side address, the *negative* property it was standing in front of is now asserted, and `LAB.md`'s third topology is gone. A test requires every `reach` row to be routable from its source | `07260a7` |
+| R-01 | High | Empty and partial receipt bindings are trusted | **Closed.** `BINDING_TRUSTED` is exact-binding only. Span-only is context, never authority. CH07 reports it as `CH07_effect_receipt_partially_bound` — a different fact, not a weaker one | [`65b4665`](https://github.com/404SecNotFound/Cohaera/commit/65b4665) |
+| R-02 | High | Ledger continuation does not prove chain continuity | **Closed.** Advancement requires the next exact sequence *and* the predecessor matching the stored head. A gap is discontinuous, a mismatching head is a fork, and neither reads as ordinary advancement | [`d9f6fa5`](https://github.com/404SecNotFound/Cohaera/commit/d9f6fa5) |
+| R-03 | High | Invalid, unsigned and unscored records advance the ledger | **Closed in the defect.** Only evidence that held may write. The architecture half — durable sink acknowledgement — is declined and the concept is renamed accordingly; see §"Declined" | [`1df8e5a`](https://github.com/404SecNotFound/Cohaera/commit/1df8e5a) |
+| R-04 | High | Concurrent ledger writes lose valid state | **Closed.** Advisory file locking plus a generation guard; a stale parent cannot overwrite a newer one. Single-host, and the docstring says so | [`2835d84`](https://github.com/404SecNotFound/Cohaera/commit/2835d84) |
+| R-05 | High | Any verified signature marks the whole session `verified` | **Closed.** `verified_complete` and `verified_prefix` replace `verified`, which no longer exists as an output value. The signer validates `sign_every` and always signs the final record | [`188cf6f`](https://github.com/404SecNotFound/Cohaera/commit/188cf6f) |
+| R-06 | High | Run identity omits output-affecting trust configuration | **Closed.** One canonical `trust_config_digest` over trust store, policy attestations, freshness, ledger state and correlation key version, folded into `analysis_run_id` as a required argument | [`94065dd`](https://github.com/404SecNotFound/Cohaera/commit/94065dd) |
+| R-07 | High | Policy signature verification is subject to file replacement | **Closed.** Each attested artefact is resolved once; the digest describes the bytes that were parsed | [`14974bc`](https://github.com/404SecNotFound/Cohaera/commit/14974bc) |
+| R-08 | High | The lab's required agent-to-collector route is impossible | **Closed.** The probe names the collector's generation-side address, the *negative* property it was standing in front of is now asserted, and `LAB.md`'s third topology is gone. A test requires every `reach` row to be routable from its source | [`07260a7`](https://github.com/404SecNotFound/Cohaera/commit/07260a7) |
 | R-09 | High | Evaluation is synthetic, partly circular and operationally noisy | **Accepted, not closed.** See §"Deferred" | — |
-| R-10 | Med-High | Span-only approvals suppress CH04 | **Closed.** Same completeness rule as R-01, on the approval side | `65b4665` |
-| R-11 | Med | Resident-memory estimate undercounts nested maps | **Closed in the defect.** The parse counts objects and keys at every depth; the estimate is the larger of the byte term and the shape term. Streaming assembly with spill remains future work | `5577b2f` |
-| R-12 | Med | Pure-Python signature work is an attacker-controlled CPU budget | **Closed in the defect.** A wall-clock bound beside the count, seconds spent reported, envelope measured and published. The recommended backend swap is declined | `5577b2f` |
-| R-13 | Med | Future-dated records extend freshness without a defect | **Closed.** `max_future_skew_s`, `INTEGRITY_EVIDENCE_FROM_FUTURE`, inadmissible past the bound, and `--evidence-as-of` refuses nonfinite values | `ba084a6` |
-| R-14 | Med | CH01 fits one global grammar | **Scope named, model deferred.** Every CH01 finding carries `baseline_scope: fleet`. Per-agent and peer-group baselines are a design change and are not pretended | `7f3394e` |
-| R-15 | Med | Confidence intervals ignore task and family clustering | **Closed.** Task-cluster bootstrap intervals and macro averages beside the Wilson figures, with the independent-task count published. The bootstrap interval is about twice the width | `33ded88` |
-| R-16 | Med | Label and session sets are not enforced one-to-one | **Closed.** Duplicates, orphans, unlabelled sessions and empty sessions are refused by name | `33ded88` |
-| R-17 | Med | Receipt adapters mix identifier kinds and accept nonfinite | **Closed.** Every path declares its own kind and assurance level; nonfinite values are not identifiers; authority scope can travel | `bc283ed` |
-| R-18 | Med | Release output is not reproducible or attested | **Closed in the defect.** `SOURCE_DATE_EPOCH` makes the wheel a function of the source and the SBOM job proves its rebuild is byte-identical. Attestation and a signed release need a tag this branch cannot cut | `e7d6923` |
-| R-19 | Med | Exabeam position and integration proof are behind the market | **Closed.** The positioning is rewritten; see [POSITIONING.md](POSITIONING.md). A live integration is not claimed | `8c8d9f0` |
+| R-10 | Med-High | Span-only approvals suppress CH04 | **Closed.** Same completeness rule as R-01, on the approval side | [`65b4665`](https://github.com/404SecNotFound/Cohaera/commit/65b4665) |
+| R-11 | Med | Resident-memory estimate undercounts nested maps | **Closed in the defect.** The parse counts objects and keys at every depth; the estimate is the larger of the byte term and the shape term. Streaming assembly with spill remains future work | [`5577b2f`](https://github.com/404SecNotFound/Cohaera/commit/5577b2f) |
+| R-12 | Med | Pure-Python signature work is an attacker-controlled CPU budget | **Closed in the defect.** A wall-clock bound beside the count, seconds spent reported, envelope measured and published. The recommended backend swap is declined | [`5577b2f`](https://github.com/404SecNotFound/Cohaera/commit/5577b2f) |
+| R-13 | Med | Future-dated records extend freshness without a defect | **Closed.** `max_future_skew_s`, `INTEGRITY_EVIDENCE_FROM_FUTURE`, inadmissible past the bound, and `--evidence-as-of` refuses nonfinite values | [`ba084a6`](https://github.com/404SecNotFound/Cohaera/commit/ba084a6) |
+| R-14 | Med | CH01 fits one global grammar | **Scope named, model deferred.** Every CH01 finding carries `baseline_scope: fleet`. Per-agent and peer-group baselines are a design change and are not pretended | [`7f3394e`](https://github.com/404SecNotFound/Cohaera/commit/7f3394e) |
+| R-15 | Med | Confidence intervals ignore task and family clustering | **Closed.** Task-cluster bootstrap intervals and macro averages beside the Wilson figures, with the independent-task count published. The bootstrap interval is about twice the width | [`33ded88`](https://github.com/404SecNotFound/Cohaera/commit/33ded88) |
+| R-16 | Med | Label and session sets are not enforced one-to-one | **Closed.** Duplicates, orphans, unlabelled sessions and empty sessions are refused by name | [`33ded88`](https://github.com/404SecNotFound/Cohaera/commit/33ded88) |
+| R-17 | Med | Receipt adapters mix identifier kinds and accept nonfinite | **Closed.** Every path declares its own kind and assurance level; nonfinite values are not identifiers; authority scope can travel | [`bc283ed`](https://github.com/404SecNotFound/Cohaera/commit/bc283ed) |
+| R-18 | Med | Release output is not reproducible or attested | **Closed in the defect.** `SOURCE_DATE_EPOCH` makes the wheel a function of the source and the SBOM job proves its rebuild is byte-identical. Attestation and a signed release need a tag this branch cannot cut | [`e7d6923`](https://github.com/404SecNotFound/Cohaera/commit/e7d6923) |
+| R-19 | Med | Exabeam position and integration proof are behind the market | **Closed.** The positioning is rewritten; see [POSITIONING.md](POSITIONING.md). A live integration is not claimed | [`8c8d9f0`](https://github.com/404SecNotFound/Cohaera/commit/8c8d9f0) |
 | R-20 | Low-Med | CLI, schema, version, counts and roadmap text drift | **Closed.** Output schema `cohaera:0.3`, version tied across three files by test, `--max-events` help corrected, `--reuse-generated` fails with an instruction, corpus size corrected in all three places, and the card no longer recommends two different false-positive metrics | `a0f493a`, `7f3394e` |
 | R-21 | Low-Med | Core modules are too large for safe evidence changes | **Declined for now.** See §"Declined" | — |
 
@@ -239,6 +239,24 @@ word-for-word what it already says. Two independent reviewers reaching one
 conclusion is worth more than either statement of it.
 
 ## Verifying this document
+
+**About the commit citations.** Each closed finding above links the commit that
+closed it. Those commits were squash-merged into `main` as
+[PR #11](https://github.com/404SecNotFound/Cohaera/pull/11), so they are not
+ancestors of `main` and a plain `git log` will not show them. They remain
+reachable two ways: GitHub keeps a pull request's commits permanently, so every
+link above resolves regardless of what happens to any branch; and the branch
+`claude/cohaera-third-security-review-oaa6dd` is deliberately left in place,
+frozen at the pre-merge head, which is what lets a local clone check them.
+
+That second route is the fragile one, and it is stated rather than relied on
+silently. `tests/test_readme.py` checks the citations locally when the objects
+are present and reports which route was unavailable when they are not — the
+same contract every check in this repository is held to. It does not report a
+missing object as a false citation, because "I could not look" and "it is not
+there" are different answers.
+
+
 
 Every claim above is checkable from the repository:
 
