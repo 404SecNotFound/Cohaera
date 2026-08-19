@@ -1268,6 +1268,10 @@ def verify_policy_signature(signature: PolicySignature, digest: str,
 # and ``checks`` re-exports them so that every reason code an operator can see
 # is importable from one place.
 R_NO_INTEGRITY = "NO_INTEGRITY_EVIDENCE"
+# R-05. Signatures verified, and they stop short of the last record. A stream
+# attested to a point and chained after it is a genuinely weaker thing than an
+# attested stream, and it used to be reported as the same thing.
+R_SIGNATURE_PREFIX_ONLY = "INTEGRITY_SIGNATURE_COVERS_PREFIX_ONLY"
 R_PARTIAL_INTEGRITY = "INTEGRITY_EVIDENCE_PARTIAL"
 R_NO_COLLECTOR_KEYS = "NO_COLLECTOR_KEYS"
 R_UNSIGNED = "INTEGRITY_UNSIGNED"
@@ -2152,6 +2156,12 @@ class SessionIntegrity:
     replayed_streams: list[dict[str, Any]] = field(default_factory=list)
     freshness_checked: int = 0
     oldest_signed_age_s: float | None = None
+    # R-05. One entry per stream that fed this session: how far its records ran
+    # and how far a verified signature reached into them. Carried in full rather
+    # than reduced to a boolean because "signed to 100 of 149" is the finding,
+    # and an analyst asked to trust a session needs to see where the attestation
+    # stopped rather than be told it did.
+    signature_ranges: list[dict[str, Any]] = field(default_factory=list)
     # R-13. The furthest a signed record was dated AHEAD of ``as_of``, in
     # seconds, or None if none was. Positive, and reported separately from
     # ``oldest_signed_age_s`` because a future-dated record has a negative age
@@ -2171,6 +2181,45 @@ class SessionIntegrity:
     @property
     def inadmissible(self) -> list[str]:
         return sorted(c for c in self.codes if c in INADMISSIBLE)
+
+    @property
+    def signature_covers_final(self) -> bool:
+        """Does a verified signature reach the LAST record of every stream here?
+
+        R-05. The question ``evidence_status`` used to answer with
+        ``signatures_verified > 0``, which is a question about whether anything
+        was signed rather than about what the signatures covered. A 150-record
+        stream signed at 0 and 100 satisfied it while 49 records sat past the
+        last attestation, covered by nothing.
+
+        Every stream, not most: a session assembled from two streams is only as
+        attested as its weaker half, and averaging that away would report the
+        better one.
+        """
+        if not self.signature_ranges:
+            return False
+        return all(r["verified_to"] is not None
+                   and r["verified_to"] >= r["last_seq"]
+                   for r in self.signature_ranges)
+
+    @property
+    def signature_coverage(self) -> float:
+        """Share of this session's attested records a signature actually reaches.
+
+        Record-weighted across streams rather than averaged per stream, so a
+        two-record stream signed to its end cannot offset a thousand-record one
+        signed to its middle.
+        """
+        covered = total = 0
+        for r in self.signature_ranges:
+            span = r["last_seq"] - r["first_seq"] + 1
+            if span <= 0:
+                continue
+            total += span
+            if r["verified_to"] is not None:
+                reach = min(r["verified_to"], r["last_seq"]) - r["first_seq"] + 1
+                covered += max(0, reach)
+        return covered / total if total else 0.0
 
     def note(self, code: str) -> None:
         self.codes[code] = self.codes.get(code, 0) + 1
@@ -2193,6 +2242,9 @@ class SessionIntegrity:
             "freshness_checked": self.freshness_checked,
             "oldest_signed_age_s": self.oldest_signed_age_s,
             "furthest_future_s": self.furthest_future_s,
+            "signature_ranges": self.signature_ranges[:cap],
+            "signature_coverage": round(self.signature_coverage, 4),
+            "signature_covers_final": self.signature_covers_final,
             "replayed_streams": self.replayed_streams[:cap],
             "attested": self.attested,
         }
@@ -2243,6 +2295,12 @@ class _Stream:
     # it, and the next run would then read A as a replay.
     codes: set[str] = field(default_factory=set)
     signatures_verified: int = 0
+    # R-05. The highest sequence whose signature VERIFIED. A signature covers
+    # the chain head at its own sequence, so one verified signature attests
+    # every record up to and including it -- and nothing after it. This is the
+    # value that separates a stream signed to its end from one signed to its
+    # middle, and there was nothing tracking it.
+    highest_verified_seq: int | None = None
     # Records consumed for this stream that reached no scored session, because
     # assembly dropped them on max_sessions or max_events_per_session. Their
     # positions were verified and their content was never looked at.
@@ -2364,6 +2422,19 @@ class StreamVerifier:
         # check. Only knowable once the whole input has been seen, which is why
         # it is decided here rather than per record.
         self._judge_against_ledger()
+        # R-05. How far each stream ran and how far its attestation reached,
+        # attributed to every session it fed. Done here rather than per record
+        # because "the last record" is only knowable once there are no more.
+        for stream in sorted(self.streams.values(), key=lambda s: s.stream_id):
+            if stream.first_seq is None or stream.last_seq is None:
+                continue
+            span = {"stream_id": stream.stream_id,
+                    "first_seq": stream.first_seq,
+                    "last_seq": stream.last_seq,
+                    "verified_to": stream.highest_verified_seq}
+            for session_key in stream.sessions_seen:
+                if session_key:
+                    self._session(session_key).signature_ranges.append(dict(span))
         for state in self.sessions.values():
             if state.with_integrity and state.without_integrity:
                 state.note(R_PARTIAL_INTEGRITY)
@@ -2659,6 +2730,11 @@ class StreamVerifier:
         # whether the ledger may remember the stream, so an increment anywhere
         # earlier would let an unauthorised or invalid signature buy admission.
         stream.signatures_verified += 1
+        # R-05. Same argument, one line further: how far the attestation
+        # reaches is only a fact once the signature has actually held.
+        if (stream.highest_verified_seq is None
+                or seq > stream.highest_verified_seq):
+            stream.highest_verified_seq = seq
 
         if key.windowed:
             inside = key.covers_clock(when)

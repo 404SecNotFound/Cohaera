@@ -140,6 +140,43 @@ integrity, critical) *and* every other finding in the affected session is marked
 as resting on unverified evidence, because a verdict built on a broken chain
 should not be presented at the same confidence as one that is not.
 
+### How far the attestation reached
+
+A signature covers the **chain head at its own sequence**, which is what lets
+one verified signature stand for every record before it — and is why
+`sign_every` exists at all. The corollary went unwritten until R-05: it stands
+for nothing *after* it. A collector signing every hundredth record of a
+150-record batch leaves 49 records chained and attested by nobody.
+
+`evidence_status` used to answer this with `signatures_verified > 0` and return
+`verified`, which is a fact about whether signing happened rather than about
+what it covered. That fixture reported `verified` at CH06 confidence **1.0**.
+The state is now split:
+
+| value | condition |
+|---|---|
+| `verified_complete` | a verified signature reaches the last record of **every** stream feeding the session |
+| `verified_prefix` | signatures verified and stop short; `signature_ranges` carries where |
+
+Every stream, not most — a session assembled from two streams is only as
+attested as its weaker half, and averaging would report the better one. The
+verdict carries `signature_ranges` (`stream_id`, `first_seq`, `last_seq`,
+`verified_to`) rather than a boolean, because *"signed to 100 of 149"* is the
+finding and an analyst asked to trust a session needs to see where the
+attestation stopped. CH06's confidence is multiplied by the record-weighted
+share actually reached, and the contract carries
+`INTEGRITY_SIGNATURE_COVERS_PREFIX_ONLY`.
+
+Two changes on the producer side follow from the same sentence. The reference
+signer now **always signs the final record** — one extra scalar multiplication
+per stream, and without it `verified_complete` is unreachable for any sampled
+stream whose batch does not happen to end on a signing position. And
+`sign_every` must be an integer ≥ 1: `0` used to emit a stream with no signature
+on any record and report success, because `if sign_every and seq % sign_every`
+short-circuits before the modulo could raise, and `-1` signed everything since
+`seq % -1 == 0` always. An operator tuning a sampling rate must not be able to
+switch signing off by typing a number.
+
 ### Coverage additions
 
 A new surface `event_integrity`, and reason codes:

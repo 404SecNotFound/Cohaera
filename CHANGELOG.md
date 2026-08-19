@@ -68,6 +68,39 @@ any diff, so the numbers below are derived rather than claimed.
   re-assembling the same corpus once per regime.
 
 ### Fixed
+- **A stream signed at its start was reported `verified` however much of it went
+  unsigned (R-05).** `evidence_status` returned `verified` whenever
+  `signatures_verified > 0` — a fact about whether signing happened at all, not
+  about what it covered. A signature covers the chain head at its own sequence,
+  so it attests every record up to that point and **none after it**. The
+  review's fixture — 150 records signed at sequence 0 and 100 — reported
+  `verified` with 49 records chained and attested by nobody, and with freshness
+  and a ledger in force CH06 scored it exactly **1.0**.
+
+  **Breaking, and schema-visible.** `verified` is gone as an output value,
+  replaced by `verified_complete` (a verified signature reaches the last record
+  of *every* stream feeding the session) and `verified_prefix` (signatures
+  verified and stop short). Every stream, not most: a session assembled from two
+  streams is only as attested as its weaker half. A rule matching the old
+  literal `verified` now matches nothing, which is deliberate — it should fail
+  loudly rather than quietly stop firing. CH06's own finding is stamped
+  `not_applicable` rather than `verified`; its subject *is* the integrity
+  evidence, so the question is a category error, and that was the one place the
+  old vocabulary said something false rather than merely incomplete.
+
+  Additive: `signature_ranges` (`stream_id`, `first_seq`, `last_seq`,
+  `verified_to`), `signature_coverage` and `signature_covers_final` in the
+  integrity evidence; `INTEGRITY_SIGNATURE_COVERS_PREFIX_ONLY` as a CH06
+  coverage reason, with confidence multiplied by the record-weighted share
+  actually reached.
+
+  **`tools/collector_sign.py`:** `sign_every` must now be an integer ≥ 1. `0`
+  emitted a stream with no signature on any record and reported success — `if
+  sign_every and seq % sign_every == 0` short-circuits, so the ZeroDivisionError
+  never arrived to give it away — and `-1` signed everything, since `seq % -1 ==
+  0` always. The signer also always signs the **final** record now, without
+  which `verified_complete` is unreachable for any sampled stream whose batch
+  does not end on a signing position.
 - **Receipts and approvals that bound to almost nothing were trusted as if they
   bound to everything (R-01, R-10).** `BINDING_TRUSTED` contained
   `bound_span_only`, and `Binding.parse` accepted `{}` as a binding. Together

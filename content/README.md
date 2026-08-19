@@ -76,7 +76,16 @@ what the collector signed for. A sequence gap, a chain break, a signature that
 did not verify. It says somebody edited the stream, and it is the only rule in
 this pack whose subject is the telemetry rather than the agent — which is why
 every other finding in the same verdict carries `evidence_status` saying how far
-the evidence underneath it was established.
+the evidence underneath it was established: `verified_complete`,
+`verified_prefix`, `chained_unsigned`, `unattested` or `inadmissible`.
+
+`verified_prefix` is worth a rule of its own attention. It means signatures
+verified and stopped short of the last record — a signature covers the chain
+head at its own sequence, so a collector sampling every hundredth record leaves
+everything after the last signing position attested by nobody. There was no such
+value before: it reported as `verified`, which is what an analyst reads as
+settled. A rule matching on the old literal `verified` will now match nothing,
+which is deliberate — it should fail loudly rather than quietly stop firing.
 
 ### The pairs, and why they are pairs
 

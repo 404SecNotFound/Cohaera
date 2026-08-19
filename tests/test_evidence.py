@@ -56,8 +56,11 @@ from cohaera.checks import (
     CH07_PARTIAL,
     CH07_UNBOUND,
     EVIDENCE_INADMISSIBLE,
+    EVIDENCE_NOT_APPLICABLE,
+    EVIDENCE_STATES,
     EVIDENCE_UNATTESTED,
-    EVIDENCE_VERIFIED,
+    EVIDENCE_VERIFIED_COMPLETE,
+    EVIDENCE_VERIFIED_PREFIX,
     R_RECEIPT_NOT_ARGUMENT_BOUND,
     ch04_guardrail_overrun,
     ch06_evidence_integrity,
@@ -108,6 +111,7 @@ from cohaera.evidence import (
     R_SEQUENCE_GAP,
     R_SEQUENCE_REPLAY,
     R_SIGNATURE_INVALID,
+    R_SIGNATURE_PREFIX_ONLY,
     R_STALE,
     R_STREAM_BOUNDARY_UNVERIFIED,
     R_STREAM_FORKED,
@@ -1305,16 +1309,175 @@ def test_every_finding_carries_how_far_the_evidence_was_established():
     for f in findings:
         # CH06 is exempt: it IS the statement that the evidence failed, and
         # marking it as resting on failed evidence would be circular.
-        expected = (EVIDENCE_VERIFIED if f.check == CH06_INTEGRITY
+        # R-05: not_applicable, not "verified". CH06's subject IS the
+        # integrity evidence, so asking how far that evidence was established
+        # is a category error -- and the old value said something false rather
+        # than merely incomplete.
+        expected = (EVIDENCE_NOT_APPLICABLE if f.check == CH06_INTEGRITY
                     else EVIDENCE_INADMISSIBLE)
         assert f.evidence_status == expected
+
+
+# R-05. How far the attestation REACHED, which is a different question from
+# whether anything was signed -- and the second one is what evidence_status used
+# to answer.
+
+
+def _unsign_tail(signed: list[dict], keep_signed_to: int) -> list[dict]:
+    """Strip signatures after ``keep_signed_to``, leaving the chain intact.
+
+    The shape a third-party collector produces when it samples signatures and
+    the batch does not end on a signing position. Cohaera's own signer no longer
+    emits it -- it always signs the final record -- but the verifier has to
+    detect it whoever wrote the stream, which is the whole point.
+    """
+    out = []
+    for record in signed:
+        sidecar = dict(record["integrity"])
+        if sidecar["seq"] > keep_signed_to:
+            sidecar.pop("sig", None)
+            sidecar.pop("key_id", None)
+        out.append({**record, "integrity": sidecar})
+    return out
+
+
+def _session_of(signed: list[dict], **kw):
+    v = StreamVerifier(keys=KEYS, **kw)
+    events = []
+    for raw in signed:
+        e = Event(raw=raw)
+        v.observe(e.raw, e.integrity, "sess-1")
+        events.append(e)
+    v.finalise()
+    s = Session(session_id="sess-1", events=events)
+    s.integrity = v.for_session("sess-1")
+    s.seal()
+    return s
+
+
+def test_a_stream_signed_to_its_middle_is_a_prefix_and_not_verified():
+    """R-05, the review's fixture, reproduced.
+
+    150 records, signatures at sequence 0 and 100. ``evidence_status`` returned
+    ``verified`` because ``signatures_verified > 0`` -- a fact about whether
+    signing happened at all, not about what it covered. A signature covers the
+    chain head at its own sequence, so it attests every record up to that point
+    and nothing after it: 49 records sat past the last attestation, chained and
+    vouched for by nobody, under a word an analyst reads as settled.
+    """
+    signed = _unsign_tail(
+        sign_stream(_records(150), "stream-a", SECRET, KEY_ID, sign_every=100),
+        keep_signed_to=100)
+    s = _session_of(signed)
+
+    assert s.integrity.signatures_verified == 2
+    assert evidence_status(s) == EVIDENCE_VERIFIED_PREFIX
+    assert not s.integrity.signature_covers_final
+
+
+def test_the_verified_range_is_carried_rather_than_summarised():
+    """"Signed to 100 of 149" is the finding. An analyst asked to trust a
+    session needs to see where the attestation stopped, not be told that it
+    did."""
+    signed = _unsign_tail(
+        sign_stream(_records(150), "stream-a", SECRET, KEY_ID, sign_every=100),
+        keep_signed_to=100)
+    ranges = _session_of(signed).integrity.signature_ranges
+
+    assert ranges == [{"stream_id": "stream-a", "first_seq": 0,
+                       "last_seq": 149, "verified_to": 100}]
+
+
+def test_confidence_is_not_one_when_a_tail_is_unattested():
+    """The number that made the old status survivable, and did not.
+
+    With freshness and a ledger in force the other CH06 penalties fall away and
+    the contract scored the review's fixture at exactly 1.0 -- fully evaluated,
+    no reservation, 49 records attested by nobody.
+    """
+    signed = _unsign_tail(
+        sign_stream(_records(150), "stream-a", SECRET, KEY_ID, sign_every=100),
+        keep_signed_to=100)
+    s = _session_of(
+        signed,
+        freshness=Freshness(max_age_s=86400.0, as_of=1200.0,
+                            max_future_skew_s=300.0),
+        ledger=StreamLedger(streams={}, path=Path("unused")))
+    contract = next(c for c in coverage(s, None)["checks"]
+                    if c["check"] == CH06_INTEGRITY)
+
+    assert contract["confidence"] < 1.0
+    assert R_SIGNATURE_PREFIX_ONLY in contract["reasons"]
+    # 101 of 150 records reached, so the share is the multiplier and nothing
+    # else is penalising this run.
+    assert contract["confidence"] == round(101 / 150, 3)
+
+
+def test_a_stream_signed_to_its_end_is_complete():
+    signed = sign_stream(_records(150), "stream-a", SECRET, KEY_ID,
+                         sign_every=100)
+    s = _session_of(signed)
+    assert evidence_status(s) == EVIDENCE_VERIFIED_COMPLETE
+    assert s.integrity.signature_covers_final
+    assert s.integrity.signature_coverage == 1.0
+
+
+def test_the_signer_always_signs_the_final_record():
+    """What makes verified_complete reachable for a sampled stream at all.
+
+    Sampling leaves everything after the last signing position attested by
+    nobody, and a batch rarely ends on a multiple of the rate. One extra scalar
+    multiplication per stream closes it.
+    """
+    signed = sign_stream(_records(150), "stream-a", SECRET, KEY_ID,
+                         sign_every=100)
+    positions = [r["integrity"]["seq"] for r in signed
+                 if "sig" in r["integrity"]]
+    assert positions == [0, 100, 149]
+
+
+@pytest.mark.parametrize("rate", [0, -1, 1.5, True, "4"])
+def test_a_sampling_rate_that_signs_nothing_is_refused(rate):
+    """``sign_every=0`` emitted a stream with no signature on any record and
+    reported success: `if sign_every and seq % sign_every == 0` short-circuits,
+    so the ZeroDivisionError never arrived to give it away. ``-1`` signs
+    everything, since seq % -1 == 0 always. An operator tuning a sampling rate
+    must not be able to switch signing off by typing a number."""
+    with pytest.raises(ValueError, match="sign_every"):
+        sign_stream(_records(4), "stream-a", SECRET, KEY_ID, sign_every=rate)
+
+
+def test_verified_is_no_longer_a_value_this_schema_can_emit():
+    """The rename, asserted rather than assumed.
+
+    Stated as a test because `verified` reads as settled and `verified_prefix`
+    does not, and a downstream rule written against the old value must fail
+    loudly rather than silently match nothing.
+    """
+    assert "verified" not in EVIDENCE_STATES
+    assert EVIDENCE_STATES == {
+        "verified_complete", "verified_prefix", "chained_unsigned",
+        "unattested", "inadmissible", "not_applicable"}
+
+
+def test_a_session_is_only_as_attested_as_its_weakest_stream():
+    """Two streams, one signed to its end and one not. Averaging would report
+    the better half; every stream feeding a session has to be covered."""
+    a = sign_stream(_records(4, sid="sess-1"), "stream-a", SECRET, KEY_ID)
+    b = _unsign_tail(
+        sign_stream(_records(4, sid="sess-1"), "stream-b", SECRET, KEY_ID,
+                    sign_every=1),
+        keep_signed_to=1)
+    s = _session_of(a + b)
+    assert evidence_status(s) == EVIDENCE_VERIFIED_PREFIX
+    assert 0.0 < s.integrity.signature_coverage < 1.0
 
 
 def test_ch06_stays_quiet_on_a_stream_that_verifies():
     signed = sign_stream(_records(4), "stream-a", SECRET, KEY_ID)
     sessions = assemble([Event(raw=r) for r in signed], keys=KEYS)
     assert ch06_evidence_integrity(sessions[0]) == []
-    assert evidence_status(sessions[0]) == EVIDENCE_VERIFIED
+    assert evidence_status(sessions[0]) == EVIDENCE_VERIFIED_COMPLETE
 
 
 def test_a_collector_inside_the_agent_gains_nothing_and_the_contract_says_so():

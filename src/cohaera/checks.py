@@ -66,6 +66,7 @@ from .evidence import (
     R_SEQUENCE_GAP,
     R_SEQUENCE_REPLAY,
     R_SIGNATURE_INVALID,
+    R_SIGNATURE_PREFIX_ONLY,
     R_STALE,
     R_STREAM_FORKED,
     R_STREAM_REPLAYED,
@@ -107,6 +108,7 @@ __all__ = [
     "R_SEQUENCE_GAP",
     "R_SEQUENCE_REPLAY",
     "R_SIGNATURE_INVALID",
+    "R_SIGNATURE_PREFIX_ONLY",
     "R_STALE",
     "R_STREAM_FORKED",
     "R_STREAM_REPLAYED",
@@ -1511,10 +1513,31 @@ CH06_INTEGRITY = "CH06_evidence_integrity"
 # on every finding, because a verdict built on a stream somebody could have
 # edited should not be presented at the same confidence as one built on a stream
 # that chained and verified.
-EVIDENCE_VERIFIED = "verified"          # chained AND signature-checked
+# R-05. ``verified`` used to be one of these values and is gone, because it
+# answered the wrong question. It was returned whenever ANY signature verified,
+# which is a fact about whether signing happened at all rather than about what
+# the signatures covered -- so a 150-record stream signed at sequence 0 and 100
+# was reported ``verified`` with 49 records past the last attestation, covered
+# by nothing, and CH06 scored it 1.0. A signature covers the chain head at its
+# own sequence, so it attests every record up to that point and none after it;
+# the two cases below are that distinction, and collapsing them is how an
+# unsigned tail rides in under a word an analyst reads as settled.
+EVIDENCE_VERIFIED_COMPLETE = "verified_complete"  # attested to the final record
+EVIDENCE_VERIFIED_PREFIX = "verified_prefix"      # attested to a point, then not
 EVIDENCE_CHAINED = "chained_unsigned"   # chained, nothing to verify it against
 EVIDENCE_UNATTESTED = "unattested"      # no sidecars at all: today's default
 EVIDENCE_INADMISSIBLE = "inadmissible"  # a gap, a break or a bad signature
+# CH06's own finding. Its subject IS the integrity evidence, so asking how far
+# that evidence was established is a category error rather than a hard question.
+# It used to be stamped ``verified``, which was the one place the old vocabulary
+# stated something false rather than merely incomplete.
+EVIDENCE_NOT_APPLICABLE = "not_applicable"
+
+# Every value the field can take, so a conformance test and a SIEM parser have
+# one list to read rather than a grep.
+EVIDENCE_STATES = frozenset({
+    EVIDENCE_VERIFIED_COMPLETE, EVIDENCE_VERIFIED_PREFIX, EVIDENCE_CHAINED,
+    EVIDENCE_UNATTESTED, EVIDENCE_INADMISSIBLE, EVIDENCE_NOT_APPLICABLE})
 
 
 def evidence_status(session: Session) -> str:
@@ -1531,9 +1554,15 @@ def evidence_status(session: Session) -> str:
         return EVIDENCE_UNATTESTED
     if audit.inadmissible:
         return EVIDENCE_INADMISSIBLE
-    if audit.signatures_verified > 0:
-        return EVIDENCE_VERIFIED
-    return EVIDENCE_CHAINED
+    if audit.signatures_verified == 0:
+        return EVIDENCE_CHAINED
+    # R-05. Not ``signatures_verified > 0``. The question is how far the
+    # attestation reached, not whether one exists: see
+    # SessionIntegrity.signature_covers_final, which requires the last record of
+    # EVERY stream feeding this session to be covered.
+    if audit.signature_covers_final:
+        return EVIDENCE_VERIFIED_COMPLETE
+    return EVIDENCE_VERIFIED_PREFIX
 
 
 def ch06_evidence_integrity(session: Session,
@@ -2427,6 +2456,30 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
                 "Supply the collector's public key with --trust-store. An "
                 "unsigned chain proves the stream is self-consistent, which an "
                 "attacker who rewrote the whole stream can also arrange.")
+        elif not audit.signature_covers_final:
+            # R-05. Signed, and not to the end. The share is the honest
+            # multiplier because it is literally how much of this session a
+            # signature reaches -- and there was no term for it at all, so a
+            # stream signed at sequence 0 and 100 of 149 scored 1.0.
+            share = audit.signature_coverage
+            conf *= share
+            int_reasons.append(R_SIGNATURE_PREFIX_ONLY)
+            unattested = [
+                f"{r['stream_id']}: signed to "
+                f"{r['verified_to'] if r['verified_to'] is not None else 'nothing'}"
+                f" of {r['last_seq']}"
+                for r in audit.signature_ranges
+                if r["verified_to"] is None or r["verified_to"] < r["last_seq"]]
+            int_remedies.append(
+                "Sign the final record of each stream, or set the collector's "
+                "sampling so the last record is always a signing position. A "
+                "signature covers the chain head at its own sequence and "
+                "nothing after it, so records past the last one are chained "
+                "and unattested (" + "; ".join(unattested[:3]) + ").")
+            int_assumptions.append(
+                f"A verified signature reaches {share:.0%} of this session's "
+                f"attested records. The remainder is self-consistent and "
+                f"vouched for by nobody.")
         # Replay is the one attack every other check here is blind to by
         # construction, because a replayed stream is a genuine stream. Whether
         # it was even considered is a property of how the run was invoked, so it
@@ -2690,5 +2743,6 @@ def run_all(session: Session, grammar: SequenceGrammar | None = None,
     status = evidence_status(session)
     for f in findings:
         f.confidence = by_check.get(f.family, by_check.get(f.check, 1.0))
-        f.evidence_status = EVIDENCE_VERIFIED if f.check == CH06_INTEGRITY else status
+        f.evidence_status = (EVIDENCE_NOT_APPLICABLE if f.check == CH06_INTEGRITY
+                             else status)
     return findings, cov

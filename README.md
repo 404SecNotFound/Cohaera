@@ -342,9 +342,18 @@ carrying `cohaera.integrity:1`, deleting a record is a detected and localised
 sequence gap, and modifying one is a chain break naming the record that moved.
 Every other finding in the session is stamped with `evidence_status`, so a
 verdict built on a stream somebody could have edited does not arrive looking
-like one that verified. The default value is `unattested`, which is where every
-deployment starts and which means *tampering was not ruled out*, not *tampering
-was ruled out*.
+like one that verified. Five values, and the first two used to be one:
+
+| `evidence_status` | means |
+|---|---|
+| `verified_complete` | a verified signature reaches the last record of every stream |
+| `verified_prefix` | signatures verified, and they stop short — the tail is chained and attested by nobody |
+| `chained_unsigned` | internally consistent, with nothing to check it against |
+| `unattested` | no integrity sidecars at all |
+| `inadmissible` | a gap, a break, a bad signature, a replay |
+
+The default value is `unattested`, which is where every deployment starts and
+which means *tampering was not ruled out*, not *tampering was ruled out*.
 
 **CH07** is the only detection here that catches a lying emitter rather than
 routing around one. A receipt is an identifier minted by the system the action
@@ -936,7 +945,7 @@ prevention claim collapses.
 - [x] Sigma content pack, 14 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 753 passing across unit, hostile-input and content conformance
+- [x] Tests, 765 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 26 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger
