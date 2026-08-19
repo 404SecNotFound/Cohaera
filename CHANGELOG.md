@@ -99,6 +99,50 @@ any diff, so the numbers below are derived rather than claimed.
   **No evaluation-card number moved**: the corpus emits complete bindings on
   every receipt and approval, so the fix changes what would happen to a
   real producer's partial evidence and changes nothing about the measurement.
+- **Anything with a sequence number could write to the ledger that says what was
+  scored (R-03, scoped).** `record` was called for every stream that had a first
+  and a last sequence, with no requirement that any of it verified. Three
+  poisoning paths, all reproduced: (1) under a **loaded** trust store a
+  chained-but-unsigned stream — which needs no key, since chaining is arithmetic —
+  was recorded with its head, so the genuine signed stream at the same positions
+  then read as `forked`, turning a squatted stream id into a critical finding
+  against the real collector; (2) assembly drops events past `max_sessions` and
+  `max_events_per_session`, and the ledger advanced across their positions
+  anyway, so records nobody scored were marked as already seen and can never be
+  scored; (3) a broken chain, invalid signature, revoked or unauthorised key, or
+  stale record did not stop the position being committed as a scored fact.
+
+  A stream is now written only if every record it carried reached a scored
+  session, none of its own evidence was inadmissible, and — when a trust store is
+  loaded — at least one record carried a signature that store accepts. The trust
+  store is the switch on the last rule deliberately: an operator who loaded no
+  keys has said nothing about who may attest, and requiring a signature would
+  turn the ledger off for every unsigned deployment. A refused stream is reported
+  as the new `STREAM_LEDGER_NOT_ADVANCED` and named in the new
+  `stream_ledger_refusals` summary field, because a stream absent from the ledger
+  looks exactly like one never seen. A refused stream is never created, so it
+  cannot spend `max_ledger_streams` either.
+
+  Evidence codes are now tracked per stream as well as per session. A session is
+  fed by many streams, so judging stream A on a code raised by stream B would
+  refuse to advance for an unrelated reason and make the next run read A as a
+  replay.
+
+  **`cohaera score` now writes the ledger AFTER emitting verdicts**, reversing
+  the previous ordering and its stated reasoning. Saving first advanced past
+  findings nobody ever saw, so re-running reported a replay and the findings were
+  gone; saving last means a run that dies mid-emission is re-scored and may
+  duplicate. A duplicate alert is noise an analyst dismisses; a missed one is
+  what this project exists to prevent.
+
+  **Renamed in concept to an observation ledger, and the exactly-once-scoring
+  implication is withdrawn.** It records what Cohaera observed and scored, not
+  what any sink durably received. A transactional version needs durable sink
+  acknowledgement across stdout, files and future SIEM sinks — a design, not a
+  patch — and is deliberately not attempted here. The on-disk
+  `cohaera.stream_ledger:1` identifier is unchanged for now so existing ledgers
+  keep loading; the schema-visible rename belongs with the version bump, where
+  everything downstream regenerates once.
 - **Two runs sharing a ledger silently discarded each other's work (R-04).**
   `save()` was atomic — mkstemp, fsync, `os.replace` — and the read-modify-write
   around it was not. Two processes on one host each loaded, each scored, and each

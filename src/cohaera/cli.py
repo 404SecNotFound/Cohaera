@@ -473,20 +473,9 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
     )
     if ledger is not None:
         # Stamped here because analysis_run_id is a digest of everything read
-        # and does not exist until reading finishes. Written before any verdict
-        # is emitted: a run that dies while printing has still SCORED these
-        # streams, and forgetting that would let the same input through again.
+        # and does not exist until reading finishes. WRITTEN LATER -- see the
+        # save below the emission loop.
         ledger.stamp(run)
-        try:
-            ledger.save()
-        except (LedgerError, OSError) as exc:
-            # Same reasoning as the quarantine ledger (C4-04). Losing the record
-            # of what has been scored while reporting success means the next
-            # replay of this stream is undetectable and nothing said so.
-            _err(f"[cohaera] could not write the seen-stream ledger to "
-                 f"{sanitise_display(str(args.seen_streams), 160)}: "
-                 f"{sanitise_display(str(exc), 300)}")
-            return EXIT_ERROR
 
     provenance = {
         "analysis_run_id": run,
@@ -551,6 +540,33 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
     _err(f"[cohaera] {total_findings} finding(s) across {len(sessions)} session(s); "
          f"{report.accepted} record(s) accepted, {report.rejected} quarantined, "
          f"{report.defective} accepted with field defects")
+
+    if ledger is not None:
+        # R-03, and a deliberate reversal. This used to run BEFORE the verdicts
+        # were printed, reasoning that a run which dies mid-emission has still
+        # SCORED those streams and forgetting that would let the same input
+        # through again. The other side of that trade is worse: a run that dies
+        # while printing has advanced the ledger past findings nobody ever saw,
+        # and re-running now reports a replay, so the findings are lost and
+        # unrecoverable. A duplicate alert is noise an analyst dismisses in
+        # seconds; a missed one is the thing this project exists to prevent.
+        #
+        # Which is exactly why the concept is an OBSERVATION ledger and the
+        # exactly-once-scoring language is gone. Saving after emission admits
+        # the duplicate; saving before it hid a loss. Neither is exactly-once,
+        # and only one of them fails in the direction an analyst can recover
+        # from. A transactional version needs durable sink acknowledgement
+        # across stdout, files and future SIEM sinks -- a design, not a patch.
+        try:
+            ledger.save()
+        except (LedgerError, OSError) as exc:
+            # Same reasoning as the quarantine ledger (C4-04). Losing the record
+            # of what has been scored while reporting success means the next
+            # replay of this stream is undetectable and nothing said so.
+            _err(f"[cohaera] could not write the seen-stream ledger to "
+                 f"{sanitise_display(str(args.seen_streams), 160)}: "
+                 f"{sanitise_display(str(exc), 300)}")
+            return EXIT_ERROR
 
     if args.reject_log:
         try:
@@ -670,15 +686,21 @@ def _add_common(p: argparse._ActionsContainer) -> None:
                         "because it would break every existing deployment; on, it is "
                         "what turns the signature from an option into a control.")
     p.add_argument("--seen-streams", metavar="PATH",
-                   help="JSON ledger of collector streams already scored, kept "
-                        "BETWEEN runs. It is what detects a stream re-fed inside "
-                        "the freshness window, which every other check passes "
-                        "because the replayed stream is genuine. Created on "
-                        "first use; a file that exists and does not parse is a "
-                        "hard error, because scoring everything as new is what "
-                        "deleting it would achieve. Unsigned local state: an "
-                        "attacker who can delete it removes the detection "
-                        "(EVASION.md E22).")
+                   help="JSON OBSERVATION ledger of collector streams already "
+                        "seen, kept BETWEEN runs. It is what detects a stream "
+                        "re-fed inside the freshness window, which every other "
+                        "check passes because the replayed stream is genuine. "
+                        "It records what Cohaera observed and scored, NOT what "
+                        "any sink durably received, and it does not provide "
+                        "exactly-once scoring: it is written after verdicts are "
+                        "emitted, so a run that dies mid-emission is re-scored "
+                        "and may duplicate. Created on first use; a file that "
+                        "exists and does not parse is a hard error, because "
+                        "scoring everything as new is what deleting it would "
+                        "achieve. Only streams whose evidence held are written "
+                        "to it. Unsigned local state and a single-host file "
+                        "lock: an attacker who can delete it removes the "
+                        "detection (EVASION.md E22).")
     p.add_argument("--evidence-max-age", type=positive_float, metavar="SECONDS",
                    help="Report signed records older than this as stale "
                         "(INTEGRITY_EVIDENCE_STALE). This is the bound that makes "

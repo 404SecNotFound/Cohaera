@@ -371,7 +371,7 @@ number an operator sees goes down after a commit that added a control.
 
 ---
 
-## 2d. P1.6 — The seen-stream ledger, and replay inside the window
+## 2d. P1.6 — The observation ledger, and replay inside the window
 
 **Threat closed:** re-feeding a stream this host has already scored, at any age.
 **Threat not closed:** re-feeding it to a *different* Cohaera host, or deleting
@@ -414,6 +414,88 @@ The fork is the more serious of the two and is not a replay at all: it means
 somebody holding a valid collector key produced a second version of the same
 history. No check inside a single run can see that, because each version is
 internally perfect.
+
+### What earns a stream a place in the ledger
+
+This file is worth exactly as much as the weakest thing allowed to write to it,
+and until R-03 anything with a sequence number could. `record` was called for
+every stream that had a first and a last sequence, with no requirement that any
+of it verified. Three ways that poisoned the file it exists to protect, all
+reproduced against the code:
+
+1. **Unsigned admission.** Under a *loaded* trust store, a chained-but-unsigned
+   stream was recorded with its head. Chaining is arithmetic — nothing signs it
+   and nothing needs to — so anyone who can append to the input can produce one.
+   The genuine signed stream then arrived at the same positions with a different
+   head and read as `forked`. Squatting a stream id turned into a critical
+   finding *against the real collector*, and the real collector was the one that
+   looked like the rewrite.
+2. **Unscored admission.** Assembly drops events past `max_sessions` and
+   `max_events_per_session`, and the verifier had already recorded their
+   positions — correctly, since a dropped record still occupies one and omitting
+   it would manufacture a gap out of Cohaera's own budget. Committing that
+   extent was the error: with `--max-sessions 1` over two sessions the ledger
+   advanced across all six records, so the three belonging to the session nobody
+   scored were marked as already seen and can now never be scored at all.
+3. **Evidence that did not hold.** A broken chain, an invalid signature, a
+   revoked or unauthorised key, a stale or future-dated record — none of it
+   stopped the position being committed as a scored fact.
+
+A stream is now written to the ledger only if every record it carried reached a
+scored session, none of its own evidence was inadmissible, and — **when a trust
+store is loaded** — at least one of its records carried a signature that store
+accepts. The refusal is reported as `STREAM_LEDGER_NOT_ADVANCED` and named in
+`stream_ledger_refusals`, because a stream absent from the ledger looks exactly
+like one never seen.
+
+The trust store is the switch on the first rule and that placement is
+deliberate. An operator who has loaded no keys has told Cohaera nothing about
+who may attest, so requiring a verified signature would turn the ledger off for
+every unsigned deployment — most of them, today — and the replay it catches is
+worth having even on evidence nobody signed. Once keys *are* loaded, an unsigned
+record is not evidence, and the ledger is the last place that should treat it as
+any. A refused stream is also never created, so it cannot spend
+`max_ledger_streams`: a producer minting a stream id per record could otherwise
+exhaust the budget with streams it never signed, and eviction is what makes an
+earlier stream's replay undetectable.
+
+### Concurrency, and what a file lock is
+
+Two runs sharing one ledger used to discard each other's work. The write was
+atomic — mkstemp, fsync, `os.replace` — and the read-modify-write around it was
+not, so both loaded, both scored, and the file left behind held one of the two.
+A two-process test loses an update on most runs.
+
+Runs now take an exclusive `flock` on a `<ledger>.lock` sidecar and hold it for
+the whole run. A sidecar because `os.replace` swaps the inode, so a lock on the
+ledger's own descriptor protects a file that is no longer at that name. For the
+whole run, not just the write, because locking only the write would stop updates
+being lost and would *not* stop the thing the ledger exists to catch — two runs
+scoring the same stream would each read the position before the other wrote it,
+and neither would see the replay. Runs sharing a ledger serialise; a ledger is a
+serialisation point. The wait is bounded and ends in a refusal, because a
+scheduled run that never returns is worse than one that fails.
+
+A monotonic `generation` is the backstop for a lock that was not taken or is not
+honoured — `flock` is advisory, local, and does not travel over NFS. A save
+whose parent generation is not what is on disk is refused rather than merged: a
+merge would have to guess which of two disagreeing histories is real, and
+guessing wrong writes the wrong reference for every run afterwards. **This is a
+single-host file lock, not a distributed transaction.**
+
+### It is an observation ledger, and the name is the claim
+
+It records what Cohaera **observed and scored**. It does not record what any
+downstream sink durably received, and it does **not** provide exactly-once
+scoring. `cohaera score` writes it *after* emitting verdicts, so a run that dies
+mid-emission leaves it unadvanced and re-running re-scores and re-emits —
+duplicates are possible. The reverse ordering was tried first and is worse: it
+advanced past findings nobody ever saw, so re-running reported a replay and the
+findings were simply gone. A duplicate alert is noise an analyst dismisses in
+seconds; a missed one is what this project exists to prevent. Neither ordering
+is exactly-once, and a version that was would need durable sink acknowledgement
+across stdout, files and future SIEM sinks — a design, not a patch, and one that
+is worse done badly than not done. It is named for what it does instead.
 
 **Neither outcome advances the ledger.** Recording a replay's extent would move
 the reference to exactly where the attacker's copy ends, so re-feeding it again

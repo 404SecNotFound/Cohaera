@@ -1320,6 +1320,13 @@ R_STREAM_SKIPPED_RECORDS = "INTEGRITY_STREAM_RECORDS_NEVER_SCORED"
 R_STREAM_BOUNDARY_UNVERIFIED = "INTEGRITY_STREAM_BOUNDARY_UNVERIFIED"
 R_NO_STREAM_LEDGER = "NO_STREAM_LEDGER"
 R_LEDGER_EVICTED = "STREAM_LEDGER_EVICTED_THIS_STREAM"
+# R-03. The stream was compared against the ledger and deliberately not written
+# to it, because its evidence did not earn a place there. Not inadmissible: what
+# was wrong with the evidence already has its own code, and this says what the
+# ledger DID about it. It matters in the verdict because the omission is
+# otherwise invisible -- a stream absent from the ledger looks exactly like one
+# that was never seen, and the next run will score it as new.
+R_LEDGER_NOT_ADVANCED = "STREAM_LEDGER_NOT_ADVANCED"
 R_LEDGER_BUDGET = "STREAM_LEDGER_BUDGET_EXHAUSTED"
 
 # The codes that say the evidence is not admissible, as opposed to merely
@@ -1614,7 +1621,23 @@ class SeenVerdict:
 
 
 class StreamLedger:
-    """Memory of which collector streams have already been scored.
+    """An OBSERVATION ledger: memory of which collector streams have been seen.
+
+    NOT A DELIVERY LEDGER, AND THE NAME IS THE CLAIM. R-03. This records what
+    Cohaera OBSERVED and scored; it does not record what any downstream sink
+    durably received, and it does not provide exactly-once scoring. Those are
+    different guarantees and only the first one is implementable without an
+    output transaction spanning stdout, files and future SIEM sinks -- a design,
+    not a patch, and one that is worse done badly than not done.
+
+    What that means concretely, because it is a trade and not a limitation to be
+    skipped past. ``cohaera score`` writes this file AFTER emitting its verdicts.
+    A run that dies while printing therefore leaves the ledger unadvanced, and
+    re-running it re-scores and re-emits: duplicates are possible. The reverse
+    ordering was tried first and is worse -- it advanced past findings nobody
+    ever saw, so re-running reported a replay and the findings were simply gone.
+    A duplicate alert is noise an analyst dismisses in seconds; a missed one is
+    the thing this project exists to prevent. Neither ordering is exactly-once.
 
     THE GAP THIS EXISTS FOR, precisely. Every other check in this module passes
     on a replayed archive, and each for a good reason: the sequence really is
@@ -1692,6 +1715,13 @@ class StreamLedger:
         return self.path is not None
 
     # -- comparison -------------------------------------------------------
+
+    # -- admission --------------------------------------------------------
+    #
+    # See StreamVerifier._admission for what earns a stream a place here. The
+    # short version: this file is worth exactly as much as the weakest thing
+    # allowed to write to it, and before R-03 anything with a sequence number
+    # could.
 
     def compare(self, stream_id: str, first_seq: int, last_seq: int,
                 head: str, checkpoint_head: str | None,
@@ -1780,7 +1810,7 @@ class StreamLedger:
 
     def record(self, verdict: SeenVerdict, first_seq: int, last_seq: int,
                head: str, run_id: str, when: float | None,
-               key_ids: tuple[str, ...] = ()) -> None:
+               key_ids: tuple[str, ...] = (), admit: bool = True) -> None:
         """Fold one verified stream into the ledger.
 
         A REPLAYED or FORKED stream does NOT advance the recorded position, and
@@ -1789,10 +1819,20 @@ class StreamLedger:
         rewritten history the one future runs are measured against, which hands
         the attacker the reference. Nothing legitimate was scored in either case,
         so nothing is recorded except that it happened.
+
+        ``admit`` is R-03 and carries the same argument one step earlier. The
+        caller decides whether the stream's evidence earned a place here at all;
+        see ``StreamVerifier._admission``. A refused stream is still compared and
+        still reported -- the verdict is the analyst's, the commit is the
+        ledger's -- and a refused stream that this ledger has never seen is not
+        created, so it cannot consume ``max_ledger_streams`` either. That last
+        part matters on its own: a producer minting a stream id per record could
+        otherwise exhaust the budget with streams it never signed, and eviction
+        is what makes an earlier stream's replay undetectable.
         """
         self.verdicts.append(verdict)
         self._touched.add(verdict.stream_id)
-        if verdict.status in (SEEN_REPLAYED, SEEN_FORKED):
+        if not admit or verdict.status in (SEEN_REPLAYED, SEEN_FORKED):
             # Including the R-02 fork, which is a CONTINUATION rather than an
             # overlap. It matters most there: an overlapping fork at least
             # collides with positions the ledger already holds, while a
@@ -2196,6 +2236,17 @@ class _Stream:
     # Every session whose records came from this stream. A whole-stream replay
     # implicates all of them, unlike a gap, which implicates the two either side.
     sessions_seen: set[str] = field(default_factory=set)
+    # R-03. What this stream's OWN evidence did, as opposed to what the sessions
+    # it fed concluded. The ledger has to decide whether to remember a stream,
+    # and a session is fed by many streams: judging stream A on a code raised by
+    # stream B would refuse to advance for a reason that has nothing to do with
+    # it, and the next run would then read A as a replay.
+    codes: set[str] = field(default_factory=set)
+    signatures_verified: int = 0
+    # Records consumed for this stream that reached no scored session, because
+    # assembly dropped them on max_sessions or max_events_per_session. Their
+    # positions were verified and their content was never looked at.
+    unscored_records: int = 0
 
 
 class StreamVerifier:
@@ -2242,6 +2293,10 @@ class StreamVerifier:
         self.signatures_verified = 0
         self.signature_budget_exhausted = False
         self.stream_budget_exhausted = False
+        # R-03. Streams compared against the ledger and deliberately not written
+        # to it, with the reason. Carried into the run summary because a stream
+        # missing from the ledger is indistinguishable from one never seen.
+        self.ledger_refusals: list[dict[str, Any]] = []
         self._pending_total = 0
         self._saw_any_integrity = False
         self._saw_any_signature = False
@@ -2291,7 +2346,7 @@ class StreamVerifier:
         elif integrity.seq < stream.expected:
             # Already accounted for. Either a duplicate delivery or a replay of
             # a record whose position in the chain is taken.
-            state.note(R_SEQUENCE_REPLAY)
+            self._note(state, stream, R_SEQUENCE_REPLAY)
         else:
             self._hold(stream, integrity.seq, body, integrity, session_key, state,
                        when)
@@ -2320,6 +2375,49 @@ class StreamVerifier:
                     and not state.freshness_checked):
                 state.note(R_FRESHNESS_UNVERIFIABLE)
 
+    def _admission(self, stream: _Stream) -> str:
+        """Why this stream may NOT be written to the ledger, or "" if it may.
+
+        R-03. ``record`` used to be called for every stream that had a first and
+        a last sequence, with no requirement that any of it verified. Three ways
+        that poisons the file it is supposed to protect, all reproduced:
+
+        1. UNSIGNED ADMISSION. Under a loaded trust store, a chained-but-unsigned
+           stream -- which needs no key and anyone able to append to the input
+           can write -- was recorded with its head. The genuine signed stream at
+           the same positions then read as ``forked``, so the attacker turned a
+           squatted stream id into a critical finding against the real collector
+           and, worse, made the real one look like the rewrite.
+
+        2. UNSCORED ADMISSION. Assembly drops events past ``max_sessions`` and
+           ``max_events_per_session``, and the verifier had already recorded
+           their positions. With ``--max-sessions 1`` over two sessions the
+           ledger advanced across all six records, so the three belonging to the
+           session nobody scored were marked as already seen. They can now never
+           be scored: re-feeding them reads as a replay.
+
+        3. EVIDENCE THAT DID NOT HOLD. A broken chain, an invalid signature, a
+           revoked or unauthorised key, a stale or future-dated record -- none of
+           it stopped the position being committed as a scored fact.
+
+        The trust store is the switch on the first rule, and that is deliberate.
+        An operator who has loaded no keys has told Cohaera nothing about who may
+        attest, so requiring a verified signature would disable the ledger for
+        every unsigned deployment -- which is most of them, today. Once keys ARE
+        loaded, an unsigned record is not evidence, and the ledger is exactly the
+        place that must not treat it as any.
+        """
+        if stream.unscored_records:
+            return (f"{stream.unscored_records} record(s) were verified and "
+                    f"never scored, because assembly dropped them on a budget")
+        failed = sorted(stream.codes & INADMISSIBLE)
+        if failed:
+            return f"the stream's own evidence did not hold ({', '.join(failed)})"
+        if self.keys.loaded and not stream.signatures_verified:
+            return ("no record on this stream carried a signature this trust "
+                    "store accepts")
+        return ""
+
     def _judge_against_ledger(self) -> None:
         """Compare every stream this run saw with what previous runs recorded.
 
@@ -2347,9 +2445,14 @@ class StreamVerifier:
                 first_prev=stream.first_prev)
             keys = tuple(sorted({k for sid in stream.sessions_seen
                                  for k in self._session(sid).signing_key_ids}))
+            refusal = self._admission(stream)
             self.ledger.record(verdict, stream.first_seq, stream.last_seq,
                                stream.head, self.run_id, self.freshness.as_of,
-                               key_ids=keys)
+                               key_ids=keys, admit=not refusal)
+            if refusal:
+                self.ledger_refusals.append(
+                    {"stream_id": stream.stream_id, "reason": refusal,
+                     "first_seq": stream.first_seq, "last_seq": stream.last_seq})
             code = verdict.code
             for session_key in stream.sessions_seen:
                 if not session_key:
@@ -2362,6 +2465,8 @@ class StreamVerifier:
                     # status that had already called it ordinary advancement.
                     state.note(code)
                     state.replayed_streams.append(verdict.as_dict())
+                if refusal:
+                    state.note(R_LEDGER_NOT_ADVANCED)
                 if verdict.boundary == BOUNDARY_UNSTATED:
                     # Continuous by sequence, and nothing said what it follows.
                     # Reported next to the advancement rather than instead of
@@ -2386,6 +2491,8 @@ class StreamVerifier:
             "stream_budget_exhausted": self.stream_budget_exhausted,
             "freshness": self.freshness.as_dict(),
             "stream_ledger": self.ledger.summary(),
+            "stream_ledger_refusals": self.ledger_refusals[
+                :self.limits.max_evidence_items],
             "stream_summary": self.stream_summary(),
         }
 
@@ -2432,6 +2539,18 @@ class StreamVerifier:
             state = self.sessions[session_key] = SessionIntegrity()
         return state
 
+    @staticmethod
+    def _note(state: SessionIntegrity, stream: _Stream, code: str) -> None:
+        """Record a code against the session AND the stream that raised it.
+
+        R-03. Everything downstream of a record's verification is a fact about
+        two things at once -- the session whose record revealed it, which is what
+        the verdict reports, and the stream it arrived on, which is what the
+        ledger has to judge before it agrees to remember that stream.
+        """
+        state.note(code)
+        stream.codes.add(code)
+
     def _consume(self, stream: _Stream, seq: int, body: str,
                  integrity: Integrity, session_key: str,
                  when: float | None = None) -> None:
@@ -2447,11 +2566,11 @@ class StreamVerifier:
             if integrity.chain != expected_chain:
                 # Localises: this record is where the stream diverged from what
                 # the collector signed.
-                state.note(R_CHAIN_BROKEN)
+                self._note(state, stream, R_CHAIN_BROKEN)
                 if len(state.chain_breaks) < self.limits.max_evidence_items:
                     state.chain_breaks.append(seq)
         if integrity.prev is not None and stream.head and integrity.prev != stream.head:
-            state.note(R_CHAIN_BROKEN)
+            self._note(state, stream, R_CHAIN_BROKEN)
             if len(state.chain_breaks) < self.limits.max_evidence_items:
                 state.chain_breaks.append(seq)
 
@@ -2462,6 +2581,10 @@ class StreamVerifier:
         stream.expected = seq + 1
         stream.last_session = session_key
         stream.sessions_seen.add(session_key)
+        if not session_key:
+            # R-03. Assembly attributes a dropped event to no session, so this
+            # record's position was verified and its content was never scored.
+            stream.unscored_records += 1
         # Snapshot the head the instant this run passes the sequence the ledger
         # last recorded. Taken here rather than at finalise because by then the
         # head has advanced and the comparison is no longer possible.
@@ -2472,7 +2595,7 @@ class StreamVerifier:
         if integrity.signed:
             self._check_signature(stream, seq, integrity, state, when)
         elif self.keys.loaded:
-            state.note(R_UNSIGNED)
+            self._note(state, stream, R_UNSIGNED)
 
     def _check_signature(self, stream: _Stream, seq: int, integrity: Integrity,
                          state: SessionIntegrity, when: float | None) -> None:
@@ -2505,7 +2628,7 @@ class StreamVerifier:
             return
         key = self.keys.get(integrity.key_id)
         if key is None:
-            state.note(R_KEY_UNKNOWN)
+            self._note(state, stream, R_KEY_UNKNOWN)
             state.unknown_key_ids.add(str(integrity.key_id))
             return
         state.signing_key_ids.add(key.key_id)
@@ -2514,10 +2637,10 @@ class StreamVerifier:
             # wrong key into the collector, or somebody is attesting the stream
             # with a key that was trusted for something else entirely -- and the
             # second is why the roles exist.
-            state.note(R_KEY_WRONG_ROLE)
+            self._note(state, stream, R_KEY_WRONG_ROLE)
             return
         if key.revoked:
-            state.note(R_KEY_REVOKED)
+            self._note(state, stream, R_KEY_REVOKED)
             return
         if self.signatures_verified >= self.limits.max_signature_verifications:
             self.signature_budget_exhausted = True
@@ -2527,22 +2650,28 @@ class StreamVerifier:
         state.signatures_verified += 1
         message = signing_input(stream.stream_id, seq, integrity.chain or "")
         if not ed25519.verify(key.public, message, integrity.sig or b""):
-            state.note(R_SIGNATURE_INVALID)
+            self._note(state, stream, R_SIGNATURE_INVALID)
             if len(state.bad_signatures) < self.limits.max_evidence_items:
                 state.bad_signatures.append(seq)
             return
+        # Counted only here, after every reason the signature could have failed
+        # to establish anything has been ruled out. R-03 reads this to decide
+        # whether the ledger may remember the stream, so an increment anywhere
+        # earlier would let an unauthorised or invalid signature buy admission.
+        stream.signatures_verified += 1
 
         if key.windowed:
             inside = key.covers_clock(when)
             if inside is None:
                 state.note(R_KEY_WINDOW_UNCHECKED)
             elif not inside:
-                state.note(R_KEY_NOT_YET_VALID
+                self._note(state, stream,
+                           R_KEY_NOT_YET_VALID
                            if key.not_before is not None and when is not None
                            and when < key.not_before else R_KEY_EXPIRED)
-        self._check_freshness(state, when)
+        self._check_freshness(state, stream, when)
 
-    def _check_freshness(self, state: SessionIntegrity,
+    def _check_freshness(self, state: SessionIntegrity, stream: _Stream,
                          when: float | None) -> None:
         """Age one signature-verified record against the operator's bound."""
         if not self.freshness.enabled:
@@ -2558,21 +2687,21 @@ class StreamVerifier:
             if (state.furthest_future_s is None
                     or ahead > state.furthest_future_s):
                 state.furthest_future_s = ahead
-            state.note(R_FROM_FUTURE)
+            self._note(state, stream, R_FROM_FUTURE)
         if self.freshness.stale(when):
-            state.note(R_STALE)
+            self._note(state, stream, R_STALE)
 
     def _hold(self, stream: _Stream, seq: int, body: str, integrity: Integrity,
               session_key: str, state: SessionIntegrity,
               when: float | None = None) -> None:
         if seq in stream.pending:
-            state.note(R_SEQUENCE_REPLAY)
+            self._note(state, stream, R_SEQUENCE_REPLAY)
             return
         if self._pending_total >= self.limits.max_reorder_window:
             # The buffer is full and the missing records have not arrived. Call
             # the gap, resync, and record that the decision was forced by a
             # bound rather than by evidence.
-            state.note(R_REORDER_BUDGET)
+            self._note(state, stream, R_REORDER_BUDGET)
             self._force(stream)
             self._drain(stream, reordered=False)
             if seq == stream.expected:
@@ -2620,7 +2749,7 @@ class StreamVerifier:
                 if not key:
                     continue
                 state = self._session(key)
-                state.note(R_SEQUENCE_GAP)
+                self._note(state, stream, R_SEQUENCE_GAP)
                 if len(state.gaps) < self.limits.max_evidence_items:
                     state.gaps.append(dict(gap))
             # Resync on the surviving record's own declared predecessor. Without

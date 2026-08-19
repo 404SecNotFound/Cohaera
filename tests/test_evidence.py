@@ -99,6 +99,7 @@ from cohaera.evidence import (
     R_KEY_UNKNOWN,
     R_KEY_WINDOW_UNCHECKED,
     R_KEY_WRONG_ROLE,
+    R_LEDGER_NOT_ADVANCED,
     R_NO_COLLECTOR_KEYS,
     R_NO_STREAM_LEDGER,
     R_PARTIAL_INTEGRITY,
@@ -112,6 +113,7 @@ from cohaera.evidence import (
     R_STREAM_FORKED,
     R_STREAM_REPLAYED,
     R_STREAM_SKIPPED_RECORDS,
+    R_UNSIGNED,
     RECEIPT_SCHEMA,
     ROLE_COLLECTOR,
     ROLE_POLICY,
@@ -144,7 +146,7 @@ from cohaera.evidence import (
     stream_sha256,
     verify_policy_signature,
 )
-from cohaera.ingest import assemble, read_events
+from cohaera.ingest import assemble, load, read_events
 from cohaera.limits import (
     DEFAULT_LIMITS,
     DEFECT_APPROVAL_TYPE,
@@ -2574,6 +2576,199 @@ def test_an_undeclared_boundary_advances_but_never_reads_as_checked(tmp_path):
     assert verdict.boundary == "unstated"
     assert verdict.boundary != "match"
     assert R_STREAM_BOUNDARY_UNVERIFIED not in INADMISSIBLE
+
+
+# R-03. Admission. `record` used to be called for every stream that had a first
+# and a last sequence, with no requirement that any of it verified -- so the file
+# that exists to say "these streams were scored" recorded streams that were not.
+
+
+def _chain_only(records: list[dict], stream_id: str) -> list[dict]:
+    """Chained and NOT signed. No key needed; anyone who can append can write it."""
+    head = chain_seed(stream_id, "")
+    out = []
+    for seq, record in enumerate(records):
+        body = {k: v for k, v in record.items() if k != "integrity"}
+        prev = head
+        head = chain_step(prev, body_digest(body))
+        out.append({**body, "integrity": {
+            "scheme": INTEGRITY_SCHEMA, "stream_id": stream_id, "seq": seq,
+            "prev": prev, "chain": head}})
+    return out
+
+
+def test_an_unsigned_stream_does_not_claim_a_position_in_the_ledger(tmp_path):
+    """R-03, path 1, and the acceptance case from the review.
+
+    Under a LOADED trust store, a chained-but-unsigned stream was written to the
+    ledger with its head. Nothing signs it and nothing needs to: chaining is
+    arithmetic, so anyone who can append to the input can produce it. The
+    genuine signed stream then arrived at the same positions with a different
+    head and read as ``forked`` -- so squatting a stream id turned into a
+    critical finding against the real collector, and the real collector was the
+    one that looked like the rewrite.
+    """
+    path = tmp_path / "seen.json"
+    unsigned = _chain_only(_records(4), "stream-a")
+    state, ledger = _scored(unsigned, path, run_id="run-1")
+
+    assert KEYS.loaded, "the rule is conditional on the operator having said who may attest"
+    assert "stream-a" not in ledger.streams, (
+        "an unsigned stream must not be remembered as scored")
+    assert R_LEDGER_NOT_ADVANCED in state.codes
+    assert R_UNSIGNED in state.codes
+
+    genuine, _ = _scored(sign_stream(_records(4), "stream-a", SECRET, KEY_ID),
+                         path, run_id="run-2")
+    assert R_STREAM_FORKED not in genuine.codes, (
+        "the real collector must not be accused because a squatter got there "
+        "first")
+    assert R_STREAM_REPLAYED not in genuine.codes
+
+
+def test_with_no_trust_store_the_ledger_still_records_what_it_can(tmp_path):
+    """The switch, and why it is where it is.
+
+    An operator who has loaded no keys has told Cohaera nothing about who may
+    attest, so requiring a verified signature would turn the ledger off for
+    every unsigned deployment -- which is most of them today, and the replay it
+    catches is worth having even on evidence nobody signed. Once keys ARE
+    loaded, an unsigned record is not evidence and the ledger must not treat it
+    as any.
+    """
+    path = tmp_path / "seen.json"
+    unsigned = _chain_only(_records(4), "stream-a")
+    ledger = StreamLedger.load(path)
+    v = StreamVerifier(keys=TrustStore(), ledger=ledger, run_id="run-1")
+    for raw in unsigned:
+        e = Event(raw=raw)
+        v.observe(e.raw, e.integrity, raw.get("session_id", ""))
+    v.finalise()
+    assert "stream-a" in ledger.streams
+    assert R_LEDGER_NOT_ADVANCED not in v.for_session("sess-1").codes
+
+
+def test_a_stream_whose_evidence_failed_is_not_written_to_the_ledger(tmp_path):
+    """R-03, path 3. A broken chain did not stop the position being committed
+    as a scored fact, so the next run reads the tampered range as a replay and
+    never looks at it again."""
+    path = tmp_path / "seen.json"
+    signed = sign_stream(_records(5), "stream-a", SECRET, KEY_ID)
+    signed[2]["tool_name"] = "object_put"          # edited after signing
+    state, ledger = _scored(signed, path, run_id="run-1")
+
+    assert R_CHAIN_BROKEN in state.codes
+    assert "stream-a" not in ledger.streams
+    assert R_LEDGER_NOT_ADVANCED in state.codes
+
+
+def test_records_dropped_by_a_budget_do_not_advance_the_ledger(tmp_path):
+    """R-03, path 2, reproduced through the real assembly path.
+
+    Assembly drops events past ``max_sessions`` and the verifier had already
+    recorded their stream positions -- correctly, because a dropped record still
+    occupies a position and omitting it would manufacture a gap out of Cohaera's
+    own budget. What was wrong was committing that extent to the ledger: the
+    records of the session nobody scored were marked as already seen, so
+    re-feeding them reads as a replay and they can never be scored at all.
+    """
+    path = tmp_path / "seen.json"
+    interleaved = []
+    for i in range(3):
+        for sid in ("sess-A", "sess-B"):
+            interleaved.append(
+                {"event_type": "tool_start", "session_id": sid,
+                 "timestamp": 1000.0 + i, "span_id": f"sp-{sid}-{i}",
+                 "tool_name": "alert_read", "data": {"action": "invoke_tool"}})
+    signed = sign_stream(interleaved, "stream-a", SECRET, KEY_ID)
+    source = tmp_path / "t.jsonl"
+    source.write_text("\n".join(json.dumps(r) for r in signed) + "\n",
+                      encoding="utf-8")
+
+    ledger = StreamLedger.load(path)
+    sessions = load(source, limits=Limits(max_sessions=1), keys=KEYS,
+                    ledger=ledger, quiet=True)
+    assert len(sessions) == 1, "the fixture must actually hit the budget"
+    assert "stream-a" not in ledger.streams, (
+        "three records were verified and never scored; committing their extent "
+        "would make them unscoreable forever")
+    assert R_LEDGER_NOT_ADVANCED in sessions[0].integrity.codes
+
+
+def test_a_refused_stream_does_not_consume_the_ledgers_budget(tmp_path):
+    """A producer minting an unsigned stream id per record could otherwise
+    exhaust max_ledger_streams with streams it never signed -- and the budget
+    being exhausted is what makes an earlier stream's replay undetectable."""
+    path = tmp_path / "seen.json"
+    limits = Limits(max_ledger_streams=1)
+    ledger = StreamLedger(streams={}, path=path, limits=limits)
+    v = StreamVerifier(keys=KEYS, limits=limits, ledger=ledger, run_id="run-1")
+    for name in ("junk-1", "junk-2", "junk-3"):
+        for raw in _chain_only(_records(2), name):
+            e = Event(raw=raw, limits=limits)
+            v.observe(e.raw, e.integrity, raw.get("session_id", ""))
+    v.finalise()
+
+    assert ledger.streams == {}, "nothing unsigned may take a slot"
+    assert not ledger.budget_exhausted, (
+        "a refused stream must not spend the budget a real one needs")
+
+
+def test_the_refusals_are_named_in_the_run_summary(tmp_path):
+    """A stream absent from the ledger looks exactly like one never seen, so
+    the omission has to be stated rather than inferred."""
+    path = tmp_path / "seen.json"
+    ledger = StreamLedger.load(path)
+    v = StreamVerifier(keys=KEYS, ledger=ledger, run_id="run-1")
+    for raw in _chain_only(_records(3), "stream-a"):
+        e = Event(raw=raw)
+        v.observe(e.raw, e.integrity, raw.get("session_id", ""))
+    v.finalise()
+
+    refusals = v.summary()["stream_ledger_refusals"]
+    assert [r["stream_id"] for r in refusals] == ["stream-a"]
+    assert "signature" in refusals[0]["reason"]
+
+
+def test_the_ledger_is_written_after_the_verdicts_are_emitted(tmp_path):
+    """R-03, path 3, and a deliberate reversal of the old ordering.
+
+    Saving first reasoned that a run dying mid-emission has still SCORED those
+    streams. The other side of that trade is worse: the ledger has advanced past
+    findings nobody ever saw, re-running reports a replay, and the findings are
+    gone. A duplicate alert is noise an analyst dismisses; a missed one is the
+    thing this project exists to prevent.
+
+    Asserted by making emission fail. The ledger must be untouched.
+    """
+    telemetry = tmp_path / "t.jsonl"
+    signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
+    telemetry.write_text("\n".join(json.dumps(r) for r in signed) + "\n",
+                         encoding="utf-8")
+    store = tmp_path / "keys.json"
+    store.write_text(json.dumps({"scheme": TRUST_STORE_SCHEMA, "keys": {
+        KEY_ID: {"key": base64.b64encode(PUBLIC).decode("ascii"),
+                 "roles": [ROLE_COLLECTOR]}}}), encoding="utf-8")
+    path = tmp_path / "seen.json"
+
+    class _Broken:
+        def write(self, _text):
+            raise OSError("the sink went away mid-emission")
+
+        def flush(self):
+            pass
+
+    real_stdout = sys.stdout
+    sys.stdout = _Broken()
+    try:
+        code = cli_main(["score", str(telemetry), "--trust-store", str(store),
+                         "--seen-streams", str(path)])
+    finally:
+        sys.stdout = real_stdout
+
+    assert code == EXIT_ERROR, "a failed emission is a failed run"
+    assert not path.exists() or "stream-a" not in StreamLedger.load(path).streams, (
+        "a run that died while emitting must leave the input re-scoreable")
 
 
 # R-04. Concurrency. The write was atomic and the read-modify-write around it
