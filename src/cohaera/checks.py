@@ -40,6 +40,7 @@ from typing import Any
 
 from .capabilities import CapabilityManifest
 from .evidence import (
+    BINDING_CONTEXT,
     BINDING_TRUSTED,
     BOUND_ARG_MISMATCH,
     BOUND_EXACT,
@@ -1101,6 +1102,16 @@ def _approval_state(session: Session, call: ToolCall) -> tuple[str, Any]:
     for m in matches:
         if m.fresh is False:
             return APPROVAL_EXPIRED, m
+    # R-10. Ordered last of the failure states deliberately. A mismatch and an
+    # expiry are things the approval SAYS that rule this call out; an incomplete
+    # binding is a thing the approval does not say, and the two must not be
+    # rounded together. It sits above APPROVAL_NONE because an approval that was
+    # presented and did not fit is a stronger fact than no approval at all --
+    # which is the same reason approvals_for returns these rather than dropping
+    # them.
+    for m in matches:
+        if m.binding in BINDING_CONTEXT:
+            return APPROVAL_SPAN_ONLY, m
     return APPROVAL_NONE, None
 
 
@@ -1109,12 +1120,17 @@ APPROVAL_COVERED = "approved"
 APPROVAL_DENIED = "denied"
 APPROVAL_ARG_MISMATCH = "approval_for_other_arguments"
 APPROVAL_EXPIRED = "approval_expired"
+# R-10. An approval naming the span and at most one of the other two fields. It
+# used to be indistinguishable from APPROVAL_COVERED, which meant one field the
+# producer could omit switched CH04 off entirely for that call.
+APPROVAL_SPAN_ONLY = "approval_not_argument_bound"
 
 # The states in which a completed call after a control is NOT covered. Named
-# rather than written as "!= APPROVAL_COVERED" so that adding a sixth state
+# rather than written as "!= APPROVAL_COVERED" so that adding a further state
 # later cannot silently make it count as approval.
 UNAPPROVED_STATES = frozenset({APPROVAL_NONE, APPROVAL_DENIED,
-                               APPROVAL_ARG_MISMATCH, APPROVAL_EXPIRED})
+                               APPROVAL_ARG_MISMATCH, APPROVAL_EXPIRED,
+                               APPROVAL_SPAN_ONLY})
 
 _APPROVAL_WORDING = {
     APPROVAL_NONE: "no approval was presented for it",
@@ -1122,6 +1138,8 @@ _APPROVAL_WORDING = {
     APPROVAL_ARG_MISMATCH: "the only approval naming it was granted for "
                            "different arguments",
     APPROVAL_EXPIRED: "the approval naming it was outside its validity window",
+    APPROVAL_SPAN_ONLY: "the only approval naming it was bound by span alone "
+                        "and does not constrain what the call did",
 }
 
 # Scalar policy fields worth carrying into evidence. An unbounded copy of the
@@ -1268,6 +1286,15 @@ def ch04_guardrail_overrun(session: Session,
             "policy_enforcement_source": source,
             "approved_continuations": len(approved),
             "approval_states": sorted({states[id(c)][0] for c in completed}),
+            # R-10. Which PATH the approvals in play arrived by, not who signed
+            # them. Every approval Cohaera can parse today is in-band, so this
+            # reads the same in every deployment -- which is the point: an
+            # "approved continuation" is the producer's claim that a decision
+            # was made, and the verdict now says so in a field rather than in a
+            # docstring. See evidence.APPROVAL_ORIGIN_IN_BAND.
+            "approval_origins": sorted(
+                {m.approval.origin for c in completed + approved
+                 if (m := states[id(c)][1]) is not None}),
         }
 
         if enforcement == ENFORCEMENT_ADVISORY:
@@ -1610,6 +1637,14 @@ def ch06_evidence_integrity(session: Session,
 CH07_FAMILY = "CH07_effect_contradiction"
 CH07_CONTRADICTED = "CH07_reported_failure_with_effect_receipt"
 CH07_UNBOUND = "CH07_effect_receipt_does_not_bind"
+# R-01. Distinct from CH07_UNBOUND, and the distinction is the doctrine rather
+# than a taxonomy preference. A receipt that names a DIFFERENT span, tool or
+# argument digest actively disagrees with the call it arrived on, which is what
+# a receipt copied off another call looks like. A receipt that simply omits a
+# field disagrees with nothing -- it constrains nothing. Absent is not weaker;
+# it is a different fact, and reporting the second as the first would invent an
+# accusation against every adapter that has not implemented argument digests.
+CH07_PARTIAL = "CH07_effect_receipt_partially_bound"
 
 
 def _receipted_calls(session: Session) -> list[ToolCall]:
@@ -1617,7 +1652,16 @@ def _receipted_calls(session: Session) -> list[ToolCall]:
 
 
 def _receipt_binding(call: ToolCall) -> str:
-    """How well this call's receipt binds to it. See evidence.Binding."""
+    """How well this call's receipt binds to it. See evidence.Binding.
+
+    R-01. This used to return ``BOUND_EXACT`` whenever the two argument digests
+    agreed, whatever else the binding did or did not name, and ``BOUND_SPAN_ONLY``
+    -- then a trusted value -- whenever it could not compare them at all. Both
+    halves were wrong in the same direction. A receipt naming only the arguments
+    is a receipt that names no call; a receipt naming nothing is not a binding.
+    Each of the three fields is now either CHECKED or the result is not exact,
+    and "the field was absent" is never the same answer as "the field matched".
+    """
     receipt = call.receipt
     if receipt is None:
         return BOUND_NONE
@@ -1626,9 +1670,10 @@ def _receipt_binding(call: ToolCall) -> str:
         return BOUND_NONE
     if b.tool_id and b.tool_id != call.name:
         return BOUND_NONE
-    if b.arg_digest and call.arg_digest:
-        return (BOUND_EXACT if b.arg_digest == call.arg_digest
-                else BOUND_ARG_MISMATCH)
+    if b.arg_digest and call.arg_digest and b.arg_digest != call.arg_digest:
+        return BOUND_ARG_MISMATCH
+    if b.complete and call.span_id and call.arg_digest:
+        return BOUND_EXACT
     return BOUND_SPAN_ONLY
 
 
@@ -1660,16 +1705,29 @@ def ch07_effect_contradiction(session: Session,
 
     contradicted: list[ToolCall] = []
     unbound: list[ToolCall] = []
+    partial: list[ToolCall] = []
     for c in receipted:
         binding = _receipt_binding(c)
-        if binding not in BINDING_TRUSTED:
+        if binding in BINDING_TRUSTED:
+            if not c.executed:
+                # ``not executed`` rather than ``result == failure``: an orphan
+                # or duplicate terminal event carrying a bound receipt is the
+                # same contradiction wearing a different pairing state, and
+                # enumerating the states would leave the next one added
+                # silently uncovered.
+                contradicted.append(c)
+        elif binding in BINDING_CONTEXT:
+            # R-01. Incomplete, so it cannot carry a contradiction -- but it is
+            # reported only where the trust decision actually changed, on a call
+            # whose telemetry did NOT report success. A partial receipt on a
+            # completed call is a producer-shape gap and belongs in coverage:
+            # emitting a finding per call would put every adapter that has not
+            # implemented argument digests on the pager, which is the same
+            # mistake as a finding per receiptless call.
+            if not c.executed:
+                partial.append(c)
+        else:
             unbound.append(c)
-        elif not c.executed:
-            # ``not executed`` rather than ``result == failure``: an orphan or
-            # duplicate terminal event carrying a bound receipt is the same
-            # contradiction wearing a different pairing state, and enumerating
-            # the states would leave the next one added silently uncovered.
-            contradicted.append(c)
 
     findings: list[Finding] = []
     if contradicted:
@@ -1723,6 +1781,36 @@ def ch07_effect_contradiction(session: Session,
             ),
             evidence={"unbound": shown, "unbound_truncated": dropped,
                       "unbound_total": len(unbound),
+                      "receipted_calls": len(receipted)},
+        ))
+
+    if partial:
+        shown, dropped = cap_list(
+            [{**c.brief(limits),
+              "receipt": c.receipt.as_dict() if c.receipt else None,
+              "binding": _receipt_binding(c)} for c in partial],
+            limits.max_evidence_items)
+        findings.append(Finding(
+            check=CH07_PARTIAL,
+            family=CH07_FAMILY,
+            severity="low",
+            session_id=session.session_id,
+            title="Effect receipt on a call that did not report success is "
+                  "incompletely bound",
+            detail=(
+                f"{len(partial)} call(s) did not report success and carry an "
+                "effect receipt that names only part of the call. Nothing here "
+                "disagrees with anything -- the receipt does not name a "
+                "different span, tool or arguments, it declines to name them, "
+                "so it cannot establish that the effect belongs to THIS call. "
+                "Before the binding rule was tightened this reported as a "
+                "critical contradiction on the strength of a binding that had "
+                "never been checked. It is reported at all because the shape is "
+                "worth an analyst's attention and the remedy is one field on "
+                "the adapter, not because the effect has been established."
+            ),
+            evidence={"partial": shown, "partial_truncated": dropped,
+                      "partial_total": len(partial),
                       "receipted_calls": len(receipted)},
         ))
     return findings
@@ -1782,6 +1870,11 @@ R_FIELD_DEFECTS = "RECORD_FIELD_DEFECTS_PRESENT"
 # P1. The three absences that are now STATED rather than passed over.
 R_NO_APPROVAL_EVIDENCE = "NO_APPROVAL_EVIDENCE"
 R_APPROVAL_NOT_ARGUMENT_BOUND = "APPROVAL_BOUND_BY_SPAN_ONLY"
+# R-01, the receipt half of the same gap. Its approval twin above has existed
+# since P1.3; the receipt side had none, so a deployment whose adapter emitted
+# no argument digest was told CH07 was fully covered while CH07 could not have
+# established a contradiction against any call in the session.
+R_RECEIPT_NOT_ARGUMENT_BOUND = "RECEIPT_BOUND_BY_SPAN_ONLY"
 R_ENFORCEMENT_FROM_PRODUCER = "POLICY_ENFORCEMENT_DECLARED_IN_BAND"
 R_NO_EFFECT_RECEIPT = "NO_EFFECT_RECEIPT"
 R_DANGLING_APPROVAL = "APPROVAL_MATCHES_NO_CALL"
@@ -2446,18 +2539,47 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
         r7 = common_reasons + class_reasons()
         if share < 1.0:
             r7.append(R_NO_EFFECT_RECEIPT)
+        # R-01. The share of receipts that could actually carry the check's one
+        # conclusion. A receipt bound by span alone cannot establish that an
+        # effect belongs to the call it arrived on, so it buys presence, not
+        # coverage -- and the difference has to reach the contract, or a
+        # deployment that emits partial bindings everywhere reads as fully
+        # evaluated while CH07 is structurally unable to fire.
+        #
+        # Half weight per loose receipt, not zero, and the difference is a real
+        # distinction rather than a fudge. A span-only receipt cannot carry the
+        # contradiction -- but CH07 still reads it and still reports on it, as
+        # CH07_PARTIAL and as CH07_UNBOUND when it names a different call. A
+        # session with nothing but loose receipts is degraded, not blind, and
+        # scoring it 0.0 would put a not_evaluated contract in the same verdict
+        # as a finding the check had just produced.
+        loose = [c for c in receipted
+                 if _receipt_binding(c) in BINDING_CONTEXT]
+        if loose:
+            r7.append(R_RECEIPT_NOT_ARGUMENT_BOUND)
+            conf *= 1.0 - 0.5 * len(loose) / len(receipted)
         if any(c.arg_digest_disagrees for c in session.tool_calls):
             conf *= 0.5
             r7.append(R_ARG_DIGEST_CONTRADICTS)
+        remedies = []
+        if share < 1.0:
+            remedies.append(
+                f"{effectful_total - len(receipted)} consequential or "
+                "unclassified call(s) carry no receipt; their reported "
+                "outcome is unfalsifiable.")
+        if loose:
+            remedies.append(
+                f"{len(loose)} receipt(s) name the span but not the argument "
+                "digest. A receipt that does not constrain the arguments "
+                "cannot establish that an effect belongs to this call; emit "
+                "arg_digest on the binding.")
         contracts.append(CheckContract(
             check=CH07_FAMILY,
             status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
             confidence=conf, required_surfaces=required,
             present_surfaces=required, missing_surfaces=[],
             reasons=r7,
-            remedies=([f"{effectful_total - len(receipted)} consequential or "
-                       "unclassified call(s) carry no receipt; their reported "
-                       "outcome is unfalsifiable."] if share < 1.0 else []),
+            remedies=remedies,
             assumptions=["A receipt is not verified with the authority that "
                          "minted it. Cohaera is offline; it checks that the "
                          "receipt BINDS to this call, not that it is real."]))
@@ -2524,7 +2646,7 @@ ALL_CHECKS = ["CH01_sequence_order", "CH02_concealment_gap",
               CH04_COMPLETED, CH04_ATTEMPTED, CH04_BYPASSED,
               "CH05_unpaired_calls",
               CH06_INTEGRITY,
-              CH07_CONTRADICTED, CH07_UNBOUND]
+              CH07_CONTRADICTED, CH07_UNBOUND, CH07_PARTIAL]
 
 # check id -> the coverage contract that governs it
 CHECK_FAMILIES = {
@@ -2539,6 +2661,7 @@ CHECK_FAMILIES = {
     CH06_INTEGRITY: CH06_INTEGRITY,
     CH07_CONTRADICTED: CH07_FAMILY,
     CH07_UNBOUND: CH07_FAMILY,
+    CH07_PARTIAL: CH07_FAMILY,
 }
 
 

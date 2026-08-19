@@ -45,14 +45,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from cohaera import ed25519
 from cohaera.capabilities import CapabilityManifest
 from cohaera.checks import (
+    APPROVAL_SPAN_ONLY,
     CH04_BYPASSED,
     CH04_COMPLETED,
     CH06_INTEGRITY,
     CH07_CONTRADICTED,
+    CH07_PARTIAL,
     CH07_UNBOUND,
     EVIDENCE_INADMISSIBLE,
     EVIDENCE_UNATTESTED,
     EVIDENCE_VERIFIED,
+    R_RECEIPT_NOT_ARGUMENT_BOUND,
     ch04_guardrail_overrun,
     ch06_evidence_integrity,
     ch07_effect_contradiction,
@@ -63,7 +66,12 @@ from cohaera.checks import (
 from cohaera.cli import EXIT_ERROR, EXIT_OK
 from cohaera.cli import main as cli_main
 from cohaera.evidence import (
+    APPROVAL_ORIGIN_IN_BAND,
     APPROVAL_SCHEMA,
+    BINDING_CONTEXT,
+    BINDING_TRUSTED,
+    BOUND_EXACT,
+    BOUND_SPAN_ONLY,
     INTEGRITY_SCHEMA,
     LEDGER_SCHEMA,
     NO_FRESHNESS,
@@ -107,6 +115,7 @@ from cohaera.evidence import (
     W_ROTATION_CYCLE,
     W_SUPERSEDED_OPEN,
     Approval,
+    Binding,
     EffectReceipt,
     Freshness,
     Integrity,
@@ -958,6 +967,75 @@ def test_an_expired_approval_is_not_an_approval():
     assert findings[0].evidence["approval_states"] == ["approval_expired"]
 
 
+# R-10. The approval half of the same fault. ``Approval.parse`` already refuses
+# a subject with no span, so the reachable incomplete subsets are the three that
+# name one.
+_INCOMPLETE_SUBJECTS = [
+    {"span_id": "sp-send"},
+    {"span_id": "sp-send", "tool_id": "send_email"},
+    {"span_id": "sp-send", "arg_digest": arg_digest(ARGS)},
+]
+
+
+@pytest.mark.parametrize("subject", _INCOMPLETE_SUBJECTS,
+                         ids=lambda s: "+".join(sorted(s)))
+def test_an_incompletely_bound_approval_does_not_suppress_a_bypass(subject):
+    """An approval for ``send_email`` covers ``send_email`` to anyone.
+
+    That is the failure argument binding exists to prevent, and until R-10 a
+    span-only approval silenced CH04 outright -- the check reported nothing at
+    all, rather than reporting a bypass approved on weaker evidence than the
+    schema was designed to carry.
+    """
+    s = _session(enforcement="blocking", approval=_approval(subject=subject))
+    findings = ch04_guardrail_overrun(s)
+    assert [f.check for f in findings] == [CH04_BYPASSED]
+    assert findings[0].evidence["approval_states"] == [APPROVAL_SPAN_ONLY]
+
+
+def test_an_incompletely_bound_approval_is_not_a_covering_approval():
+    s = _session(enforcement="blocking",
+                 approval=_approval(subject={"span_id": "sp-send",
+                                             "tool_id": "send_email"}))
+    call = s.tool_calls[0]
+    assert s.approvals_for(call)          # it was presented
+    assert s.covering_approval(call) is None   # it does not cover
+
+
+def test_an_approval_is_recorded_as_a_claim_with_its_origin():
+    """An in-band approval is an approval CLAIM.
+
+    It arrives on the same event stream the agent produces, so "approved" in a
+    verdict is the producer's assertion that a decision was made, not an
+    authorization fact Cohaera established. The origin is emitted so an analyst
+    can tell the two apart without reading this docstring.
+    """
+    s = _session(enforcement="blocking", approval=_approval())
+    call = s.tool_calls[0]
+    covering = s.covering_approval(call)
+    assert covering is not None
+    assert covering.approval.origin == APPROVAL_ORIGIN_IN_BAND
+    assert covering.approval.as_dict()["approval_origin"] == APPROVAL_ORIGIN_IN_BAND
+    findings = ch04_guardrail_overrun(_session(enforcement="blocking"))
+    assert findings[0].evidence["approval_origins"] == []
+
+
+def test_a_span_only_denial_still_annotates_rather_than_silencing():
+    """Precedence is unchanged for refusals, but the binding is not.
+
+    A DENY that does not name the arguments is still a refusal presented for
+    this span, and a completed call after one is still worth reporting -- but it
+    is reported as a weaker claim than a DENY bound to the exact arguments.
+    """
+    s = _session(enforcement="blocking",
+                 approval=_approval(decision="deny",
+                                    subject={"span_id": "sp-send",
+                                             "tool_id": "send_email"}))
+    findings = ch04_guardrail_overrun(s)
+    assert [f.check for f in findings] == [CH04_BYPASSED]
+    assert findings[0].evidence["approval_states"] == [APPROVAL_SPAN_ONLY]
+
+
 def test_an_explicit_denial_is_a_bypass_even_on_an_advisory_control():
     """A refusal naming the exact call outranks the control's own semantics.
 
@@ -1086,6 +1164,98 @@ def test_a_receipt_for_different_arguments_does_not_bind():
     findings = ch07_effect_contradiction(
         _call_session("failure", _receipt(), call_args=OTHER_ARGS))
     assert [f.check for f in findings] == [CH07_UNBOUND]
+
+
+# R-01. Every PROPER subset of {span_id, tool_id, arg_digest}. A binding that
+# omits any of the three constrains less than the checks reading it assume, and
+# the seven of them are enumerated rather than sampled because the fault was
+# that one unenumerated combination -- all three absent -- reached a critical
+# finding.
+_INCOMPLETE_BINDINGS = [
+    {},
+    {"span_id": "sp-1"},
+    {"tool_id": "send_email"},
+    {"arg_digest": arg_digest(ARGS)},
+    {"span_id": "sp-1", "tool_id": "send_email"},
+    {"span_id": "sp-1", "arg_digest": arg_digest(ARGS)},
+    {"tool_id": "send_email", "arg_digest": arg_digest(ARGS)},
+]
+
+
+@pytest.mark.parametrize("binding", _INCOMPLETE_BINDINGS,
+                         ids=lambda b: "+".join(sorted(b)) or "empty")
+def test_an_incompletely_bound_receipt_is_never_a_contradiction(binding):
+    """The R-01 matrix.
+
+    ``BINDING_TRUSTED`` used to contain ``bound_span_only``, so a receipt that
+    named nothing at all -- or named two of the three fields -- carried the
+    same authority as one bound to the exact call and the exact arguments. A
+    contradiction is a claim that the record disagrees with itself, and it can
+    only be made about a receipt that provably refers to THIS call.
+    """
+    findings = ch07_effect_contradiction(
+        _call_session("failure", _receipt(binding=binding)))
+    assert CH07_CONTRADICTED not in [f.check for f in findings]
+
+
+def test_a_receipt_with_an_empty_binding_is_not_a_receipt():
+    """R-01 as the review reproduced it, at the parse boundary.
+
+    A failed egress call carrying a valid authority, kind and identifier and
+    ``binding: {}`` produced a trusted receipt and a critical CH07
+    contradiction. An empty object is not a binding; the receipt is rejected
+    and the defect is recorded, per the rejection-vs-defect rule.
+    """
+    s = _call_session("failure", _receipt(binding={}))
+    assert s.tool_calls[0].receipt is None
+    assert ch07_effect_contradiction(s) == []
+    assert Binding.parse({}, DEFAULT_LIMITS) is None
+    parsed, codes = EffectReceipt.parse(_receipt(binding={}), DEFAULT_LIMITS)
+    assert parsed is None and DEFECT_RECEIPT_TYPE in codes
+
+
+def test_a_partially_bound_receipt_on_a_failed_call_is_reported_as_itself():
+    """Not a contradiction, and not silence either.
+
+    A receipt that names the span and the tool but not the arguments, arriving
+    on a call the telemetry reports as failed, is the shape CH07 exists to look
+    at with a field missing. Downgrading it to nothing would lose the only
+    signal there is; calling it a contradiction claims a binding that was never
+    established.
+    """
+    findings = ch07_effect_contradiction(_call_session(
+        "failure", _receipt(binding={"span_id": "sp-1",
+                                     "tool_id": "send_email"})))
+    assert [f.check for f in findings] == [CH07_PARTIAL]
+    assert findings[0].severity == "low"
+    assert findings[0].evidence["partial_total"] == 1
+
+
+def test_a_partially_bound_receipt_on_a_successful_call_is_not_a_finding():
+    """The pager-storm guard.
+
+    Requiring exact binding must not turn every adapter that omits an argument
+    digest into a finding per call. A partial receipt on a call that reported
+    success is a producer-shape gap, and it belongs in coverage.
+    """
+    s = _call_session("success", _receipt(binding={"span_id": "sp-1",
+                                                   "tool_id": "send_email"}))
+    assert ch07_effect_contradiction(s) == []
+    contract = next(c for c in coverage(s, None)["checks"]
+                    if c["check"] == "CH07_effect_contradiction")
+    assert R_RECEIPT_NOT_ARGUMENT_BOUND in contract["reasons"]
+    assert contract["confidence"] < 1.0
+
+
+def test_span_only_is_context_and_never_trust():
+    """The constant the fault lived in.
+
+    Stated as a test because the two sets are read from different modules and
+    an editor adding a state to the trusted set is exactly how this returns.
+    """
+    assert BINDING_TRUSTED == frozenset({BOUND_EXACT})
+    assert BOUND_SPAN_ONLY in BINDING_CONTEXT
+    assert not (BINDING_TRUSTED & BINDING_CONTEXT)
 
 
 # ---------------------------------------------------------------------------

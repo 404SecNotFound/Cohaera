@@ -1112,36 +1112,45 @@ class Session:
         for a in self._approvals_by_span.get(call.span_id, ()):
             if a.subject.tool_id and a.subject.tool_id != call.name:
                 continue
-            if a.subject.arg_digest and call.arg_digest:
-                binding = (evidence.BOUND_EXACT
-                           if a.subject.arg_digest == call.arg_digest
-                           else evidence.BOUND_ARG_MISMATCH)
+            if (a.subject.arg_digest and call.arg_digest
+                    and a.subject.arg_digest != call.arg_digest):
+                binding = evidence.BOUND_ARG_MISMATCH
+            elif a.subject.complete and call.arg_digest:
+                # All three named by the approval, and all three checked: the
+                # span by the index that produced this list, the tool by the
+                # skip above, the arguments here. Anything less is not exact.
+                binding = evidence.BOUND_EXACT
             else:
-                # Either the approval or the call declined to identify the
-                # arguments. The span still binds; the arguments do not, and a
-                # verdict built on this has to say which of the two it got.
+                # R-10. Either the approval or the call declined to identify
+                # part of the call. The span still binds; what the call DID does
+                # not, and a verdict built on this has to say which of the two
+                # it got -- so this value no longer covers anything, it only
+                # annotates. See evidence.BINDING_TRUSTED.
                 binding = evidence.BOUND_SPAN_ONLY
             out.append(ApprovalMatch(approval=a, binding=binding,
                                      fresh=a.covers_clock(call.started_at)))
         return out
 
     def covering_approval(self, call: ToolCall) -> ApprovalMatch | None:
-        """The strongest ALLOW that actually covers this call, if any.
+        """The ALLOW that actually covers this call, if any.
 
-        Order matters and is the mechanism: an exact argument binding outranks a
-        span-only one, and an approval outside its validity window does not
-        cover anything at all. An expired approval is not an approval.
+        Three things have to hold and each of them was once a way through. The
+        decision has to be ALLOW. The approval has to be inside its validity
+        window -- an expired approval is not an approval. And the binding has to
+        be EXACT: R-10 removed ``bound_span_only`` from
+        ``evidence.BINDING_TRUSTED``, so an approval that names the span and the
+        tool but not the arguments no longer covers a call at all. It is still
+        returned by ``approvals_for`` and still reported, because "an approval
+        was presented and did not constrain this call" is a stronger statement
+        than "no approval was presented" -- it is just not coverage.
         """
-        best: ApprovalMatch | None = None
         for m in self.approvals_for(call):
             if m.approval.decision != evidence.DECISION_ALLOW:
                 continue
             if m.binding not in evidence.BINDING_TRUSTED or m.fresh is False:
                 continue
-            if best is None or (best.binding != evidence.BOUND_EXACT
-                                and m.binding == evidence.BOUND_EXACT):
-                best = m
-        return best
+            return m
+        return None
 
     @property
     def dangling_approvals(self) -> list[Approval]:

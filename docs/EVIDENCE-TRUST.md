@@ -404,9 +404,33 @@ by a human or by a separate job.
 Not authenticity — it cannot. Three things it *can* check, and the third is the
 one that pays for the whole mechanism:
 
-1. **Binding.** `span_id` and `arg_digest` must match the call. Without this a
-   receipt can be copied from a legitimate call onto a malicious one, and the
-   mechanism is decorative.
+1. **Binding.** `span_id`, `tool_id` **and** `arg_digest` must all be present on
+   the receipt and all three must match the call. Without this a receipt can be
+   copied from a legitimate call onto a malicious one, and the mechanism is
+   decorative.
+
+   All three, and the word *present* is the load-bearing one. Until R-01 the
+   trusted set contained `bound_span_only`, so a receipt that named two of the
+   three fields — or, through an empty `binding: {}` object, none of them —
+   carried exactly the authority of one bound to the exact call and the exact
+   arguments. A failed egress call with an empty binding produced a **critical**
+   contradiction resting on a check that had never run. Three outcomes now,
+   and they are different facts rather than degrees of one:
+
+   | Outcome | What it means | What it can do |
+   |---|---|---|
+   | `bound` | all three named and all three matched | may carry the CH07 contradiction |
+   | `unbound` / `arg_mismatch` | names a *different* span, tool or digest | `CH07_effect_receipt_does_not_bind` |
+   | `bound_span_only` | *declines to name* one of the three | `CH07_effect_receipt_partially_bound`, and never a contradiction |
+
+   The second and third rows are separated on purpose. A receipt that disagrees
+   with the call it arrived on is what a copied receipt looks like. A receipt
+   that omits a field disagrees with nothing — it constrains nothing — and
+   reporting the second as the first would accuse every adapter that has not
+   implemented argument digests yet. Absent is not weaker; it is a different
+   fact. The partial case is reported only on calls that did **not** report
+   success, and the cost of a loose binding is carried in CH07's coverage
+   contract as `RECEIPT_BOUND_BY_SPAN_ONLY` rather than as a finding per call.
 2. **Presence.** A consequential call reporting `success` and carrying no
    receipt is now a *stated* gap rather than an accepted claim
    (`NO_EFFECT_RECEIPT`). Reported through coverage, not as a finding, because
@@ -474,15 +498,39 @@ corpus's false positives, and CH04's alert precision is 50%.
 
 ### What Cohaera verifies
 
-1. **Subject binding.** The approval must name this `span_id` *and* match the
-   call's `arg_digest`. This is the whole mechanism: an approval for
-   `send_email` to `alice@example.com` must not cover `send_email` to
-   `attacker@example.net`, and today nothing stops it.
+1. **Subject binding.** The approval must name this `span_id`, this `tool_id`
+   *and* match the call's `arg_digest`. This is the whole mechanism: an approval
+   for `send_email` to `alice@example.com` must not cover `send_email` to
+   `attacker@example.net`.
+
+   The same completeness rule as receipts, and it was the same defect (R-10). A
+   subject naming the span and the tool but not the digest used to *cover* the
+   call, which meant one field the producer could omit switched CH04 off for it
+   entirely — the check reported nothing at all rather than reporting a bypass
+   approved on weaker evidence than the schema was built to carry. An
+   incompletely bound approval is now the state `approval_not_argument_bound`:
+   it is still reported, because "an approval was presented and did not
+   constrain this call" is a stronger statement than "no approval was
+   presented", but it suppresses nothing. It also no longer overrides an
+   **advisory** control the way an exactly-bound `deny` does — a refusal that
+   does not say what it refused cannot outrank the control's own semantics.
 2. **Freshness.** `granted_at ≤ call.started_at ≤ expires_at`. An expired
    approval is not an approval.
 3. **Dangling approvals.** An approval whose subject matches no call in the
    session is reported — it is either a bug in the emitter or an approval
    harvested for reuse.
+3a. **Origin, and what `approved` in a verdict actually asserts.** Every
+   approval Cohaera can parse today arrives **in band**, on the same event
+   stream the agent produces. So an approved continuation is an approval
+   *claim* — the producer's assertion that a decision was made — and not an
+   authorization fact Cohaera established. `granted_by` is a string the producer
+   chose. The verdict carries `approval_origin` (`in_band`) on the approval and
+   `approval_origins` on the CH04 finding so an analyst can see which, without
+   having to know this paragraph. `policy_engine` is defined and emitted by
+   nothing: an out-of-band attested decision is a path that does not exist yet,
+   and it is named for the same reason the unemitted surfaces in `checks.py`
+   are — so an operator can ask whether any of their approvals arrive that way
+   rather than discovering after an incident that none of them do.
 4. **`enforcement`.** With this declared, CH04 finally splits honestly: a
    completed consequential call after a **blocking** policy event with **no
    matching approval** is a bypass and can be called one. After an **advisory**

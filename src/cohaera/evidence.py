@@ -247,11 +247,23 @@ class Binding:
 
     @classmethod
     def parse(cls, obj: Any, limits: Limits) -> Binding | None:
+        """``None`` for anything that names no call at all.
+
+        R-01. This used to return ``Binding(None, None, None)`` for ``{}``,
+        which is not a weak binding -- it is the absence of one, and every
+        caller downstream treated it as a binding that had been checked. An
+        object with no usable field in it is a malformed binding and the record
+        carrying it is rejected with a defect, per the rejection-vs-defect rule
+        in the module docstring.
+        """
         if not isinstance(obj, dict):
             return None
-        return cls(span_id=_short(obj.get("span_id"), limits),
-                   tool_id=_short(obj.get("tool_id"), limits),
-                   arg_digest=digest_text(obj.get("arg_digest")))
+        out = cls(span_id=_short(obj.get("span_id"), limits),
+                  tool_id=_short(obj.get("tool_id"), limits),
+                  arg_digest=digest_text(obj.get("arg_digest")))
+        if not (out.span_id or out.tool_id or out.arg_digest):
+            return None
+        return out
 
 
 # How well a binding held. Ordered from strongest to weakest, because the
@@ -262,7 +274,22 @@ BOUND_SPAN_ONLY = "bound_span_only"    # span and tool matched; args unverifiabl
 BOUND_ARG_MISMATCH = "arg_mismatch"    # span matched, arguments did NOT
 BOUND_NONE = "unbound"                 # names no call in this session
 
-BINDING_TRUSTED = frozenset({BOUND_EXACT, BOUND_SPAN_ONLY})
+# R-01/R-10. ``BOUND_SPAN_ONLY`` used to sit in this set, and that single line
+# was the difference between a mechanism and a decoration. A span-only binding
+# says an identifier was presented for a call with this span and this name; it
+# says nothing whatsoever about WHAT the call did, which is the only question
+# either a receipt or an approval is asked. An approval for send_email to alice
+# covered send_email to an attacker, and a receipt bound to nothing at all
+# raised a critical contradiction.
+#
+# The two sets are separate rather than one ordered list because they answer
+# different questions and are read from different modules. TRUSTED is the only
+# one that may gate a trust decision -- suppressing a finding, or asserting a
+# contradiction. CONTEXT is what an analyst is shown so that "a receipt was
+# present but did not constrain the arguments" stays visible instead of being
+# rounded to silence.
+BINDING_TRUSTED = frozenset({BOUND_EXACT})
+BINDING_CONTEXT = frozenset({BOUND_SPAN_ONLY})
 
 
 # ---------------------------------------------------------------------------
@@ -424,9 +451,29 @@ class EffectReceipt:
 # ---------------------------------------------------------------------------
 
 
+# Where a decision reached Cohaera, which is not the same question as who made
+# it. ``granted_by`` is a string the producer chose; this is the path the record
+# travelled. Every approval Cohaera can parse today arrives IN BAND -- on the
+# same event stream the agent produces -- so an "approved" verdict is the
+# producer's claim that a decision was made, not an authorization fact Cohaera
+# established. POLICY_ENGINE is named and emitted by nothing, exactly as the
+# three unemitted surfaces in checks.py are named: an operator can ask whether
+# any of their approvals arrive out of band instead of discovering after an
+# incident that none of them do.
+APPROVAL_ORIGIN_IN_BAND = "in_band"
+APPROVAL_ORIGIN_POLICY_ENGINE = "policy_engine"
+
+
 @dataclass(frozen=True)
 class Approval:
-    """One policy decision, bound to one call."""
+    """One policy CLAIM, bound to one call.
+
+    Not "one policy decision". The decision was made somewhere Cohaera cannot
+    see; what is in hand is an assertion that it happened, carried on a stream
+    the subject of the decision produced. ``origin`` records which, and it is
+    emitted so that an analyst reading ``approved`` in a verdict can tell the
+    claim from the fact without reading this docstring.
+    """
 
     decision: str
     subject: Binding
@@ -436,6 +483,7 @@ class Approval:
     policy_id: str | None = None
     policy_digest: str | None = None
     enforcement: str = ENFORCEMENT_UNDECLARED
+    origin: str = APPROVAL_ORIGIN_IN_BAND
 
     def covers_clock(self, started_at: float) -> bool | None:
         """Was the call inside this approval's validity window?
@@ -459,7 +507,8 @@ class Approval:
                 "granted_by": self.granted_by, "granted_at": self.granted_at,
                 "expires_at": self.expires_at, "policy_id": self.policy_id,
                 "policy_digest": self.policy_digest,
-                "enforcement": self.enforcement}
+                "enforcement": self.enforcement,
+                "approval_origin": self.origin}
 
     @classmethod
     def parse(cls, obj: Any, limits: Limits = DEFAULT_LIMITS

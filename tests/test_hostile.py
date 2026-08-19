@@ -65,7 +65,7 @@ from cohaera.cli import (
     _write_reject_log_atomic,
     main,
 )
-from cohaera.evidence import RECEIPT_SCHEMA, TrustStore, TrustStoreError
+from cohaera.evidence import RECEIPT_SCHEMA, TrustStore, TrustStoreError, arg_digest
 from cohaera.identity import (
     KIND_ISOLATED_ANON,
     KIND_SCOPED_ANON,
@@ -2205,9 +2205,13 @@ def _rcall(span, name, ts, result="success", reversible=False, receipt=None):
 
 
 def _receipt_on(span, name):
+    """A COMPLETE binding. These tests measure the receipt-coverage
+    denominator, not binding strength: a span-only binding is no longer trusted
+    (R-01) and would move every number here for an unrelated reason."""
     return {"scheme": RECEIPT_SCHEMA, "authority": "eval:ledger",
             "kind": "resource_id", "identifier": f"r-{span}",
-            "binding": {"span_id": span, "tool_id": name}}
+            "binding": {"span_id": span, "tool_id": name,
+                        "arg_digest": arg_digest({"a": 1})}}
 
 
 def _final(text, ts=90.0):

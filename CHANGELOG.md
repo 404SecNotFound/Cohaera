@@ -68,6 +68,42 @@ any diff, so the numbers below are derived rather than claimed.
   re-assembling the same corpus once per regime.
 
 ### Fixed
+- **Receipts and approvals that bound to almost nothing were trusted as if they
+  bound to everything (R-01, R-10).** `BINDING_TRUSTED` contained
+  `bound_span_only`, and `Binding.parse` accepted `{}` as a binding. Together
+  that meant a receipt carrying a valid authority, kind and identifier and an
+  empty `binding` object produced a **critical** CH07 contradiction on a failed
+  egress call — a critical detection resting on a check that had never run — and
+  an approval naming the span and the tool but not the argument digest
+  suppressed CH04 outright, so a bypass approved on evidence the schema was not
+  designed to carry reported as nothing at all. The `Binding` docstring had said
+  for two releases that `arg_digest` "is the only one of the three that
+  constrains what the call actually DID"; the code disagreed with it.
+
+  All three fields must now be present and all three must match for a binding to
+  be trusted. `bound_span_only` moved to a new `BINDING_CONTEXT` set that may be
+  shown to an analyst and may never gate a trust decision, and an empty binding
+  object is rejected as a defect rather than accepted as a weak binding.
+  Verified over all seven proper subsets of {span, tool, arg}, on both paths.
+
+  **Breaking for content, and additive for the record.** A new check ID
+  `CH07_effect_receipt_partially_bound` (`low`) reports a receipt that omits a
+  field on a call that did not report success — kept distinct from
+  `CH07_effect_receipt_does_not_bind`, which is a receipt that names a
+  *different* call, because omission and disagreement are different facts and
+  only the second looks like a copied receipt. A new CH04 approval state
+  `approval_not_argument_bound`. A new CH07 coverage reason
+  `RECEIPT_BOUND_BY_SPAN_ONLY`, which costs half a loose receipt's worth of
+  confidence — degraded rather than blind, because CH07 still reads and reports
+  those receipts. New Sigma rule `cohaera_effect_receipt_partially_bound.yml`.
+  **No evaluation-card number moved**: the corpus emits complete bindings on
+  every receipt and approval, so the fix changes what would happen to a
+  real producer's partial evidence and changes nothing about the measurement.
+- **`approved` in a verdict was an authorization fact and is now an approval
+  claim.** Every approval Cohaera can parse arrives in band, on the stream the
+  agent produces. Approvals now carry `approval_origin` (`in_band`), CH04
+  findings carry `approval_origins`, and `policy_engine` is defined for an
+  out-of-band attested decision that nothing emits yet.
 - **A signature forgery in the bundled Ed25519 verifier, reported by a seventh
   review and reproduced here.** Verification checks `[s]G == R + [k]A`. Supply
   the identity point as `A` and the `[k]A` term vanishes, so any `R = [s]G`

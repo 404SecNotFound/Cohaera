@@ -56,7 +56,11 @@ def test_every_claim_pattern_still_matches_the_readme():
 def test_derived_facts_are_plausible():
     """Guards against a derivation that silently returns zero."""
     assert readme_facts.count_tests() > 100
-    assert readme_facts.count_sigma_rules() == 13
+    # Lower bound, not an equality. This function guards against a derivation
+    # silently returning zero; the exact number is a second copy of a count that
+    # already lives in README.md, and test_content.py enforces the thing that
+    # actually matters -- one rule per emitted check id, in both directions.
+    assert readme_facts.count_sigma_rules() >= 13
     assert readme_facts.count_evasions() >= 13
     # CH01..CH07. CH06 and CH07 arrived with P1 evidence trust and are the
     # first two checks here that read something other than agent behaviour:

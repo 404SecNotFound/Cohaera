@@ -1,0 +1,66 @@
+title: Agent Effect Receipt On A Failed Call Is Incompletely Bound
+id: 5a3e9c07-1d64-4b28-9fe3-8c06b7a41e92
+status: experimental
+description: |
+  A call whose telemetry did not report success carries an effect receipt that
+  names only part of the call -- the span, or the span and the tool, but not the
+  argument digest.
+
+  Nothing here disagrees with anything, and that is the distinction from
+  cohaera_effect_receipt_unbound. An unbound receipt names a DIFFERENT span,
+  tool or argument digest and is the shape of a receipt copied off another call.
+  A partially bound one declines to name them at all, so it cannot establish
+  that the effect belongs to this call in either direction.
+
+  WHY IT EXISTS AS ITS OWN RULE. Cohaera used to treat a binding that named the
+  span alone -- including one that named nothing at all -- as equivalent to one
+  bound to the exact call and the exact arguments, and raised a critical
+  contradiction on the strength of it. That was a critical detection resting on
+  a check that had never run. Requiring an exact binding closed it; this rule is
+  what is left, and it is deliberately low, because the honest reading is almost
+  always an adapter that has not implemented argument digests yet.
+
+  WHAT TO DO WITH IT. Treat it as a telemetry-quality item first: the remedy is
+  one field on the adapter, and it appears in the CH07 coverage contract as
+  RECEIPT_BOUND_BY_SPAN_ONLY with the confidence it cost. Once the adapter emits
+  arg_digest, a call in this shape either becomes a critical contradiction or
+  stops firing, and either answer is worth more than this one.
+
+  Volume note: this fires only on calls that did NOT report success. A partial
+  receipt on a completed call is reported through coverage and not as a finding,
+  because a finding per call would page on every adapter in the estate at once.
+
+  Requires Cohaera and tool adapters emitting cohaera.receipt:1.
+references:
+    - https://github.com/404SecNotFound/Cohaera
+    - https://github.com/404SecNotFound/Cohaera/blob/main/docs/EVIDENCE-TRUST.md
+author: Imran Hafeez
+date: 2026-08-19
+modified: 2026-08-19
+related:
+    - id: 9f4c2b18-7e05-4d3a-8c61-2b7f9e04d5a6
+      type: similar
+    - id: c81d6f45-2a93-4e70-b6c4-9d05e3a7182b
+      type: similar
+logsource:
+    product: cohaera
+    service: session_verdict
+detection:
+    selection:
+        type: 'cohaera_session_verdict'
+        data.triggered_rules|contains: 'CH07_effect_receipt_partially_bound'
+    condition: selection
+fields:
+    - session_id
+    - agent_name
+    - user
+    - host
+    - data.tool_sequence
+    - data.coverage.completeness
+falsepositives:
+    - An adapter that has not implemented argument digests. This is the common
+      case and it affects every receipt the adapter emits, so expect the whole
+      session to fire together rather than one call among many.
+    - A tool whose arguments are stripped on the hot path, so the producer has
+      no digest to declare. The remedy is the same and it is a producer change.
+level: low
