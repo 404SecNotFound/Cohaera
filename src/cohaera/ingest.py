@@ -25,9 +25,10 @@ from __future__ import annotations
 import hashlib
 import sys
 from collections.abc import Iterable, Iterator
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, BinaryIO, cast
 
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest
 from .evidence import (
@@ -54,7 +55,9 @@ from .limits import (
     REJECT_TOO_MANY_REJECTS,
     REJECT_TOO_MANY_SESSIONS,
     REJECT_UNDECODABLE,
+    RESIDENT_BYTES_PER_CONTAINER,
     RESIDENT_BYTES_PER_INPUT_BYTE,
+    RESIDENT_BYTES_PER_KEY,
     Limits,
     json_depth_exceeds,
 )
@@ -64,7 +67,7 @@ from .validate import (
     Reject,
     digest_bytes,
     sanitise_display,
-    strict_json_loads,
+    strict_json_loads_shaped,
 )
 
 __all__ = ["ANON_WINDOW_S", "RawLine", "assemble", "load", "read_events"]
@@ -106,7 +109,8 @@ class RawLine:
 
 
 def _bounded_lines(path: Path, max_bytes: int,
-                   max_total_bytes: int | None = None) -> Iterator[RawLine]:
+                   max_total_bytes: int | None = None,
+                   fh_in: BinaryIO | None = None) -> Iterator[RawLine]:
     """Yield :class:`RawLine` without ever buffering an unbounded line.
 
     ``file.readline()`` reads until a newline arrives, so a producer that never
@@ -128,7 +132,15 @@ def _bounded_lines(path: Path, max_bytes: int,
     """
     consumed = 0        # bytes pulled off the disk
     emitted = 0         # bytes in the records actually yielded
-    with path.open("rb") as fh:
+    # R-07. ``fh_in`` is an ALREADY-OPEN descriptor for this artefact, and the
+    # caller keeps ownership of it -- nullcontext rather than the file, so
+    # leaving this generator does not close a handle somebody else still holds.
+    # It exists so that a caller who has hashed a file can parse the same
+    # inode rather than the same NAME: an atomic rename between the hash and
+    # the parse changes what a path resolves to and cannot touch an open fd.
+    if fh_in is not None:
+        fh_in.seek(0)
+    with (nullcontext(fh_in) if fh_in is not None else path.open("rb")) as fh:
         buf = bytearray()
         hasher: Any = None
         nbytes = 0
@@ -206,7 +218,8 @@ def _bounded_lines(path: Path, max_bytes: int,
 
 def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
                 report: IngestReport | None = None,
-                quiet: bool = False) -> Iterator[Event]:
+                quiet: bool = False,
+                fh: BinaryIO | None = None) -> Iterator[Event]:
     """Yield Events from a JSONL file, quarantining anything that is not one.
 
     C-07 fix, kept: diagnostics go to stderr, because stdout is the JSONL stream
@@ -237,6 +250,9 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
     records_read = 0
     bytes_read = 0
     retained_bytes = 0      # bytes of records that became Events
+    # R-11. What those records BUILT, which the byte count cannot see.
+    retained_containers = 0
+    retained_keys = 0
 
     def _budget_hit() -> tuple[str, str]:
         """The first live budget this run has exhausted, as (code, detail).
@@ -264,11 +280,20 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
         # bytes. Metered on RETAINED bytes, because a rejected record is read
         # and released -- charging the estimate for it would abort honest runs
         # over a noisy producer.
-        resident = retained_bytes * RESIDENT_BYTES_PER_INPUT_BYTE
+        #
+        # R-11. The larger of the byte estimate and the shape estimate. A byte
+        # count cannot see that `[{},{},{}...]` and `[0,1,2...]` are within a
+        # few percent of each other on the wire and an order of magnitude apart
+        # in memory, because an empty object costs sixty-four bytes to say
+        # nothing.
+        resident = max(retained_bytes * RESIDENT_BYTES_PER_INPUT_BYTE,
+                       retained_containers * RESIDENT_BYTES_PER_CONTAINER
+                       + retained_keys * RESIDENT_BYTES_PER_KEY)
         if resident >= limits.max_resident_bytes:
             return REJECT_MEMORY_BUDGET, (
                 f"estimated {resident} resident byte(s) from {retained_bytes} "
-                f"byte(s) of accepted input reaches "
+                f"byte(s) of accepted input building {retained_containers} "
+                f"object(s) with {retained_keys} key(s) reaches "
                 f"max_resident_bytes={limits.max_resident_bytes}")
         if limits.max_rejects is not None and rep.rejected > limits.max_rejects:
             return REJECT_TOO_MANY_REJECTS, (
@@ -289,7 +314,7 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
     # for one more full line -- read, decoded, depth-scanned and hashed -- every
     # time it was checked.
     lines = _bounded_lines(p, limits.max_line_bytes,
-                           max_total_bytes=limits.max_input_bytes)
+                           max_total_bytes=limits.max_input_bytes, fh_in=fh)
     lineno = 0
     while True:
         code, detail = _budget_hit()
@@ -349,7 +374,14 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
             continue
 
         try:
-            obj = strict_json_loads(line)
+            # R-11. Shaped, because the resident estimate needs to know what
+            # the parse BUILT and not only how many bytes it read. The per
+            # record caps are enforced inside the hook, so a line that would
+            # build a hundred thousand objects is refused partway through
+            # building them rather than after.
+            obj, shape = strict_json_loads_shaped(
+                line, max_containers=limits.max_containers_per_record,
+                max_keys=limits.max_keys_per_record)
         except RecursionError:
             # Belt and braces. The depth pre-scan should make this unreachable,
             # but the guarantee must not depend on sys.getrecursionlimit().
@@ -380,7 +412,16 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
 
         e = Event(raw=obj, limits=limits)
         retained_bytes += len(record)
-        rep.resident_bytes = retained_bytes * RESIDENT_BYTES_PER_INPUT_BYTE
+        retained_containers += shape.containers
+        retained_keys += shape.keys
+        # R-11. The larger of the two, because either can dominate and neither
+        # sees what the other measures: a megabyte of prose is all bytes and no
+        # containers, and ten thousand empty objects are all containers and
+        # almost no bytes.
+        rep.resident_bytes = max(
+            retained_bytes * RESIDENT_BYTES_PER_INPUT_BYTE,
+            retained_containers * RESIDENT_BYTES_PER_CONTAINER
+            + retained_keys * RESIDENT_BYTES_PER_KEY)
         rep.note_bytes(record, b"A")
         rep.note_defects(e.defects)
         rep.accepted += 1
@@ -499,10 +540,16 @@ def load(path: str | Path, limits: Limits = DEFAULT_LIMITS,
          quiet: bool = False,
          keys: TrustStore = EMPTY_STORE,
          freshness: Freshness = NO_FRESHNESS,
-         ledger: StreamLedger | None = None) -> list[Session]:
-    """Read and group one telemetry file. The report is filled in as a side effect."""
+         ledger: StreamLedger | None = None,
+         fh: BinaryIO | None = None) -> list[Session]:
+    """Read and group one telemetry file. The report is filled in as a side effect.
+
+    ``fh``, when given, is an open descriptor for ``path`` that the caller has
+    already hashed; ``path`` is then used only for naming. See ``_bounded_lines``
+    and R-07 in the changelog.
+    """
     rep = report if report is not None else IngestReport()
-    events = list(read_events(path, limits=limits, report=rep, quiet=quiet))
+    events = list(read_events(path, limits=limits, report=rep, quiet=quiet, fh=fh))
     return assemble(events, limits=limits, correlator=correlator,
                     manifest=manifest, report=rep, quiet=quiet, keys=keys,
                     freshness=freshness, ledger=ledger)

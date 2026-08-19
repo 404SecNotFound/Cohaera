@@ -1,0 +1,25 @@
+{
+  "schema": "cohaera.capabilities:1",
+  "tools": {
+    "export_customer_data": {
+      "effects": [
+        "egress"
+      ]
+    },
+    "issue_refund": {
+      "effects": [
+        "write"
+      ]
+    },
+    "read_attachment": {
+      "effects": [
+        "read"
+      ]
+    },
+    "search_tickets": {
+      "effects": [
+        "read"
+      ]
+    }
+  }
+}

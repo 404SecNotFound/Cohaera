@@ -140,6 +140,43 @@ integrity, critical) *and* every other finding in the affected session is marked
 as resting on unverified evidence, because a verdict built on a broken chain
 should not be presented at the same confidence as one that is not.
 
+### How far the attestation reached
+
+A signature covers the **chain head at its own sequence**, which is what lets
+one verified signature stand for every record before it — and is why
+`sign_every` exists at all. The corollary went unwritten until R-05: it stands
+for nothing *after* it. A collector signing every hundredth record of a
+150-record batch leaves 49 records chained and attested by nobody.
+
+`evidence_status` used to answer this with `signatures_verified > 0` and return
+`verified`, which is a fact about whether signing happened rather than about
+what it covered. That fixture reported `verified` at CH06 confidence **1.0**.
+The state is now split:
+
+| value | condition |
+|---|---|
+| `verified_complete` | a verified signature reaches the last record of **every** stream feeding the session |
+| `verified_prefix` | signatures verified and stop short; `signature_ranges` carries where |
+
+Every stream, not most — a session assembled from two streams is only as
+attested as its weaker half, and averaging would report the better one. The
+verdict carries `signature_ranges` (`stream_id`, `first_seq`, `last_seq`,
+`verified_to`) rather than a boolean, because *"signed to 100 of 149"* is the
+finding and an analyst asked to trust a session needs to see where the
+attestation stopped. CH06's confidence is multiplied by the record-weighted
+share actually reached, and the contract carries
+`INTEGRITY_SIGNATURE_COVERS_PREFIX_ONLY`.
+
+Two changes on the producer side follow from the same sentence. The reference
+signer now **always signs the final record** — one extra scalar multiplication
+per stream, and without it `verified_complete` is unreachable for any sampled
+stream whose batch does not happen to end on a signing position. And
+`sign_every` must be an integer ≥ 1: `0` used to emit a stream with no signature
+on any record and report success, because `if sign_every and seq % sign_every`
+short-circuits before the modulo could raise, and `-1` signed everything since
+`seq % -1 == 0` always. An operator tuning a sampling rate must not be able to
+switch signing off by typing a number.
+
 ### Coverage additions
 
 A new surface `event_integrity`, and reason codes:
@@ -260,6 +297,38 @@ option into a control: refuse to run unless every supplied policy file carries a
 signature that held. Off by default, because on by default would break every
 existing deployment on the day it shipped.
 
+### One resolution per artefact
+
+A signature is over *bytes*, and a path is not bytes. Until R-07 Cohaera
+resolved each of these files twice — `CapabilityManifest.from_file` opened the
+path and parsed it, then the CLI opened the same path again to hash it for the
+signature; the baseline was hashed by path and then reopened by `load`. An
+atomic rename in the window between the two reads left Cohaera **scoring one
+file and attesting the digest of another**, with the signature holding, because
+it was checked against whichever bytes the second read happened to find. The
+verdict then carried a `POLICY_SIGNATURE_VERIFIED` attestation for a file that
+had not been used — which is worse than no attestation at all, because it is an
+assurance pointing at the wrong thing.
+
+Each artefact is now resolved once, and the two files are handled differently
+because they are different sizes:
+
+- **The manifest** is small and already read whole under `max_manifest_bytes`.
+  `CapabilityManifest.from_bytes` parses and digests one buffer, `from_file` is a
+  thin bounded read in front of it, and the manifest carries the full SHA-256 of
+  the bytes it was parsed from. Nothing downstream touches the path again.
+- **The baseline** is telemetry and may be large, so it is *not* read into
+  memory — that would give up the bounded-memory property `_bounded_lines`
+  exists to hold. Instead the descriptor is opened once, hashed by streaming,
+  rewound and handed to the reader. An open descriptor keeps its inode whatever
+  happens to the path, which closes the same window without the copy. The CLI
+  owns that descriptor for the run so every early return still releases it.
+
+The baseline is hashed only when `--baseline-sig` was supplied. Without a
+signature there is nothing for a second read to disagree with, and hashing
+unconditionally would turn an oversize baseline — which the reader's own budget
+handles by stopping early — into a refusal.
+
 ---
 
 ## 2c. P1.5 — Freshness, and the replay every other check is blind to
@@ -286,6 +355,49 @@ Off by default, and coverage says `NO_FRESHNESS_BOUND` when it is off, because
 the honest default is unknowable: an hour is right for a live tail and wrong for
 a nightly batch, and a bound guessed wrong turns every scheduled run critical.
 
+### The other end of the window
+
+A freshness bound is one-sided by construction: it asks how OLD a record is.
+Until R-13 a record dated *after* `--evidence-as-of` returned "not stale" and
+nothing else — which was the right answer to the wrong question, and the code
+said so in a docstring that called clock skew "somebody else's finding" while
+nobody else made it. A collector whose clock is wrong, or one an attacker holds,
+bought itself unlimited freshness by adding to a number.
+
+A signed record dated more than `--max-future-skew` seconds past `as_of` is now
+`INTEGRITY_EVIDENCE_FROM_FUTURE`, and it is **inadmissible**, not a warning. The
+severity follows from what freshness *is*: the entire argument for trusting the
+timestamp is that it is covered by the chain, the chain by the signature, and a
+replayer holds neither key — they can re-send the bytes and cannot re-date them.
+A record dated after the instant it was scored breaks that argument at the root.
+Whatever produced it was not reading the same clock as the rest of the evidence,
+so every age computed against it is a guess, including the ones that came back
+clean.
+
+It is a separate reason code from `INTEGRITY_EVIDENCE_STALE` because the two
+have different remedies — one is "you are re-feeding an archive", the other is
+"fix NTP on the collector, or find out why it thinks it is next year" — and a
+shared code makes both unguessable.
+
+The default tolerance is 300 seconds, which is what Kerberos has used for
+decades for the same purpose: it absorbs ordinary NTP disagreement between two
+hosts and nothing more. Zero would make every slightly-fast collector
+inadmissible, which is a time-synchronisation problem delivered as a tampering
+alert; an hour would let a wrong clock buy an hour of unearned freshness. Like
+the window itself, it only applies to signature-verified records, and it answers
+`None` rather than `False` when freshness is off — not checked is not "checked
+and fine".
+
+`--evidence-as-of` takes a **finite** float. It used to be `type=float`, and
+`float("nan")` succeeds, so `--evidence-as-of nan` silently switched the whole
+freshness bound off: every comparison against a NaN is false, `enabled` went
+false, the "freshness bound" line never printed, and the run exited zero having
+skipped the one check the operator had gone out of their way to ask for. An
+argument value must never be able to turn a control off quietly — the same
+argument C4-05 made for `positive_int`. `--max-future-skew` is validated the
+same way, and `Limits` refuses a non-finite or negative value directly, because
+the CLI is only one of the doors into it.
+
 **This lowers CH06's coverage confidence on every existing deployment, and that
 is the intended reading.** A session with integrity evidence and no freshness
 bound now reports `degraded` rather than `evaluated`, because replay was not
@@ -296,7 +408,7 @@ number an operator sees goes down after a commit that added a control.
 
 ---
 
-## 2d. P1.6 — The seen-stream ledger, and replay inside the window
+## 2d. P1.6 — The observation ledger, and replay inside the window
 
 **Threat closed:** re-feeding a stream this host has already scored, at any age.
 **Threat not closed:** re-feeding it to a *different* Cohaera host, or deleting
@@ -339,6 +451,88 @@ The fork is the more serious of the two and is not a replay at all: it means
 somebody holding a valid collector key produced a second version of the same
 history. No check inside a single run can see that, because each version is
 internally perfect.
+
+### What earns a stream a place in the ledger
+
+This file is worth exactly as much as the weakest thing allowed to write to it,
+and until R-03 anything with a sequence number could. `record` was called for
+every stream that had a first and a last sequence, with no requirement that any
+of it verified. Three ways that poisoned the file it exists to protect, all
+reproduced against the code:
+
+1. **Unsigned admission.** Under a *loaded* trust store, a chained-but-unsigned
+   stream was recorded with its head. Chaining is arithmetic — nothing signs it
+   and nothing needs to — so anyone who can append to the input can produce one.
+   The genuine signed stream then arrived at the same positions with a different
+   head and read as `forked`. Squatting a stream id turned into a critical
+   finding *against the real collector*, and the real collector was the one that
+   looked like the rewrite.
+2. **Unscored admission.** Assembly drops events past `max_sessions` and
+   `max_events_per_session`, and the verifier had already recorded their
+   positions — correctly, since a dropped record still occupies one and omitting
+   it would manufacture a gap out of Cohaera's own budget. Committing that
+   extent was the error: with `--max-sessions 1` over two sessions the ledger
+   advanced across all six records, so the three belonging to the session nobody
+   scored were marked as already seen and can now never be scored at all.
+3. **Evidence that did not hold.** A broken chain, an invalid signature, a
+   revoked or unauthorised key, a stale or future-dated record — none of it
+   stopped the position being committed as a scored fact.
+
+A stream is now written to the ledger only if every record it carried reached a
+scored session, none of its own evidence was inadmissible, and — **when a trust
+store is loaded** — at least one of its records carried a signature that store
+accepts. The refusal is reported as `STREAM_LEDGER_NOT_ADVANCED` and named in
+`stream_ledger_refusals`, because a stream absent from the ledger looks exactly
+like one never seen.
+
+The trust store is the switch on the first rule and that placement is
+deliberate. An operator who has loaded no keys has told Cohaera nothing about
+who may attest, so requiring a verified signature would turn the ledger off for
+every unsigned deployment — most of them, today — and the replay it catches is
+worth having even on evidence nobody signed. Once keys *are* loaded, an unsigned
+record is not evidence, and the ledger is the last place that should treat it as
+any. A refused stream is also never created, so it cannot spend
+`max_ledger_streams`: a producer minting a stream id per record could otherwise
+exhaust the budget with streams it never signed, and eviction is what makes an
+earlier stream's replay undetectable.
+
+### Concurrency, and what a file lock is
+
+Two runs sharing one ledger used to discard each other's work. The write was
+atomic — mkstemp, fsync, `os.replace` — and the read-modify-write around it was
+not, so both loaded, both scored, and the file left behind held one of the two.
+A two-process test loses an update on most runs.
+
+Runs now take an exclusive `flock` on a `<ledger>.lock` sidecar and hold it for
+the whole run. A sidecar because `os.replace` swaps the inode, so a lock on the
+ledger's own descriptor protects a file that is no longer at that name. For the
+whole run, not just the write, because locking only the write would stop updates
+being lost and would *not* stop the thing the ledger exists to catch — two runs
+scoring the same stream would each read the position before the other wrote it,
+and neither would see the replay. Runs sharing a ledger serialise; a ledger is a
+serialisation point. The wait is bounded and ends in a refusal, because a
+scheduled run that never returns is worse than one that fails.
+
+A monotonic `generation` is the backstop for a lock that was not taken or is not
+honoured — `flock` is advisory, local, and does not travel over NFS. A save
+whose parent generation is not what is on disk is refused rather than merged: a
+merge would have to guess which of two disagreeing histories is real, and
+guessing wrong writes the wrong reference for every run afterwards. **This is a
+single-host file lock, not a distributed transaction.**
+
+### It is an observation ledger, and the name is the claim
+
+It records what Cohaera **observed and scored**. It does not record what any
+downstream sink durably received, and it does **not** provide exactly-once
+scoring. `cohaera score` writes it *after* emitting verdicts, so a run that dies
+mid-emission leaves it unadvanced and re-running re-scores and re-emits —
+duplicates are possible. The reverse ordering was tried first and is worse: it
+advanced past findings nobody ever saw, so re-running reported a replay and the
+findings were simply gone. A duplicate alert is noise an analyst dismisses in
+seconds; a missed one is what this project exists to prevent. Neither ordering
+is exactly-once, and a version that was would need durable sink acknowledgement
+across stdout, files and future SIEM sinks — a design, not a patch, and one that
+is worse done badly than not done. It is named for what it does instead.
 
 **Neither outcome advances the ledger.** Recording a replay's extent would move
 the reference to exactly where the attacker's copy ends, so re-feeding it again
@@ -404,9 +598,64 @@ by a human or by a separate job.
 Not authenticity — it cannot. Three things it *can* check, and the third is the
 one that pays for the whole mechanism:
 
-1. **Binding.** `span_id` and `arg_digest` must match the call. Without this a
-   receipt can be copied from a legitimate call onto a malicious one, and the
-   mechanism is decorative.
+1. **Binding.** `span_id`, `tool_id` **and** `arg_digest` must all be present on
+   the receipt and all three must match the call. Without this a receipt can be
+   copied from a legitimate call onto a malicious one, and the mechanism is
+   decorative.
+
+   All three, and the word *present* is the load-bearing one. Until R-01 the
+   trusted set contained `bound_span_only`, so a receipt that named two of the
+   three fields — or, through an empty `binding: {}` object, none of them —
+   carried exactly the authority of one bound to the exact call and the exact
+   arguments. A failed egress call with an empty binding produced a **critical**
+   contradiction resting on a check that had never run. Three outcomes now,
+   and they are different facts rather than degrees of one:
+
+   | Outcome | What it means | What it can do |
+   |---|---|---|
+   | `bound` | all three named and all three matched | may carry the CH07 contradiction |
+   | `unbound` / `arg_mismatch` | names a *different* span, tool or digest | `CH07_effect_receipt_does_not_bind` |
+   | `bound_span_only` | *declines to name* one of the three | `CH07_effect_receipt_partially_bound`, and never a contradiction |
+
+   The second and third rows are separated on purpose. A receipt that disagrees
+   with the call it arrived on is what a copied receipt looks like. A receipt
+   that omits a field disagrees with nothing — it constrains nothing — and
+   reporting the second as the first would accuse every adapter that has not
+   implemented argument digests yet. Absent is not weaker; it is a different
+   fact. The partial case is reported only on calls that did **not** report
+   success, and the cost of a loose binding is carried in CH07's coverage
+   contract as `RECEIPT_BOUND_BY_SPAN_ONLY` rather than as a finding per call.
+   **What the identifier is worth, separately from whether it binds** (R-17).
+   Binding says *which call* a receipt is about. It says nothing about what the
+   thing on the other end actually attested to, and the reference adapters in
+   `tools/receipt_adapters.py` used to collapse that distinction: each
+   authority declared ONE `kind`, and several candidate paths underneath it
+   answering different questions. Kubernetes `metadata.resourceVersion` and
+   `metadata.uid` both emitted `resource_version` — the first identifies THIS
+   mutation, the second identifies the object for its whole life, so a receipt
+   carrying the second could be presented for any later write to the same
+   object. A GitHub PR `number` is scoped to one repository and reused across
+   forks; a `node_id` is global; both emitted `node_id`. A Jira numeric `id` is
+   not an issue key, and a consumer looking one up found nothing with no way to
+   tell that from a forgery. `pg_current_wal_lsn` is the *cluster's* write
+   position, which moves because anybody wrote at all.
+
+   Every candidate path now declares its own kind and its own assurance, and
+   the assurance travels in the receipt:
+
+   | Assurance | What it means |
+   |---|---|
+   | `provider_returned_operation` | the authority minted this identifier for THIS operation |
+   | `provider_returned_object` | the authority minted it, and it names the object rather than this write |
+   | `client_claimed` | the caller may have generated it — an SMTP `Message-ID` composed locally is not evidence the caller cannot fabricate |
+
+   None of the three is called `verified` or `confirmed`, and that is
+   deliberate: nothing in this project contacts a provider to ask. A fallback
+   path whose security meaning is weaker has to say so in the output, or it is
+   not a fallback — it is a substitution the consumer cannot see. Receipts may
+   also carry a `scope` naming the account, region, tenant, project or
+   repository the identifier lives in, because "stripe" is a company rather
+   than an authority and a charge id is unique within one account.
 2. **Presence.** A consequential call reporting `success` and carrying no
    receipt is now a *stated* gap rather than an accepted claim
    (`NO_EFFECT_RECEIPT`). Reported through coverage, not as a finding, because
@@ -474,15 +723,39 @@ corpus's false positives, and CH04's alert precision is 50%.
 
 ### What Cohaera verifies
 
-1. **Subject binding.** The approval must name this `span_id` *and* match the
-   call's `arg_digest`. This is the whole mechanism: an approval for
-   `send_email` to `alice@example.com` must not cover `send_email` to
-   `attacker@example.net`, and today nothing stops it.
+1. **Subject binding.** The approval must name this `span_id`, this `tool_id`
+   *and* match the call's `arg_digest`. This is the whole mechanism: an approval
+   for `send_email` to `alice@example.com` must not cover `send_email` to
+   `attacker@example.net`.
+
+   The same completeness rule as receipts, and it was the same defect (R-10). A
+   subject naming the span and the tool but not the digest used to *cover* the
+   call, which meant one field the producer could omit switched CH04 off for it
+   entirely — the check reported nothing at all rather than reporting a bypass
+   approved on weaker evidence than the schema was built to carry. An
+   incompletely bound approval is now the state `approval_not_argument_bound`:
+   it is still reported, because "an approval was presented and did not
+   constrain this call" is a stronger statement than "no approval was
+   presented", but it suppresses nothing. It also no longer overrides an
+   **advisory** control the way an exactly-bound `deny` does — a refusal that
+   does not say what it refused cannot outrank the control's own semantics.
 2. **Freshness.** `granted_at ≤ call.started_at ≤ expires_at`. An expired
    approval is not an approval.
 3. **Dangling approvals.** An approval whose subject matches no call in the
    session is reported — it is either a bug in the emitter or an approval
    harvested for reuse.
+3a. **Origin, and what `approved` in a verdict actually asserts.** Every
+   approval Cohaera can parse today arrives **in band**, on the same event
+   stream the agent produces. So an approved continuation is an approval
+   *claim* — the producer's assertion that a decision was made — and not an
+   authorization fact Cohaera established. `granted_by` is a string the producer
+   chose. The verdict carries `approval_origin` (`in_band`) on the approval and
+   `approval_origins` on the CH04 finding so an analyst can see which, without
+   having to know this paragraph. `policy_engine` is defined and emitted by
+   nothing: an out-of-band attested decision is a path that does not exist yet,
+   and it is named for the same reason the unemitted surfaces in `checks.py`
+   are — so an operator can ask whether any of their approvals arrive that way
+   rather than discovering after an incident that none of them do.
 4. **`enforcement`.** With this declared, CH04 finally splits honestly: a
    completed consequential call after a **blocking** policy event with **no
    matching approval** is a bypass and can be called one. After an **advisory**

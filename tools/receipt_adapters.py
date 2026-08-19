@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -77,39 +78,64 @@ from cohaera.evidence import RECEIPT_SCHEMA, arg_digest
 # The registry
 # ---------------------------------------------------------------------------
 #
-# Each entry: the authority string that travels in the receipt, the `kind` of
-# identifier, and the candidate paths to look in, most specific first. Dotted
-# paths descend through dicts; a path matches only if it resolves to a non-empty
-# scalar.
+# Each entry: the authority string that travels in the receipt, and the candidate
+# paths to look in, most specific first. Dotted paths descend through dicts; a
+# path matches only if it resolves to a non-empty finite scalar.
 #
-# The order within `paths` matters and is not arbitrary. Where a provider returns
-# more than one identifier, the one listed first is the one that identifies THIS
-# operation rather than the object it acted on. An S3 PUT returns both a version
-# id (this write) and an ETag (this content), and two writes of identical bytes
-# share an ETag -- so an ETag would let a receipt for one write be presented for
-# another, which is exactly the substitution the binding exists to stop.
+# Each PATH declares its own kind and its own assurance. R-17: they used to
+# share one kind per authority, so `metadata.resourceVersion` and
+# `metadata.uid` both emitted `resource_version`, `node_id` and `number` both
+# emitted `node_id`, and a Jira `id` was reported as an `issue_key`. Those pairs
+# answer different questions -- one identifies THIS operation, the other
+# identifies the object it acted on for the rest of its life -- and a receipt
+# carrying the second under the first's name is a receipt that can be presented
+# for a later mutation of the same object. A fallback whose security meaning is
+# weaker has to say so in the output, or it is not a fallback, it is a
+# substitution the consumer cannot see.
+#
+# The order within `paths` still matters and is still not arbitrary: the
+# strongest identifier leads. An S3 PUT returns both a version id (this write)
+# and an ETag (this content), and two writes of identical bytes share an ETag --
+# so an ETag would let a receipt for one write be presented for another, which
+# is exactly the substitution the binding exists to stop.
+
+# How much the identifier is worth, independent of which provider minted it.
+# Ordered strongest first, and none of them means "the effect is confirmed":
+# nothing here contacts the provider to ask.
+ASSURANCE_OPERATION = "provider_returned_operation"   # names THIS operation
+ASSURANCE_OBJECT = "provider_returned_object"         # names the object, not the write
+ASSURANCE_CLIENT = "client_claimed"                   # the caller may have minted it
+
+ASSURANCE_LEVELS = (ASSURANCE_OPERATION, ASSURANCE_OBJECT, ASSURANCE_CLIENT)
 
 _ADAPTERS: dict[str, dict[str, Any]] = {
     # --- object storage: the easiest first adoption, per EVIDENCE-TRUST §3 ---
     "aws.s3.put_object": {
         "authority": "aws:s3",
-        "kind": "object_version",
-        "paths": ("VersionId", "ResponseMetadata.HTTPHeaders.x-amz-version-id"),
+        "paths": (
+            ("VersionId", "object_version", ASSURANCE_OPERATION),
+            ("ResponseMetadata.HTTPHeaders.x-amz-version-id", "object_version",
+             ASSURANCE_OPERATION),
+        ),
     },
     "aws.s3.delete_object": {
         "authority": "aws:s3",
-        "kind": "delete_marker_version",
-        "paths": ("VersionId", "ResponseMetadata.HTTPHeaders.x-amz-version-id"),
+        "paths": (
+            ("VersionId", "delete_marker_version", ASSURANCE_OPERATION),
+            ("ResponseMetadata.HTTPHeaders.x-amz-version-id",
+             "delete_marker_version", ASSURANCE_OPERATION),
+        ),
     },
     "gcp.storage.upload": {
         "authority": "gcp:storage",
-        "kind": "object_generation",
-        "paths": ("generation",),
+        "paths": (("generation", "object_generation", ASSURANCE_OPERATION),),
     },
     "azure.blob.upload": {
         "authority": "azure:blob",
-        "kind": "blob_version",
-        "paths": ("version_id", "x-ms-version-id"),
+        "paths": (
+            ("version_id", "blob_version", ASSURANCE_OPERATION),
+            ("x-ms-version-id", "blob_version", ASSURANCE_OPERATION),
+        ),
     },
 
     # --- email: the Message-ID is minted by the submitting MTA -------------
@@ -122,40 +148,52 @@ _ADAPTERS: dict[str, dict[str, Any]] = {
     # header) rather than from the message you composed.
     "smtp.send": {
         "authority": "smtp",
-        "kind": "message_id",
-        "paths": ("server_message_id", "Message-ID", "message_id"),
+        "paths": (
+            ("server_message_id", "message_id", ASSURANCE_OPERATION),
+            # R-17. A Message-ID the client composed is not evidence the client
+            # cannot fabricate, and these two paths used to be indistinguishable
+            # in the output. They are now different facts.
+            ("Message-ID", "client_message_id", ASSURANCE_CLIENT),
+            ("message_id", "client_message_id", ASSURANCE_CLIENT),
+        ),
     },
     "aws.ses.send_email": {
         "authority": "aws:ses",
-        "kind": "message_id",
-        "paths": ("MessageId",),
+        "paths": (("MessageId", "message_id", ASSURANCE_OPERATION),),
     },
     "sendgrid.send": {
         "authority": "sendgrid",
-        "kind": "message_id",
-        "paths": ("headers.X-Message-Id", "x-message-id"),
+        "paths": (
+            ("headers.X-Message-Id", "message_id", ASSURANCE_OPERATION),
+            ("x-message-id", "message_id", ASSURANCE_OPERATION),
+        ),
     },
 
     # --- payments and ticketing -------------------------------------------
     "stripe.charge": {
         "authority": "stripe",
-        "kind": "charge_id",
-        "paths": ("id",),
+        "paths": (("id", "charge_id", ASSURANCE_OPERATION),),
     },
     "stripe.refund": {
         "authority": "stripe",
-        "kind": "refund_id",
-        "paths": ("id",),
+        "paths": (("id", "refund_id", ASSURANCE_OPERATION),),
     },
     "jira.create_issue": {
         "authority": "jira",
-        "kind": "issue_key",
-        "paths": ("key", "id"),
+        "paths": (
+            ("key", "issue_key", ASSURANCE_OPERATION),
+            # R-17. A numeric id is not an issue key, and reporting it as one
+            # meant a consumer looking the value up in Jira found nothing and
+            # had no way to tell that from a forged receipt.
+            ("id", "issue_id", ASSURANCE_OBJECT),
+        ),
     },
     "servicenow.create_record": {
         "authority": "servicenow",
-        "kind": "sys_id",
-        "paths": ("result.sys_id", "sys_id"),
+        "paths": (
+            ("result.sys_id", "sys_id", ASSURANCE_OPERATION),
+            ("sys_id", "sys_id", ASSURANCE_OPERATION),
+        ),
     },
 
     # --- infrastructure ----------------------------------------------------
@@ -166,18 +204,28 @@ _ADAPTERS: dict[str, dict[str, Any]] = {
     # receipt for a write should carry, so it leads.
     "kubernetes.apply": {
         "authority": "kubernetes",
-        "kind": "resource_version",
-        "paths": ("metadata.resourceVersion", "metadata.uid"),
+        "paths": (
+            ("metadata.resourceVersion", "resource_version",
+             ASSURANCE_OPERATION),
+            # `uid` is stable for the object's whole life, so a receipt carrying
+            # it can be presented for ANY later mutation of the same object. It
+            # is still worth recording and it is not the same claim.
+            ("metadata.uid", "resource_uid", ASSURANCE_OBJECT),
+        ),
     },
     "aws.cloudtrail.event": {
         "authority": "aws:cloudtrail",
-        "kind": "event_id",
-        "paths": ("eventID",),
+        "paths": (("eventID", "event_id", ASSURANCE_OPERATION),),
     },
     "github.create_pull_request": {
         "authority": "github",
-        "kind": "node_id",
-        "paths": ("node_id", "number"),
+        "paths": (
+            ("node_id", "node_id", ASSURANCE_OPERATION),
+            # A PR number is scoped to the repository and reused across forks;
+            # a node id is global. Calling the first the second let a receipt
+            # from one repository read as a receipt from another.
+            ("number", "pull_request_number", ASSURANCE_OBJECT),
+        ),
     },
 
     # --- databases ---------------------------------------------------------
@@ -188,8 +236,14 @@ _ADAPTERS: dict[str, dict[str, Any]] = {
     # is weaker than it looks. PostgreSQL's commit LSN is the durable one.
     "postgres.commit": {
         "authority": "postgresql",
-        "kind": "commit_lsn",
-        "paths": ("pg_current_wal_lsn", "commit_lsn"),
+        "paths": (
+            ("commit_lsn", "commit_lsn", ASSURANCE_OPERATION),
+            # R-17. pg_current_wal_lsn is the CLUSTER's current write position,
+            # not this transaction's commit position. It moves because anyone
+            # wrote, so it is evidence that the database was alive, not that
+            # this transaction committed.
+            ("pg_current_wal_lsn", "cluster_wal_position", ASSURANCE_OBJECT),
+        ),
     },
 }
 
@@ -221,8 +275,18 @@ def _dig(obj: Any, path: str) -> Any:
 
 
 def _scalar(value: Any) -> str | None:
-    """A non-empty identifier as text, or None. Booleans are not identifiers."""
+    """A non-empty identifier as text, or None. Booleans are not identifiers.
+
+    R-17. ``float`` used to go through ``str`` unconditionally, so a response
+    carrying ``nan`` or ``inf`` -- which a JSON decoder will happily produce
+    from a non-strict parser upstream -- became the identifier text "nan". That
+    is not an identifier; it is a parse failure wearing one, and the receipt it
+    produced would have been accepted, stored, and looked up by a human who
+    found nothing.
+    """
     if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
         return None
     if isinstance(value, (int, float)):
         return str(value)
@@ -244,47 +308,69 @@ def binding_for(span_id: str, tool_id: str, args: Any) -> dict[str, str]:
             "arg_digest": arg_digest(args)}
 
 
-def identifier_from(authority: str, response: Any) -> tuple[str, str] | None:
-    """``(kind, identifier)`` for one provider response, or None.
+def identifier_from(authority: str,
+                    response: Any) -> tuple[str, str, str] | None:
+    """``(kind, identifier, assurance)`` for one response, or None.
 
     None is a legitimate and common answer: the call succeeded and the provider
     returned nothing that identifies it. Returning None is what makes coverage
     say ``NO_EFFECT_RECEIPT`` instead of the adapter inventing an identifier from
     a namespace the agent controls.
+
+    R-17. The third element is new and it is the point. A weaker fallback path
+    now says it is weaker in the output rather than borrowing the strong path's
+    name.
     """
     spec = _ADAPTERS.get(authority)
     if spec is None:
         raise ReceiptAdapterError(
             f"no adapter for {authority!r}; known authorities are "
             f"{sorted(_ADAPTERS)}")
-    for path in spec["paths"]:
+    for path, kind, assurance in spec["paths"]:
         found = _scalar(_dig(response, path))
         if found is not None:
-            return spec["kind"], found
+            return kind, found, assurance
     return None
 
 
 def adapt(authority: str, response: Any, binding: dict[str, str],
-          observed_at: float | None = None) -> dict[str, Any] | None:
+          observed_at: float | None = None,
+          scope: dict[str, str] | None = None) -> dict[str, Any] | None:
     """One provider response as a ``cohaera.receipt:1`` object, or None.
 
     ``observed_at`` is when the RECEIPT was seen, not when the call started. It
     is advisory -- Cohaera parses it and no check turns on it -- and it exists so
     that a human reconciling a receipt against the authority's own logs has a
     time to search around.
+
+    ``scope`` narrows the authority to the account, region, tenant, project,
+    repository or bucket the identifier lives in. R-17: "stripe" is not an
+    authority, it is a company. A charge id is unique within one Stripe account
+    and a receipt that does not say which account cannot be reconciled by
+    anyone who has more than one -- and everybody has more than one, because
+    test mode is one. Optional, because a producer that cannot supply it should
+    emit a receipt without it rather than invent a scope.
     """
     spec = _ADAPTERS[authority] if authority in _ADAPTERS else None
     found = identifier_from(authority, response)
     if found is None or spec is None:
         return None
-    kind, identifier = found
+    kind, identifier, assurance = found
     receipt: dict[str, Any] = {
         "scheme": RECEIPT_SCHEMA,
         "authority": spec["authority"],
         "kind": kind,
         "identifier": identifier,
+        # What this identifier is worth. NONE of these levels means the effect
+        # is confirmed: nothing in this file contacts the provider to ask, and
+        # naming the strongest level `provider_returned_operation` rather than
+        # `verified` is deliberate.
+        "assurance": assurance,
         "binding": dict(binding),
     }
+    if scope:
+        receipt["scope"] = {k: v for k, v in sorted(scope.items())
+                            if _scalar(v) is not None}
     if observed_at is not None:
         receipt["observed_at"] = observed_at
     return receipt
@@ -304,8 +390,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     for name in known_authorities():
         spec = _ADAPTERS[name]
-        print(f"{name:32s} {spec['authority']:16s} {spec['kind']:22s} "
-              f"{', '.join(spec['paths'])}")
+        for i, (path, kind, assurance) in enumerate(spec["paths"]):
+            label = name if i == 0 else ""
+            authority = spec["authority"] if i == 0 else ""
+            print(f"{label:32s} {authority:16s} {kind:24s} "
+                  f"{assurance:28s} {path}")
     return 0
 
 

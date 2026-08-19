@@ -16,7 +16,14 @@ description: |
   Read it with data.findings[].evidence_status on the OTHER findings in the same
   verdict, which is one of:
 
-    verified       the chain held and a signature verified against a supplied key
+    verified_complete  the chain held and a signature verified against a
+                   supplied key THROUGH THE FINAL ACCEPTED RECORD
+    verified_prefix  a signature verified, and the records after the highest
+                   verified sequence are not covered by it. A signature over a
+                   chain head anchors the prefix up to that head and says
+                   nothing about an unsigned tail, which can be replaced and
+                   re-chained. evidence.integrity.verified_through carries how
+                   far it reached
     chained_unsigned  the chain held; nothing was supplied to verify its origin
     unattested     no integrity evidence at all. THE DEFAULT for any deployment
                    that has not adopted cohaera.integrity:1, and it means

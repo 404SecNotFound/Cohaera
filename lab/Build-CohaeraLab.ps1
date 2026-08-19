@@ -394,7 +394,7 @@ table inet filter {
     type filter hook output priority 0; policy accept;
     # PHASE 2: change policy to drop and add, with addresses you have resolved
     # and pinned yourself:
-    #   ip daddr 10.10.20.10 tcp dport 8080 accept    # collector
+    #   ip daddr 10.10.10.20 tcp dport 8080 accept    # collector, generation-side
     #   ip daddr @llm_api    tcp dport 443  accept    # hosted LLM API
     #   log prefix "COHAERA-LAB-BLOCKED: " level warn counter drop
   }

@@ -76,47 +76,87 @@ def count_sigma_rules() -> int:
     return len([p for p in SIGMA.glob("*.yml")] + [p for p in SIGMA.glob("*.yaml")])
 
 
-def _evasion_rows() -> dict[str, str]:
-    """``{id: last cell}`` for every row of EVASION.md's summary table.
+# R-20. The four states a row can be in, declared per row rather than inferred.
+#
+# Both previous inferences were wrong, and they were wrong in ways that
+# cancelled out into a sentence that could not be true. "Is the id suffixed
+# with a letter" was standing in for "is this a remedy rather than an attack",
+# which made E22b -- `Open, the ledger is per-host`, an evasion nobody has
+# closed -- disappear from the constructed count. And "does the fixability cell
+# say exactly CLOSED" missed E21, whose cell says `**CLOSED**, reported as
+# partial attestation`, so a closed evasion was counted as working.
+#
+# The file therefore said 20 of 21 constructed evasions work, and separately
+# that two are closed. An external reviewer noticed those cannot both be true
+# without a third definition, and was right: the truth is 22 constructed, 2
+# closed, 20 working. Neither number was a lie anybody told; both were derived
+# from a guess about what a row meant.
+STATUS_WORKING = "working"
+STATUS_HALF_CLOSED = "half_closed"
+STATUS_CLOSED = "closed"
+STATUS_REMEDY = "remedy"
+EVASION_STATUSES = (STATUS_WORKING, STATUS_HALF_CLOSED, STATUS_CLOSED,
+                    STATUS_REMEDY)
 
-    The last cell is the fixability column, and it is where a closed evasion is
-    marked. Read from the table rather than from a list kept here, so adding a
-    row is the only thing anyone has to remember to do.
+# An attack somebody constructed, as opposed to a remedy exercised or an
+# unplanned win. Half-closed counts: half of an evasion still works.
+CONSTRUCTED = (STATUS_WORKING, STATUS_HALF_CLOSED, STATUS_CLOSED)
+
+
+def _evasion_rows() -> dict[str, str]:
+    """``{id: status}`` for every row of EVASION.md's summary table.
+
+    The status is a declared column. Read from the table rather than from a
+    list kept here, so adding a row is the only thing anyone has to remember to
+    do -- and an unknown status is an error rather than a silent bucket.
     """
     rows: dict[str, str] = {}
     for line in EVASION.read_text(encoding="utf-8").splitlines():
         if not line.startswith("|"):
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if cells and _EVASION_ID.fullmatch(cells[0]):
-            rows[cells[0]] = cells[-1]
+        if len(cells) < 2 or not _EVASION_ID.fullmatch(cells[0]):
+            continue
+        status = cells[1].strip("`")
+        if status not in EVASION_STATUSES:
+            raise ValueError(
+                f"EVASION.md row {cells[0]} declares status {status!r}; the "
+                f"statuses are {EVASION_STATUSES}. A row whose state cannot be "
+                f"read is a row no count can include.")
+        rows[cells[0]] = status
     return rows
 
 
+def evasion_status_counts() -> dict[str, int]:
+    """How many rows are in each state, for the runner and the prose."""
+    rows = _evasion_rows()
+    return {s: sum(1 for v in rows.values() if v == s)
+            for s in EVASION_STATUSES}
+
+
 def count_evasions() -> int:
-    """Rows in EVASION.md's summary table, including the two unplanned wins."""
+    """Rows in EVASION.md's summary table, including the remedies."""
     return len(_evasion_rows())
 
 
 def count_constructed_evasions() -> int:
-    """Rows that are an attack somebody wrote, so not the ``E12b``-style wins."""
-    return len([e for e in _evasion_rows() if not e[-1].isalpha()])
+    """Rows that are an attack somebody wrote, so not the remedies."""
+    return len([e for e, s in _evasion_rows().items() if s in CONSTRUCTED])
+
+
+def count_closed_evasions() -> int:
+    return len([e for e, s in _evasion_rows().items() if s == STATUS_CLOSED])
 
 
 def count_working_evasions() -> int:
     """Constructed evasions that have not been closed.
 
-    Only a cell that says exactly CLOSED counts as closed. A substring test read
-    "Half closed, coverage sees it" as a closure and quietly reported one fewer
-    working evasion than the file listed -- the number moving in the flattering
-    direction because of a word in a sentence, which is the drift this whole
-    module exists to prevent.
-
-    This number is supposed to be able to go UP. An evasion catalogue whose
-    headline count only ever falls is a catalogue nobody is adding to.
+    Half-closed counts as working, because half of it works. This number is
+    supposed to be able to go UP: an evasion catalogue whose headline count
+    only ever falls is a catalogue nobody is adding to.
     """
-    return len([e for e, fix in _evasion_rows().items()
-                if not e[-1].isalpha() and fix.strip().strip("*").upper() != "CLOSED"])
+    return len([e for e, s in _evasion_rows().items()
+                if s in (STATUS_WORKING, STATUS_HALF_CLOSED)])
 
 
 def count_evasion_tests() -> int:
@@ -297,6 +337,13 @@ CLAIMS = (
           count_constructed_evasions),
     Claim("README constructed evasions", README,
           re.compile(r"(\d+) constructed evasions"), count_constructed_evasions),
+    # R-20. The sentence carries a third number -- how many are closed -- and
+    # nothing checked it. That is where the file's arithmetic broke: 20 working
+    # and 2 closed cannot both be right against a total of 21, and only two of
+    # the three numbers were derived.
+    Claim("EVASION.md closed evasions", EVASION,
+          re.compile(r"(\d+) of them, E02 and E21, are \*\*closed\*\*"),
+          count_closed_evasions),
     # SECURITY.md carried the same two numbers in words -- "seventeen ways ...
     # sixteen of which" -- against a tree with twenty and nineteen. Words are
     # why it was not caught: nothing here can check a claim spelled out in

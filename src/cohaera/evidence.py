@@ -89,12 +89,14 @@ import json
 import math
 import os
 import tempfile
+import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from . import ed25519
-from .identity import canonical
+from .identity import canonical, digest
 from .limits import (
     DEFAULT_LIMITS,
     DEFECT_APPROVAL_TYPE,
@@ -155,9 +157,29 @@ VALID_DECISIONS = frozenset({DECISION_ALLOW, DECISION_DENY})
 
 # Where a call's argument identity came from. Same shape as ``klass_source``,
 # and for the same reason: one of these is a fact and the others are weaker.
-ARGS_DECLARED = "producer_declared"    # the producer stated a digest
+#
+# F-01. There used to be three of these and the ordering between them was
+# wrong in the one case that matters. A producer emits BOTH `arg_digest` and
+# `tool_args`; the declared digest was taken whenever it was present, with the
+# disagreement recorded as a flag nothing acted on. So a call sending to the
+# attacker, declaring the digest of a send to Alice, inherited Alice's approval
+# and CH04 stayed silent -- which defeats the whole point of requiring a
+# complete binding, because the producer chooses the value being bound to.
+#
+# The digest of arguments Cohaera actually saw is the authoritative one. It is
+# the only one that describes the call rather than describing what the producer
+# would like the call to be taken for.
+ARGS_CONFIRMED = "declared_and_recomputed"  # both present, and they agree
 ARGS_RECOMPUTED = "recomputed"         # Cohaera hashed the captured args
+ARGS_DECLARED = "producer_declared"    # the producer stated a digest, no args
+ARGS_CONTRADICTED = "producer_contradicted"  # both present, and they DISAGREE
 ARGS_ABSENT = "none"
+
+# A call whose two argument identities disagree cannot be bound by anything.
+# Not "bound weakly" -- an approval or receipt naming either digest is naming a
+# call the telemetry itself cannot agree on, and no honest emitter produces
+# this. See model.ToolCall.arg_digest_disagrees.
+ARGS_UNBINDABLE = frozenset({ARGS_CONTRADICTED})
 
 DIGEST_PREFIX = "sha256:"
 
@@ -247,11 +269,23 @@ class Binding:
 
     @classmethod
     def parse(cls, obj: Any, limits: Limits) -> Binding | None:
+        """``None`` for anything that names no call at all.
+
+        R-01. This used to return ``Binding(None, None, None)`` for ``{}``,
+        which is not a weak binding -- it is the absence of one, and every
+        caller downstream treated it as a binding that had been checked. An
+        object with no usable field in it is a malformed binding and the record
+        carrying it is rejected with a defect, per the rejection-vs-defect rule
+        in the module docstring.
+        """
         if not isinstance(obj, dict):
             return None
-        return cls(span_id=_short(obj.get("span_id"), limits),
-                   tool_id=_short(obj.get("tool_id"), limits),
-                   arg_digest=digest_text(obj.get("arg_digest")))
+        out = cls(span_id=_short(obj.get("span_id"), limits),
+                  tool_id=_short(obj.get("tool_id"), limits),
+                  arg_digest=digest_text(obj.get("arg_digest")))
+        if not (out.span_id or out.tool_id or out.arg_digest):
+            return None
+        return out
 
 
 # How well a binding held. Ordered from strongest to weakest, because the
@@ -262,7 +296,22 @@ BOUND_SPAN_ONLY = "bound_span_only"    # span and tool matched; args unverifiabl
 BOUND_ARG_MISMATCH = "arg_mismatch"    # span matched, arguments did NOT
 BOUND_NONE = "unbound"                 # names no call in this session
 
-BINDING_TRUSTED = frozenset({BOUND_EXACT, BOUND_SPAN_ONLY})
+# R-01/R-10. ``BOUND_SPAN_ONLY`` used to sit in this set, and that single line
+# was the difference between a mechanism and a decoration. A span-only binding
+# says an identifier was presented for a call with this span and this name; it
+# says nothing whatsoever about WHAT the call did, which is the only question
+# either a receipt or an approval is asked. An approval for send_email to alice
+# covered send_email to an attacker, and a receipt bound to nothing at all
+# raised a critical contradiction.
+#
+# The two sets are separate rather than one ordered list because they answer
+# different questions and are read from different modules. TRUSTED is the only
+# one that may gate a trust decision -- suppressing a finding, or asserting a
+# contradiction. CONTEXT is what an analyst is shown so that "a receipt was
+# present but did not constrain the arguments" stays visible instead of being
+# rounded to silence.
+BINDING_TRUSTED = frozenset({BOUND_EXACT})
+BINDING_CONTEXT = frozenset({BOUND_SPAN_ONLY})
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +333,23 @@ class Integrity:
     @property
     def signed(self) -> bool:
         return self.sig is not None and self.key_id is not None
+
+    @property
+    def chained(self) -> bool:
+        """Does this sidecar actually place the record in a chain? F-03.
+
+        ``stream_id`` and ``seq`` alone are two numbers the producer wrote.
+        What makes a sequence position checkable is ``prev`` and ``chain``:
+        with them the position is covered by the hash chain, and the chain by
+        whatever signature reaches it, so a record cannot be moved without the
+        move being detectable. Without them the sequence is a preference.
+
+        The distinction was not being drawn, so ordering -- which CH03 and CH04
+        both rest on -- accepted a sequence from a sidecar carrying neither. A
+        producer emitting `{scheme, stream_id, seq}` and nothing else decided
+        what happened before what.
+        """
+        return bool(self.prev) and bool(self.chain)
 
     @classmethod
     def parse(cls, obj: Any, limits: Limits = DEFAULT_LIMITS
@@ -323,8 +389,20 @@ class Integrity:
         ), ()
 
 
+# A SHA-256 hex digest is 64 characters. F-14: `prev` and `chain` are outputs
+# of `hashlib.sha256().hexdigest()` and nothing else, and accepting any length
+# of hex turned a bounded field into an unbounded one that is then copied into
+# the verdict and multiplied across every session in the run. Twelve records
+# carrying a 64 KiB chain each produced 788 KB of input and 9.58 MB of output:
+# a 12.15x amplification against a SIEM that bills by ingest, from accepted
+# input, at exit code zero.
+CHAIN_HEX_CHARS = 64
+
+
 def _hex_or_none(value: Any) -> str | None:
     if not isinstance(value, str) or isinstance(value, bool) or not value:
+        return None
+    if len(value) != CHAIN_HEX_CHARS:
         return None
     try:
         int(value, 16)
@@ -424,9 +502,29 @@ class EffectReceipt:
 # ---------------------------------------------------------------------------
 
 
+# Where a decision reached Cohaera, which is not the same question as who made
+# it. ``granted_by`` is a string the producer chose; this is the path the record
+# travelled. Every approval Cohaera can parse today arrives IN BAND -- on the
+# same event stream the agent produces -- so an "approved" verdict is the
+# producer's claim that a decision was made, not an authorization fact Cohaera
+# established. POLICY_ENGINE is named and emitted by nothing, exactly as the
+# three unemitted surfaces in checks.py are named: an operator can ask whether
+# any of their approvals arrive out of band instead of discovering after an
+# incident that none of them do.
+APPROVAL_ORIGIN_IN_BAND = "in_band"
+APPROVAL_ORIGIN_POLICY_ENGINE = "policy_engine"
+
+
 @dataclass(frozen=True)
 class Approval:
-    """One policy decision, bound to one call."""
+    """One policy CLAIM, bound to one call.
+
+    Not "one policy decision". The decision was made somewhere Cohaera cannot
+    see; what is in hand is an assertion that it happened, carried on a stream
+    the subject of the decision produced. ``origin`` records which, and it is
+    emitted so that an analyst reading ``approved`` in a verdict can tell the
+    claim from the fact without reading this docstring.
+    """
 
     decision: str
     subject: Binding
@@ -436,6 +534,7 @@ class Approval:
     policy_id: str | None = None
     policy_digest: str | None = None
     enforcement: str = ENFORCEMENT_UNDECLARED
+    origin: str = APPROVAL_ORIGIN_IN_BAND
 
     def covers_clock(self, started_at: float) -> bool | None:
         """Was the call inside this approval's validity window?
@@ -459,7 +558,8 @@ class Approval:
                 "granted_by": self.granted_by, "granted_at": self.granted_at,
                 "expires_at": self.expires_at, "policy_id": self.policy_id,
                 "policy_digest": self.policy_digest,
-                "enforcement": self.enforcement}
+                "enforcement": self.enforcement,
+                "approval_origin": self.origin}
 
     @classmethod
     def parse(cls, obj: Any, limits: Limits = DEFAULT_LIMITS
@@ -1087,8 +1187,42 @@ class PolicyAttestation:
                 "detail": self.detail}
 
 
+def stream_sha256(fh: BinaryIO, max_bytes: int, name: str = "<stream>") -> str:
+    """Hash an ALREADY-OPEN descriptor, in bounded memory, and rewind it.
+
+    R-07. ``file_sha256`` below hashes a *name*, and a name is not a file: an
+    atomic rename between the hash and whatever reads the artefact next leaves
+    the two describing different bytes, with the signature holding over
+    whichever one the hash happened to find. Hashing the descriptor the caller
+    will go on to read closes the window without giving up streaming -- an open
+    fd keeps its inode whatever happens to the path.
+
+    The file is left positioned at zero, because the caller's next act is to
+    read it.
+    """
+    h = hashlib.sha256()
+    read = 0
+    fh.seek(0)
+    while True:
+        chunk = fh.read(1 << 20)
+        if not chunk:
+            break
+        read += len(chunk)
+        if read > max_bytes:
+            raise PolicySignatureError(
+                f"{name}: exceeds {max_bytes} bytes, so the signature over "
+                f"it cannot be checked")
+        h.update(chunk)
+    fh.seek(0)
+    return h.hexdigest()
+
+
 def file_sha256(path: str | Path, max_bytes: int) -> str:
     """Hash a file the signature claims to cover, in bounded memory.
+
+    Prefer :func:`stream_sha256` wherever the caller will also READ the
+    artefact: this function resolves the path a second time and that second
+    resolution is the R-07 race.
 
     Chunked rather than ``read_bytes()``: the baseline is telemetry and may be
     gigabytes, and reading an operator-named file whole in order to hash it is
@@ -1183,6 +1317,10 @@ def verify_policy_signature(signature: PolicySignature, digest: str,
 # and ``checks`` re-exports them so that every reason code an operator can see
 # is importable from one place.
 R_NO_INTEGRITY = "NO_INTEGRITY_EVIDENCE"
+# R-05. Signatures verified, and they stop short of the last record. A stream
+# attested to a point and chained after it is a genuinely weaker thing than an
+# attested stream, and it used to be reported as the same thing.
+R_SIGNATURE_PREFIX_ONLY = "INTEGRITY_SIGNATURE_COVERS_PREFIX_ONLY"
 R_PARTIAL_INTEGRITY = "INTEGRITY_EVIDENCE_PARTIAL"
 R_NO_COLLECTOR_KEYS = "NO_COLLECTOR_KEYS"
 R_UNSIGNED = "INTEGRITY_UNSIGNED"
@@ -1213,6 +1351,13 @@ R_KEY_WINDOW_UNCHECKED = "INTEGRITY_KEY_WINDOW_UNCHECKED"
 R_STALE = "INTEGRITY_EVIDENCE_STALE"
 R_FRESHNESS_UNVERIFIABLE = "INTEGRITY_FRESHNESS_UNVERIFIABLE"
 R_NO_FRESHNESS_BOUND = "NO_FRESHNESS_BOUND"
+# R-13. The other end of the same bound, and it used to have no code at all.
+# A freshness window only bounds records from BEFORE ``as_of``; a record dated
+# after it was reported not-stale and nothing else, which means a clock the
+# operator does not control silently bought unlimited freshness. The stale
+# branch cannot be reused for it -- an old record and a future-dated one are
+# different faults and a shared code would make the remedy unguessable.
+R_FROM_FUTURE = "INTEGRITY_EVIDENCE_FROM_FUTURE"
 
 # The seen-stream ledger. Freshness bounds how OLD a stream may be; this bounds
 # how many TIMES it may be scored, which is the replay the freshness window
@@ -1220,8 +1365,21 @@ R_NO_FRESHNESS_BOUND = "NO_FRESHNESS_BOUND"
 R_STREAM_REPLAYED = "INTEGRITY_STREAM_REPLAYED"
 R_STREAM_FORKED = "INTEGRITY_STREAM_FORKED"
 R_STREAM_SKIPPED_RECORDS = "INTEGRITY_STREAM_RECORDS_NEVER_SCORED"
+# R-02. The first record of a continuation declared no predecessor, so the join
+# onto the stored head could not be checked at all. Not inadmissible -- it is a
+# question that could not be answered, and the doctrine on that is settled -- but
+# it must never read as a checked boundary. A producer that omits ``prev`` gives
+# up the only cross-run continuity evidence there is; EVASION.md carries it.
+R_STREAM_BOUNDARY_UNVERIFIED = "INTEGRITY_STREAM_BOUNDARY_UNVERIFIED"
 R_NO_STREAM_LEDGER = "NO_STREAM_LEDGER"
 R_LEDGER_EVICTED = "STREAM_LEDGER_EVICTED_THIS_STREAM"
+# R-03. The stream was compared against the ledger and deliberately not written
+# to it, because its evidence did not earn a place there. Not inadmissible: what
+# was wrong with the evidence already has its own code, and this says what the
+# ledger DID about it. It matters in the verdict because the omission is
+# otherwise invisible -- a stream absent from the ledger looks exactly like one
+# that was never seen, and the next run will score it as new.
+R_LEDGER_NOT_ADVANCED = "STREAM_LEDGER_NOT_ADVANCED"
 R_LEDGER_BUDGET = "STREAM_LEDGER_BUDGET_EXHAUSTED"
 
 # The codes that say the evidence is not admissible, as opposed to merely
@@ -1236,7 +1394,7 @@ R_LEDGER_BUDGET = "STREAM_LEDGER_BUDGET_EXHAUSTED"
 INADMISSIBLE = frozenset({R_SEQUENCE_GAP, R_CHAIN_BROKEN, R_SIGNATURE_INVALID,
                           R_KEY_UNKNOWN, R_SEQUENCE_REPLAY, R_PARTIAL_INTEGRITY,
                           R_KEY_REVOKED, R_KEY_EXPIRED, R_KEY_NOT_YET_VALID,
-                          R_KEY_WRONG_ROLE, R_STALE,
+                          R_KEY_WRONG_ROLE, R_STALE, R_FROM_FUTURE,
                           R_STREAM_REPLAYED, R_STREAM_FORKED})
 
 # R_STREAM_SKIPPED_RECORDS is deliberately NOT inadmissible. Records between the
@@ -1294,6 +1452,11 @@ class Freshness:
 
     max_age_s: float | None = None
     as_of: float | None = None
+    # R-13. How far past ``as_of`` a signed record may be dated before it stops
+    # being ordinary clock disagreement. Zero means no tolerance. The CLI fills
+    # this from ``Limits.max_future_skew_s``; the field lives here so that the
+    # value a run used is in the verdict beside the window it qualifies.
+    max_future_skew_s: float = 0.0
 
     @property
     def enabled(self) -> bool:
@@ -1314,17 +1477,45 @@ class Freshness:
         """None when the question cannot be answered. Future-dated is not stale.
 
         A record dated after ``as_of`` is not old, it is wrong, and calling it
-        stale would report clock skew as an archive replay. Skew is somebody
-        else's finding.
+        stale would report clock skew as an archive replay. That much was always
+        right; what was missing is the other finding, which this used to describe
+        as "somebody else's" and nobody actually made. See :meth:`from_future`.
         """
         age = self.age_of(when)
         if age is None or self.max_age_s is None:
             return None
         return age > float(self.max_age_s)
 
+    def from_future(self, when: float | None) -> bool | None:
+        """Is this record dated further past ``as_of`` than skew allows? R-13.
+
+        A freshness window bounds one direction only. Before this, a signed
+        record dated a year ahead returned ``stale() is False`` and nothing
+        else, so it read in the verdict exactly like a record written a second
+        ago -- and a collector whose clock is wrong, or one an attacker has,
+        bought itself unlimited freshness by adding to a number.
+
+        It is inadmissible rather than a warning because of what freshness IS.
+        The bound exists so that re-feeding a captured stream is detectable, and
+        the whole argument for trusting the timestamp is that it is covered by
+        the chain and the chain by the signature -- a replayer can re-send the
+        bytes and cannot re-date them. A record dated after the instant it was
+        scored breaks that argument at the root: whatever produced it was not
+        reading the same clock as the rest of the evidence, and every age
+        computed against it is a guess.
+
+        ``None`` when freshness is off or the record has no readable clock,
+        never ``False``. "Not checked" is not "checked and fine".
+        """
+        age = self.age_of(when)
+        if age is None:
+            return None
+        return age < -abs(self.max_future_skew_s)
+
     def as_dict(self) -> dict[str, Any]:
         return {"max_age_s": self.max_age_s, "as_of": self.as_of,
-                "enabled": self.enabled}
+                "enabled": self.enabled,
+                "max_future_skew_s": self.max_future_skew_s}
 
 
 NO_FRESHNESS = Freshness()
@@ -1336,16 +1527,89 @@ NO_FRESHNESS = Freshness()
 
 LEDGER_SCHEMA = "cohaera.stream_ledger:1"
 
+# R-04. POSIX advisory locking, where the platform has it. Imported here rather
+# than at the point of use so that the one place that asks "can this host
+# actually exclude a concurrent writer" is a module-level fact and not a
+# try/except buried in a method. Where it is missing, the generation guard below
+# still turns a lost update into a refusal -- it cannot PREVENT the race, but it
+# will not let a run report success having silently dropped another run's work.
+try:
+    import fcntl
+    HAVE_FILE_LOCKING = True
+except ImportError:                                        # pragma: no cover
+    HAVE_FILE_LOCKING = False
+
+# How long to wait for another run to finish with the ledger before giving up.
+# Not a Limits field on purpose: config_hash exists so two runs that disagree
+# about what they refused to PARSE are known to be incomparable, and how long a
+# run was willing to queue says nothing about the records it scored.
+LEDGER_LOCK_WAIT_S = 30.0
+
 # How the incoming stream stood against what the ledger remembered.
 SEEN_NEW = "new"                  # never scored before
-SEEN_ADVANCED = "advanced"        # continues past the last scored sequence
+SEEN_ADVANCED = "advanced"        # continues from exactly where scoring stopped
+SEEN_DISCONTINUOUS = "discontinuous"   # continues past it, over a gap
 SEEN_REPLAYED = "replayed"        # occupies sequence positions already scored
-SEEN_FORKED = "forked"            # same positions, DIFFERENT history
+SEEN_FORKED = "forked"            # incompatible history, at or past the boundary
 SEEN_EVICTED = "evicted"          # was known, and the budget dropped it
+
+# How the incoming stream's first record joined onto what the ledger stored.
+# Separate from the status because the status is a judgement and this is the
+# observation it rests on -- and because "the producer did not say" has to stay
+# distinguishable from "the producer said, and it matched".
+BOUNDARY_MATCH = "match"              # declared predecessor == stored head
+BOUNDARY_DIFFERS = "differs"          # declared, and it is a different history
+BOUNDARY_UNSTATED = "unstated"        # no prev on the first record; unverifiable
+BOUNDARY_GAP = "gap"                  # sequences in between were never scored
+BOUNDARY_NOT_COMPARED = "not_compared"   # new stream, or an overlap rather than
+                                         # a continuation
 
 
 class LedgerError(ValueError):
     """The ledger file is not a ledger. Refuse it; do not half-load it."""
+
+
+def _acquire_ledger_lock(handle: Any, lock_file: Path, wait_s: float) -> None:
+    """Take the exclusive lock, or say why the run is not starting. R-04.
+
+    Non-blocking with a deadline rather than a blocking ``flock``: a run that
+    hangs forever behind a stuck peer is indistinguishable from a run that is
+    working, and a scheduled job that never returns is worse than one that
+    fails. The wait exists because the ordinary case is a peer that is nearly
+    finished, not a deadlock.
+    """
+    if not HAVE_FILE_LOCKING:                              # pragma: no cover
+        return
+    deadline = time.monotonic() + max(0.0, wait_s)
+    while True:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except OSError:
+            if time.monotonic() >= deadline:
+                raise LedgerError(
+                    f"{lock_file}: another run has held the seen-stream ledger "
+                    f"for more than {wait_s:g}s. Runs sharing a ledger "
+                    f"serialise on purpose -- two runs scoring the same stream "
+                    f"at once would each read the position before the other "
+                    f"wrote it, and neither would see the replay. Wait for the "
+                    f"other run, or give this one its own --seen-streams file."
+                ) from None
+            time.sleep(0.05)
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Make a rename durable, not just the bytes it points at.
+
+    Best effort: some filesystems refuse to open a directory for this, and
+    failing a completed save over it would be worse than the missing guarantee.
+    """
+    with contextlib.suppress(OSError, AttributeError):
+        fd = os.open(str(directory or "."), os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
 @dataclass(frozen=True)
@@ -1380,6 +1644,13 @@ class SeenVerdict:
     previous_last_seq: int | None = None
     previous_runs: int = 0
     head_comparison: str = "not_reached"   # match | differs | not_reached
+    # R-02. How this run's first record joined onto the ledger's stored head,
+    # and what the ledger had stored. Kept in the verdict rather than only in a
+    # branch, because "why did this read as a fork" is the first question asked
+    # and re-deriving it needs both files.
+    boundary: str = BOUNDARY_NOT_COMPARED
+    declared_prev: str | None = None
+    previous_head: str | None = None
 
     @property
     def code(self) -> str | None:
@@ -1387,6 +1658,8 @@ class SeenVerdict:
             return R_STREAM_FORKED
         if self.status == SEEN_REPLAYED:
             return R_STREAM_REPLAYED
+        if self.status == SEEN_DISCONTINUOUS:
+            return R_STREAM_SKIPPED_RECORDS
         return None
 
     def as_dict(self) -> dict[str, Any]:
@@ -1394,11 +1667,30 @@ class SeenVerdict:
                 "overlap_from": self.overlap_from, "overlap_to": self.overlap_to,
                 "previous_last_seq": self.previous_last_seq,
                 "previous_runs": self.previous_runs,
-                "head_comparison": self.head_comparison}
+                "head_comparison": self.head_comparison,
+                "boundary": self.boundary,
+                "declared_prev": self.declared_prev,
+                "previous_head": self.previous_head}
 
 
 class StreamLedger:
-    """Memory of which collector streams have already been scored.
+    """An OBSERVATION ledger: memory of which collector streams have been seen.
+
+    NOT A DELIVERY LEDGER, AND THE NAME IS THE CLAIM. R-03. This records what
+    Cohaera OBSERVED and scored; it does not record what any downstream sink
+    durably received, and it does not provide exactly-once scoring. Those are
+    different guarantees and only the first one is implementable without an
+    output transaction spanning stdout, files and future SIEM sinks -- a design,
+    not a patch, and one that is worse done badly than not done.
+
+    What that means concretely, because it is a trade and not a limitation to be
+    skipped past. ``cohaera score`` writes this file AFTER emitting its verdicts.
+    A run that dies while printing therefore leaves the ledger unadvanced, and
+    re-running it re-scores and re-emits: duplicates are possible. The reverse
+    ordering was tried first and is worse -- it advanced past findings nobody
+    ever saw, so re-running reported a replay and the findings were simply gone.
+    A duplicate alert is noise an analyst dismisses in seconds; a missed one is
+    the thing this project exists to prevent. Neither ordering is exactly-once.
 
     THE GAP THIS EXISTS FOR, precisely. Every other check in this module passes
     on a replayed archive, and each for a good reason: the sequence really is
@@ -1449,11 +1741,19 @@ class StreamLedger:
 
     def __init__(self, streams: dict[str, SeenStream] | None = None,
                  path: Path | None = None,
-                 limits: Limits = DEFAULT_LIMITS) -> None:
+                 limits: Limits = DEFAULT_LIMITS,
+                 generation: int = 0) -> None:
         self.streams: dict[str, SeenStream] = dict(streams or {})
         self.path = path
         self.limits = limits
         self.loaded = streams is not None
+        # R-04. The generation this instance was READ at. A save writes
+        # generation + 1 and first checks that the file on disk is still at the
+        # one that was read; anything else means another writer got in, and the
+        # record of what it scored is not ours to overwrite.
+        self.generation = generation
+        # True when this instance holds the exclusive lock for its path.
+        self.locked_exclusively = False
         self.evicted = 0
         self.budget_exhausted = False
         self.verdicts: list[SeenVerdict] = []
@@ -1469,26 +1769,78 @@ class StreamLedger:
 
     # -- comparison -------------------------------------------------------
 
+    # -- admission --------------------------------------------------------
+    #
+    # See StreamVerifier._admission for what earns a stream a place here. The
+    # short version: this file is worth exactly as much as the weakest thing
+    # allowed to write to it, and before R-03 anything with a sequence number
+    # could.
+
     def compare(self, stream_id: str, first_seq: int, last_seq: int,
-                head: str, checkpoint_head: str | None) -> SeenVerdict:
+                head: str, checkpoint_head: str | None,
+                first_prev: str | None = None) -> SeenVerdict:
         """Judge one stream against what was recorded. Does not mutate.
 
         ``checkpoint_head`` is this run's chain head at the ledger's recorded
         ``last_seq``, captured while verifying, or None if this run's records
         never reached that far. It is the only value that can answer the
-        replay-or-fork question, and when it is absent the verdict says
-        ``not_reached`` rather than guessing.
+        replay-or-fork question for an OVERLAP, and when it is absent the
+        verdict says ``not_reached`` rather than guessing.
+
+        ``first_prev`` is the predecessor the first record of this run declared,
+        and it answers the same question for a CONTINUATION. R-02: this branch
+        used to be one line -- ``first_seq > previous.last_seq`` meant
+        ``advanced`` -- which asked only that the new records came after the old
+        ones and never that they came FROM them. Two different streams got the
+        same verdict:
+
+          * seq 3 after a stored last_seq of 2, declaring a predecessor the
+            ledger had never recorded. Somebody with a collector key had minted
+            a second, incompatible history and glued it to the sequence numbers
+            of the first. It read as ordinary advancement, and worse, ``record``
+            then stored that history's head -- so the fabricated version became
+            the reference every later run was measured against.
+          * seq 5 after a stored last_seq of 2, with records 3 and 4 never
+            scored by anything. A skipped range, reading as normal progress.
+
+        Three questions now, in this order, and the order is the argument.
+        Sequence contiguity first, because with a gap in between there is no
+        head to compare against -- the ledger never computed the one that would
+        sit at the boundary -- so calling a gap a fork would be inventing an
+        answer. Then the declared predecessor. Only a continuation that is both
+        contiguous AND joins onto the stored head is ordinary advancement.
         """
         previous = self.streams.get(stream_id)
         if previous is None:
             return SeenVerdict(stream_id, SEEN_NEW)
 
         if first_seq > previous.last_seq:
-            # Continues past everything scored before. The ordinary case for a
-            # collector tailed in batches.
-            return SeenVerdict(stream_id, SEEN_ADVANCED,
+            if first_seq != previous.last_seq + 1:
+                # A gap. Deliberately NOT a fork: an operator scoring a subset
+                # on purpose and an attacker deleting a range look identical
+                # from here, and the ledger holds no head for the sequence in
+                # between with which to tell them apart.
+                status, boundary = SEEN_DISCONTINUOUS, BOUNDARY_GAP
+            elif first_prev is None:
+                # Contiguous, and the producer declined to say what it follows.
+                # Advancement, because refusing it would break every collector
+                # that omits the field -- but the boundary is recorded as
+                # unverified rather than as checked.
+                status, boundary = SEEN_ADVANCED, BOUNDARY_UNSTATED
+            elif first_prev != previous.head:
+                # Contiguous, declared, and it names a history this ledger has
+                # never seen. The stream id and the sequence numbers line up and
+                # the chain does not, which is what a fabricated continuation
+                # looks like from here.
+                status, boundary = SEEN_FORKED, BOUNDARY_DIFFERS
+            else:
+                status, boundary = SEEN_ADVANCED, BOUNDARY_MATCH
+            return SeenVerdict(stream_id, status,
                                previous_last_seq=previous.last_seq,
-                               previous_runs=previous.runs)
+                               previous_runs=previous.runs,
+                               boundary=boundary,
+                               declared_prev=first_prev,
+                               previous_head=previous.head)
 
         overlap_to = min(last_seq, previous.last_seq)
         comparison = "not_reached"
@@ -1503,13 +1855,15 @@ class StreamLedger:
                            overlap_to=overlap_to,
                            previous_last_seq=previous.last_seq,
                            previous_runs=previous.runs,
-                           head_comparison=comparison)
+                           head_comparison=comparison,
+                           declared_prev=first_prev,
+                           previous_head=previous.head)
 
     # -- recording --------------------------------------------------------
 
     def record(self, verdict: SeenVerdict, first_seq: int, last_seq: int,
                head: str, run_id: str, when: float | None,
-               key_ids: tuple[str, ...] = ()) -> None:
+               key_ids: tuple[str, ...] = (), admit: bool = True) -> None:
         """Fold one verified stream into the ledger.
 
         A REPLAYED or FORKED stream does NOT advance the recorded position, and
@@ -1518,10 +1872,25 @@ class StreamLedger:
         rewritten history the one future runs are measured against, which hands
         the attacker the reference. Nothing legitimate was scored in either case,
         so nothing is recorded except that it happened.
+
+        ``admit`` is R-03 and carries the same argument one step earlier. The
+        caller decides whether the stream's evidence earned a place here at all;
+        see ``StreamVerifier._admission``. A refused stream is still compared and
+        still reported -- the verdict is the analyst's, the commit is the
+        ledger's -- and a refused stream that this ledger has never seen is not
+        created, so it cannot consume ``max_ledger_streams`` either. That last
+        part matters on its own: a producer minting a stream id per record could
+        otherwise exhaust the budget with streams it never signed, and eviction
+        is what makes an earlier stream's replay undetectable.
         """
         self.verdicts.append(verdict)
         self._touched.add(verdict.stream_id)
-        if verdict.status in (SEEN_REPLAYED, SEEN_FORKED):
+        if not admit or verdict.status in (SEEN_REPLAYED, SEEN_FORKED):
+            # Including the R-02 fork, which is a CONTINUATION rather than an
+            # overlap. It matters most there: an overlapping fork at least
+            # collides with positions the ledger already holds, while a
+            # fabricated continuation would otherwise have its head stored as
+            # the reference for every run afterwards.
             previous = self.streams.get(verdict.stream_id)
             if previous is not None:
                 self.streams[verdict.stream_id] = replace(
@@ -1546,6 +1915,29 @@ class StreamLedger:
             head=head, runs=(previous.runs + 1) if previous else 1,
             last_run_id=run_id, last_seen_at=when,
             key_ids=merged_keys[:self.limits.max_evidence_items])
+
+    def state_digest(self) -> str:
+        """A digest of the ledger AS READ, before this run writes to it. R-06.
+
+        Every replay and fork verdict in a run is judged against this state, so
+        two runs that read different ledgers are not the same run even when the
+        telemetry is byte-identical. It goes into the run's identity through
+        ``identity.trust_config_digest``.
+
+        Deliberately narrow: stream id, extent and head, and nothing else. The
+        run counter, the last run id and the timestamps all move when a stream
+        is merely seen again, and folding those in would make the identity of a
+        run depend on how many times an unrelated stream had been scored
+        before -- which changes no verdict and would break the deduplication
+        the ID exists for.
+        """
+        return digest({"schema": LEDGER_SCHEMA,
+                       "streams": [{"stream_id": k,
+                                    "first_seq": v.first_seq,
+                                    "last_seq": v.last_seq,
+                                    "head": v.head}
+                                   for k, v in sorted(self.streams.items())]},
+                      24)
 
     def stamp(self, run_id: str) -> None:
         """Attribute every stream this run touched to the run that scored it.
@@ -1574,16 +1966,123 @@ class StreamLedger:
             # here because a partial write is a real failure mode and silently
             # trusting half a ledger is worse than refusing it.
             "digest": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+            # R-04. Monotonic, and deliberately OUTSIDE the digest above. The
+            # digest answers "is this file whole"; the generation answers "did
+            # somebody else write since I read". Folding the second into the
+            # first would make every ledger written before this version fail to
+            # load, which would delete the replay memory of every deployment
+            # that upgrades -- exactly the state deleting the ledger achieves.
+            # A ledger with no generation field reads as 0.
+            "generation": self.generation + 1,
             "streams": body,
         }
 
+    @staticmethod
+    def lock_path_for(path: str | Path) -> Path:
+        """The sidecar this ledger's writers exclude each other on.
+
+        A sidecar rather than the ledger file itself, and that is not a style
+        choice. ``save`` finishes with ``os.replace``, which swaps the inode --
+        a lock held on the ledger's own descriptor would protect a file that is
+        no longer at that name the moment the first writer finishes. The sidecar
+        is never replaced, so it stays the same object for every writer.
+        """
+        p = Path(path)
+        return p.with_name(p.name + ".lock")
+
+    @classmethod
+    @contextlib.contextmanager
+    def locked(cls, path: str | Path, limits: Limits = DEFAULT_LIMITS,
+               wait_s: float = LEDGER_LOCK_WAIT_S) -> Iterator[StreamLedger]:
+        """Load a ledger under an exclusive lock held until the block exits.
+
+        R-04. ``save`` was atomic and the read-modify-write around it was not.
+        Two runs on one host would both load, both score, and both replace: the
+        second one's file has no record of the first one's streams, so the next
+        replay of those streams is undetectable and nothing said so. Reproduced
+        with two processes and a barrier -- it loses an update every time, and
+        which one it loses is a coin flip.
+
+        THE LOCK IS HELD FOR THE WHOLE RUN, NOT JUST THE WRITE, and that is the
+        expensive choice made deliberately. Locking only around the write would
+        stop updates being lost and would NOT stop the thing the ledger exists
+        to catch: two runs scoring the same stream concurrently both read
+        ``last_seq`` before either wrote, so both call it advancement and
+        neither sees the other. That is a replay, and a replay-detector that
+        cannot see a replay because it was busy is not worth the file it keeps.
+        The cost is that concurrent runs sharing one ledger serialise. A ledger
+        IS a serialisation point; the alternative is losing the guarantee.
+
+        SINGLE HOST ONLY. ``flock`` is advisory and local. It does not travel
+        over NFS or SMB in any way worth relying on, and it says nothing about a
+        second Cohaera host with its own copy -- which the class docstring
+        already lists as a limit and EVASION.md catalogues. The generation guard
+        in ``save`` is what remains when the lock cannot be taken or was not
+        honoured: it cannot prevent the race, but it refuses to overwrite a
+        newer file rather than reporting success having dropped it.
+        """
+        p = Path(path)
+        lock_file = cls.lock_path_for(p)
+        with lock_file.open("a+b") as handle:
+            _acquire_ledger_lock(handle, lock_file, wait_s)
+            ledger = cls.load(p, limits=limits)
+            ledger.locked_exclusively = HAVE_FILE_LOCKING
+            try:
+                yield ledger
+            finally:
+                if HAVE_FILE_LOCKING:
+                    with contextlib.suppress(OSError):
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def _on_disk_generation(self, target: Path) -> int:
+        """The generation of the file as it stands right now, or 0 if absent.
+
+        Read fresh rather than remembered: the whole question is whether the
+        file changed under us.
+        """
+        if not target.exists():
+            return 0
+        try:
+            with target.open("rb") as fh:
+                blob = fh.read(self.limits.max_ledger_bytes + 1)
+            obj = strict_json_loads(blob.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError):
+            # Unreadable is not "generation 0". Refusing here would mask a
+            # corrupt ledger as a concurrency problem; leave it to load(), which
+            # says what is actually wrong with the file.
+            return -1
+        generation = obj.get("generation") if isinstance(obj, dict) else None
+        return generation if isinstance(generation, int) and not isinstance(
+            generation, bool) and generation >= 0 else 0
+
     def save(self) -> None:
-        """Atomic replace. Same discipline as the quarantine ledger (C5-06):
-        a run that dies mid-write must not leave a ledger that is neither the
-        old one nor the new one."""
+        """Atomic replace, and refuse to replace something newer than what was read.
+
+        Same durability discipline as the quarantine ledger (C5-06): a run that
+        dies mid-write must not leave a ledger that is neither the old one nor
+        the new one. R-04 adds the other half -- a run that succeeds must not
+        leave a ledger missing another run's work.
+        """
         if self.path is None:
             return
         target = Path(self.path)
+        current = self._on_disk_generation(target)
+        if current != self.generation:
+            # Refused loudly rather than merged quietly. A merge would have to
+            # guess which of two disagreeing histories for a stream is the real
+            # one, and guessing wrong writes the wrong reference for every run
+            # afterwards. Losing an update loudly is recoverable; losing it
+            # silently is the bug this replaces.
+            raise LedgerError(
+                f"{target}: the ledger on disk is at generation {current} and "
+                f"this run read generation {self.generation}. Another run wrote "
+                f"it while this one was scoring, and overwriting would discard "
+                f"whatever that run recorded -- so the streams it scored would "
+                f"replay undetected. Re-run this input; the ledger on disk is "
+                f"intact and is the newer of the two."
+                + ("" if HAVE_FILE_LOCKING else
+                   " This host has no file locking, so runs sharing a ledger "
+                   "cannot exclude each other and must not be run concurrently."))
         blob = json.dumps(self.as_document(), indent=2, sort_keys=True) + "\n"
         if len(blob.encode("utf-8")) > self.limits.max_ledger_bytes:
             raise LedgerError(
@@ -1599,10 +2098,16 @@ class StreamLedger:
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp, target)
+            # The rename itself has to reach the disk, not just the bytes it
+            # points at. Without this a crash after a successful save can leave
+            # the directory entry pointing at the OLD ledger, which is the same
+            # lost update arriving by a different route.
+            _fsync_directory(target.parent)
         except BaseException:
             with contextlib.suppress(OSError):
                 os.unlink(tmp)
             raise
+        self.generation += 1
 
     @classmethod
     def load(cls, path: str | Path,
@@ -1666,7 +2171,14 @@ class StreamLedger:
                 last_seen_at=_finite(spec.get("last_seen_at")),
                 key_ids=tuple(k for k in keys if isinstance(k, str))
                 if isinstance(keys, list) else ())
-        return cls(streams=streams, path=p, limits=limits)
+        # R-04. A ledger written before generations existed has no field and
+        # reads as 0, which is correct: the first save under the new code writes
+        # generation 1 and every writer afterwards agrees on the sequence.
+        generation = obj.get("generation")
+        if not isinstance(generation, int) or isinstance(generation, bool) \
+                or generation < 0:
+            generation = 0
+        return cls(streams=streams, path=p, limits=limits, generation=generation)
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -1716,6 +2228,18 @@ class SessionIntegrity:
     replayed_streams: list[dict[str, Any]] = field(default_factory=list)
     freshness_checked: int = 0
     oldest_signed_age_s: float | None = None
+    # R-05. One entry per stream that fed this session: how far its records ran
+    # and how far a verified signature reached into them. Carried in full rather
+    # than reduced to a boolean because "signed to 100 of 149" is the finding,
+    # and an analyst asked to trust a session needs to see where the attestation
+    # stopped rather than be told it did.
+    signature_ranges: list[dict[str, Any]] = field(default_factory=list)
+    # R-13. The furthest a signed record was dated AHEAD of ``as_of``, in
+    # seconds, or None if none was. Positive, and reported separately from
+    # ``oldest_signed_age_s`` because a future-dated record has a negative age
+    # and would otherwise never be the maximum of anything -- which is how it
+    # went unreported in the first place.
+    furthest_future_s: float | None = None
 
     @property
     def records(self) -> int:
@@ -1723,12 +2247,72 @@ class SessionIntegrity:
 
     @property
     def attested(self) -> bool:
-        """Did every record in this session carry a sidecar?"""
+        """Did a verified signature attest to this session's records? F-03.
+
+        This used to be "did every record carry a sidecar", which is a
+        different question with a much weaker answer, and it was published
+        under a word every reader takes to mean the stronger one. A stream of
+        producer-written sidecars with no ``chain``, no ``prev`` and no
+        signature reported ``attested: true``.
+
+        The old question is still worth asking and is now ``sidecars_complete``.
+        This one is about who vouched for the bytes.
+        """
+        return self.signatures_verified > 0 and not self.inadmissible
+
+    @property
+    def sidecars_complete(self) -> bool:
+        """Did every record in this session carry a sidecar at all?
+
+        The question ``attested`` used to answer. Selective stripping is what
+        it catches: a session where some records carry integrity evidence and
+        others do not is the shape an attacker produces by removing the
+        evidence from the records they edited.
+        """
         return self.with_integrity > 0 and self.without_integrity == 0
 
     @property
     def inadmissible(self) -> list[str]:
         return sorted(c for c in self.codes if c in INADMISSIBLE)
+
+    @property
+    def signature_covers_final(self) -> bool:
+        """Does a verified signature reach the LAST record of every stream here?
+
+        R-05. The question ``evidence_status`` used to answer with
+        ``signatures_verified > 0``, which is a question about whether anything
+        was signed rather than about what the signatures covered. A 150-record
+        stream signed at 0 and 100 satisfied it while 49 records sat past the
+        last attestation, covered by nothing.
+
+        Every stream, not most: a session assembled from two streams is only as
+        attested as its weaker half, and averaging that away would report the
+        better one.
+        """
+        if not self.signature_ranges:
+            return False
+        return all(r["verified_to"] is not None
+                   and r["verified_to"] >= r["last_seq"]
+                   for r in self.signature_ranges)
+
+    @property
+    def signature_coverage(self) -> float:
+        """Share of this session's attested records a signature actually reaches.
+
+        Record-weighted across streams rather than averaged per stream, so a
+        two-record stream signed to its end cannot offset a thousand-record one
+        signed to its middle.
+        """
+        covered = total = 0
+        for r in self.signature_ranges:
+            span = r["last_seq"] - r["first_seq"] + 1
+            if span <= 0:
+                continue
+            total += span
+            if r["verified_to"] is not None:
+                reach = min(r["verified_to"], r["last_seq"]) - r["first_seq"] + 1
+                covered += max(0, reach)
+        return covered / total if total else 0.0
 
     def note(self, code: str) -> None:
         self.codes[code] = self.codes.get(code, 0) + 1
@@ -1750,8 +2334,13 @@ class SessionIntegrity:
             "signing_key_ids": sorted(self.signing_key_ids)[:cap],
             "freshness_checked": self.freshness_checked,
             "oldest_signed_age_s": self.oldest_signed_age_s,
+            "furthest_future_s": self.furthest_future_s,
+            "signature_ranges": self.signature_ranges[:cap],
+            "signature_coverage": round(self.signature_coverage, 4),
+            "signature_covers_final": self.signature_covers_final,
             "replayed_streams": self.replayed_streams[:cap],
             "attested": self.attested,
+            "sidecars_complete": self.sidecars_complete,
         }
 
 
@@ -1778,6 +2367,11 @@ class _Stream:
     # replay is not preventable here, and this is what makes it auditable.
     first_seq: int | None = None
     last_seq: int | None = None
+    # R-02. The predecessor the FIRST consumed record declared. _begin used to
+    # adopt this as the chain head and say nothing else about it, which is the
+    # bug: adopting a boundary is not the same as checking one. Recorded here so
+    # the ledger can compare it against the head it stored.
+    first_prev: str | None = None
     # This run's chain head at the sequence the LEDGER last recorded, captured
     # in passing. It is the only value that separates a replay from a fork --
     # same head means the same records, a different head means the same
@@ -1788,6 +2382,23 @@ class _Stream:
     # Every session whose records came from this stream. A whole-stream replay
     # implicates all of them, unlike a gap, which implicates the two either side.
     sessions_seen: set[str] = field(default_factory=set)
+    # R-03. What this stream's OWN evidence did, as opposed to what the sessions
+    # it fed concluded. The ledger has to decide whether to remember a stream,
+    # and a session is fed by many streams: judging stream A on a code raised by
+    # stream B would refuse to advance for a reason that has nothing to do with
+    # it, and the next run would then read A as a replay.
+    codes: set[str] = field(default_factory=set)
+    signatures_verified: int = 0
+    # R-05. The highest sequence whose signature VERIFIED. A signature covers
+    # the chain head at its own sequence, so one verified signature attests
+    # every record up to and including it -- and nothing after it. This is the
+    # value that separates a stream signed to its end from one signed to its
+    # middle, and there was nothing tracking it.
+    highest_verified_seq: int | None = None
+    # Records consumed for this stream that reached no scored session, because
+    # assembly dropped them on max_sessions or max_events_per_session. Their
+    # positions were verified and their content was never looked at.
+    unscored_records: int = 0
 
 
 class StreamVerifier:
@@ -1833,7 +2444,14 @@ class StreamVerifier:
         self.sessions: dict[str, SessionIntegrity] = {}
         self.signatures_verified = 0
         self.signature_budget_exhausted = False
+        # R-12. Wall clock actually spent in signature verification, so the
+        # bound is on the work and not on a proxy for it.
+        self.signature_seconds = 0.0
         self.stream_budget_exhausted = False
+        # R-03. Streams compared against the ledger and deliberately not written
+        # to it, with the reason. Carried into the run summary because a stream
+        # missing from the ledger is indistinguishable from one never seen.
+        self.ledger_refusals: list[dict[str, Any]] = []
         self._pending_total = 0
         self._saw_any_integrity = False
         self._saw_any_signature = False
@@ -1883,7 +2501,7 @@ class StreamVerifier:
         elif integrity.seq < stream.expected:
             # Already accounted for. Either a duplicate delivery or a replay of
             # a record whose position in the chain is taken.
-            state.note(R_SEQUENCE_REPLAY)
+            self._note(state, stream, R_SEQUENCE_REPLAY)
         else:
             self._hold(stream, integrity.seq, body, integrity, session_key, state,
                        when)
@@ -1901,6 +2519,19 @@ class StreamVerifier:
         # check. Only knowable once the whole input has been seen, which is why
         # it is decided here rather than per record.
         self._judge_against_ledger()
+        # R-05. How far each stream ran and how far its attestation reached,
+        # attributed to every session it fed. Done here rather than per record
+        # because "the last record" is only knowable once there are no more.
+        for stream in sorted(self.streams.values(), key=lambda s: s.stream_id):
+            if stream.first_seq is None or stream.last_seq is None:
+                continue
+            span = {"stream_id": stream.stream_id,
+                    "first_seq": stream.first_seq,
+                    "last_seq": stream.last_seq,
+                    "verified_to": stream.highest_verified_seq}
+            for session_key in stream.sessions_seen:
+                if session_key:
+                    self._session(session_key).signature_ranges.append(dict(span))
         for state in self.sessions.values():
             if state.with_integrity and state.without_integrity:
                 state.note(R_PARTIAL_INTEGRITY)
@@ -1911,6 +2542,49 @@ class StreamVerifier:
             if (self.freshness.enabled and state.with_integrity
                     and not state.freshness_checked):
                 state.note(R_FRESHNESS_UNVERIFIABLE)
+
+    def _admission(self, stream: _Stream) -> str:
+        """Why this stream may NOT be written to the ledger, or "" if it may.
+
+        R-03. ``record`` used to be called for every stream that had a first and
+        a last sequence, with no requirement that any of it verified. Three ways
+        that poisons the file it is supposed to protect, all reproduced:
+
+        1. UNSIGNED ADMISSION. Under a loaded trust store, a chained-but-unsigned
+           stream -- which needs no key and anyone able to append to the input
+           can write -- was recorded with its head. The genuine signed stream at
+           the same positions then read as ``forked``, so the attacker turned a
+           squatted stream id into a critical finding against the real collector
+           and, worse, made the real one look like the rewrite.
+
+        2. UNSCORED ADMISSION. Assembly drops events past ``max_sessions`` and
+           ``max_events_per_session``, and the verifier had already recorded
+           their positions. With ``--max-sessions 1`` over two sessions the
+           ledger advanced across all six records, so the three belonging to the
+           session nobody scored were marked as already seen. They can now never
+           be scored: re-feeding them reads as a replay.
+
+        3. EVIDENCE THAT DID NOT HOLD. A broken chain, an invalid signature, a
+           revoked or unauthorised key, a stale or future-dated record -- none of
+           it stopped the position being committed as a scored fact.
+
+        The trust store is the switch on the first rule, and that is deliberate.
+        An operator who has loaded no keys has told Cohaera nothing about who may
+        attest, so requiring a verified signature would disable the ledger for
+        every unsigned deployment -- which is most of them, today. Once keys ARE
+        loaded, an unsigned record is not evidence, and the ledger is exactly the
+        place that must not treat it as any.
+        """
+        if stream.unscored_records:
+            return (f"{stream.unscored_records} record(s) were verified and "
+                    f"never scored, because assembly dropped them on a budget")
+        failed = sorted(stream.codes & INADMISSIBLE)
+        if failed:
+            return f"the stream's own evidence did not hold ({', '.join(failed)})"
+        if self.keys.loaded and not stream.signatures_verified:
+            return ("no record on this stream carried a signature this trust "
+                    "store accepts")
+        return ""
 
     def _judge_against_ledger(self) -> None:
         """Compare every stream this run saw with what previous runs recorded.
@@ -1935,27 +2609,37 @@ class StreamVerifier:
                 continue
             verdict = self.ledger.compare(
                 stream.stream_id, stream.first_seq, stream.last_seq,
-                stream.head, stream.ledger_checkpoint_head)
+                stream.head, stream.ledger_checkpoint_head,
+                first_prev=stream.first_prev)
             keys = tuple(sorted({k for sid in stream.sessions_seen
                                  for k in self._session(sid).signing_key_ids}))
+            refusal = self._admission(stream)
             self.ledger.record(verdict, stream.first_seq, stream.last_seq,
                                stream.head, self.run_id, self.freshness.as_of,
-                               key_ids=keys)
+                               key_ids=keys, admit=not refusal)
+            if refusal:
+                self.ledger_refusals.append(
+                    {"stream_id": stream.stream_id, "reason": refusal,
+                     "first_seq": stream.first_seq, "last_seq": stream.last_seq})
             code = verdict.code
             for session_key in stream.sessions_seen:
                 if not session_key:
                     continue
                 state = self._session(session_key)
                 if code:
+                    # R-02. SEEN_DISCONTINUOUS carries R_STREAM_SKIPPED_RECORDS
+                    # through SeenVerdict.code now, so the gap case arrives here
+                    # rather than being re-derived from an arithmetic test on a
+                    # status that had already called it ordinary advancement.
                     state.note(code)
                     state.replayed_streams.append(verdict.as_dict())
-                elif (verdict.status == SEEN_ADVANCED
-                      and verdict.previous_last_seq is not None
-                      and stream.first_seq > verdict.previous_last_seq + 1):
-                    # Records between the last scored sequence and this run's
-                    # first were never scored by anything. Reported, not called
-                    # tampering: scoring a subset on purpose looks the same.
-                    state.note(R_STREAM_SKIPPED_RECORDS)
+                if refusal:
+                    state.note(R_LEDGER_NOT_ADVANCED)
+                if verdict.boundary == BOUNDARY_UNSTATED:
+                    # Continuous by sequence, and nothing said what it follows.
+                    # Reported next to the advancement rather than instead of
+                    # it: the records were scored, and the join was not checked.
+                    state.note(R_STREAM_BOUNDARY_UNVERIFIED)
                 if self.ledger.budget_exhausted:
                     state.note(R_LEDGER_BUDGET)
 
@@ -1972,9 +2656,12 @@ class StreamVerifier:
             "any_integrity_evidence": self._saw_any_integrity,
             "any_signature_present": self._saw_any_signature,
             "signature_budget_exhausted": self.signature_budget_exhausted,
+            "signature_seconds": round(self.signature_seconds, 3),
             "stream_budget_exhausted": self.stream_budget_exhausted,
             "freshness": self.freshness.as_dict(),
             "stream_ledger": self.ledger.summary(),
+            "stream_ledger_refusals": self.ledger_refusals[
+                :self.limits.max_evidence_items],
             "stream_summary": self.stream_summary(),
         }
 
@@ -1990,6 +2677,7 @@ class StreamVerifier:
         cap = self.limits.max_evidence_items
         return [{"stream_id": s.stream_id, "first_seq": s.first_seq,
                  "last_seq": s.last_seq, "head": s.head,
+                 "first_prev": s.first_prev,
                  "joined_midstream": s.joined_midstream}
                 for s in sorted(self.streams.values(),
                                 key=lambda s: s.stream_id)[:cap]]
@@ -2020,6 +2708,18 @@ class StreamVerifier:
             state = self.sessions[session_key] = SessionIntegrity()
         return state
 
+    @staticmethod
+    def _note(state: SessionIntegrity, stream: _Stream, code: str) -> None:
+        """Record a code against the session AND the stream that raised it.
+
+        R-03. Everything downstream of a record's verification is a fact about
+        two things at once -- the session whose record revealed it, which is what
+        the verdict reports, and the stream it arrived on, which is what the
+        ledger has to judge before it agrees to remember that stream.
+        """
+        state.note(code)
+        stream.codes.add(code)
+
     def _consume(self, stream: _Stream, seq: int, body: str,
                  integrity: Integrity, session_key: str,
                  when: float | None = None) -> None:
@@ -2027,6 +2727,7 @@ class StreamVerifier:
         state = self._session(session_key)
         if stream.first_seq is None:
             stream.first_seq = seq
+            stream.first_prev = integrity.prev
         stream.last_seq = seq
         expected_chain = chain_step(stream.head, body) if stream.head else None
 
@@ -2034,11 +2735,11 @@ class StreamVerifier:
             if integrity.chain != expected_chain:
                 # Localises: this record is where the stream diverged from what
                 # the collector signed.
-                state.note(R_CHAIN_BROKEN)
+                self._note(state, stream, R_CHAIN_BROKEN)
                 if len(state.chain_breaks) < self.limits.max_evidence_items:
                     state.chain_breaks.append(seq)
         if integrity.prev is not None and stream.head and integrity.prev != stream.head:
-            state.note(R_CHAIN_BROKEN)
+            self._note(state, stream, R_CHAIN_BROKEN)
             if len(state.chain_breaks) < self.limits.max_evidence_items:
                 state.chain_breaks.append(seq)
 
@@ -2049,6 +2750,10 @@ class StreamVerifier:
         stream.expected = seq + 1
         stream.last_session = session_key
         stream.sessions_seen.add(session_key)
+        if not session_key:
+            # R-03. Assembly attributes a dropped event to no session, so this
+            # record's position was verified and its content was never scored.
+            stream.unscored_records += 1
         # Snapshot the head the instant this run passes the sequence the ledger
         # last recorded. Taken here rather than at finalise because by then the
         # head has advanced and the comparison is no longer possible.
@@ -2059,7 +2764,7 @@ class StreamVerifier:
         if integrity.signed:
             self._check_signature(stream, seq, integrity, state, when)
         elif self.keys.loaded:
-            state.note(R_UNSIGNED)
+            self._note(state, stream, R_UNSIGNED)
 
     def _check_signature(self, stream: _Stream, seq: int, integrity: Integrity,
                          state: SessionIntegrity, when: float | None) -> None:
@@ -2092,7 +2797,7 @@ class StreamVerifier:
             return
         key = self.keys.get(integrity.key_id)
         if key is None:
-            state.note(R_KEY_UNKNOWN)
+            self._note(state, stream, R_KEY_UNKNOWN)
             state.unknown_key_ids.add(str(integrity.key_id))
             return
         state.signing_key_ids.add(key.key_id)
@@ -2101,35 +2806,54 @@ class StreamVerifier:
             # wrong key into the collector, or somebody is attesting the stream
             # with a key that was trusted for something else entirely -- and the
             # second is why the roles exist.
-            state.note(R_KEY_WRONG_ROLE)
+            self._note(state, stream, R_KEY_WRONG_ROLE)
             return
         if key.revoked:
-            state.note(R_KEY_REVOKED)
+            self._note(state, stream, R_KEY_REVOKED)
             return
-        if self.signatures_verified >= self.limits.max_signature_verifications:
+        # R-12. Count and clock. The count is charged before the work so a
+        # producer cannot get one free verification per budget check; the clock
+        # is what makes the bound mean the same thing on a slow host as on a
+        # fast one.
+        if (self.signatures_verified >= self.limits.max_signature_verifications
+                or self.signature_seconds >= self.limits.max_signature_seconds):
             self.signature_budget_exhausted = True
             state.note(R_SIGNATURE_BUDGET)
             return
         self.signatures_verified += 1
         state.signatures_verified += 1
         message = signing_input(stream.stream_id, seq, integrity.chain or "")
-        if not ed25519.verify(key.public, message, integrity.sig or b""):
-            state.note(R_SIGNATURE_INVALID)
+        started = time.monotonic()
+        verified = ed25519.verify(key.public, message, integrity.sig or b"")
+        self.signature_seconds += time.monotonic() - started
+        if not verified:
+            self._note(state, stream, R_SIGNATURE_INVALID)
             if len(state.bad_signatures) < self.limits.max_evidence_items:
                 state.bad_signatures.append(seq)
             return
+        # Counted only here, after every reason the signature could have failed
+        # to establish anything has been ruled out. R-03 reads this to decide
+        # whether the ledger may remember the stream, so an increment anywhere
+        # earlier would let an unauthorised or invalid signature buy admission.
+        stream.signatures_verified += 1
+        # R-05. Same argument, one line further: how far the attestation
+        # reaches is only a fact once the signature has actually held.
+        if (stream.highest_verified_seq is None
+                or seq > stream.highest_verified_seq):
+            stream.highest_verified_seq = seq
 
         if key.windowed:
             inside = key.covers_clock(when)
             if inside is None:
                 state.note(R_KEY_WINDOW_UNCHECKED)
             elif not inside:
-                state.note(R_KEY_NOT_YET_VALID
+                self._note(state, stream,
+                           R_KEY_NOT_YET_VALID
                            if key.not_before is not None and when is not None
                            and when < key.not_before else R_KEY_EXPIRED)
-        self._check_freshness(state, when)
+        self._check_freshness(state, stream, when)
 
-    def _check_freshness(self, state: SessionIntegrity,
+    def _check_freshness(self, state: SessionIntegrity, stream: _Stream,
                          when: float | None) -> None:
         """Age one signature-verified record against the operator's bound."""
         if not self.freshness.enabled:
@@ -2140,20 +2864,26 @@ class StreamVerifier:
         state.freshness_checked += 1
         if state.oldest_signed_age_s is None or age > state.oldest_signed_age_s:
             state.oldest_signed_age_s = age
+        if self.freshness.from_future(when):
+            ahead = -age
+            if (state.furthest_future_s is None
+                    or ahead > state.furthest_future_s):
+                state.furthest_future_s = ahead
+            self._note(state, stream, R_FROM_FUTURE)
         if self.freshness.stale(when):
-            state.note(R_STALE)
+            self._note(state, stream, R_STALE)
 
     def _hold(self, stream: _Stream, seq: int, body: str, integrity: Integrity,
               session_key: str, state: SessionIntegrity,
               when: float | None = None) -> None:
         if seq in stream.pending:
-            state.note(R_SEQUENCE_REPLAY)
+            self._note(state, stream, R_SEQUENCE_REPLAY)
             return
         if self._pending_total >= self.limits.max_reorder_window:
             # The buffer is full and the missing records have not arrived. Call
             # the gap, resync, and record that the decision was forced by a
             # bound rather than by evidence.
-            state.note(R_REORDER_BUDGET)
+            self._note(state, stream, R_REORDER_BUDGET)
             self._force(stream)
             self._drain(stream, reordered=False)
             if seq == stream.expected:
@@ -2201,7 +2931,7 @@ class StreamVerifier:
                 if not key:
                     continue
                 state = self._session(key)
-                state.note(R_SEQUENCE_GAP)
+                self._note(state, stream, R_SEQUENCE_GAP)
                 if len(state.gaps) < self.limits.max_evidence_items:
                     state.gaps.append(dict(gap))
             # Resync on the surviving record's own declared predecessor. Without

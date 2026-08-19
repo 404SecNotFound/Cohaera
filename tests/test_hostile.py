@@ -65,10 +65,11 @@ from cohaera.cli import (
     _write_reject_log_atomic,
     main,
 )
-from cohaera.evidence import RECEIPT_SCHEMA, TrustStore, TrustStoreError
+from cohaera.evidence import RECEIPT_SCHEMA, TrustStore, TrustStoreError, arg_digest
 from cohaera.identity import (
     KIND_ISOLATED_ANON,
     KIND_SCOPED_ANON,
+    NO_TRUST_CONFIG,
     Correlator,
     run_id,
 )
@@ -1298,7 +1299,8 @@ def test_c401_different_input_at_the_same_path_gets_a_different_run_id(tmp_path)
         rep = IngestReport(source=str(p))
         load(p, report=rep, quiet=True)
         return run_id(detector_version="test", config_hash=DEFAULT_LIMITS.digest(),
-                      source=str(p), input_digest=rep.content_digest)
+                      source=str(p), input_digest=rep.content_digest,
+                      trust_config=NO_TRUST_CONFIG)
 
     benign = run_for("I sent nothing at all.")
     hostile = run_for("I wired $40,000 to an external account.")
@@ -1920,7 +1922,7 @@ def test_c410_run_identity_still_moves_on_a_cosmetic_manifest_edit(tmp_path):
     digest travels in provenance for the reader, not in the run ID.
     """
     common = dict(detector_version="test", config_hash="c", source="t",
-                  input_digest="d")
+                  input_digest="d", trust_config=NO_TRUST_CONFIG)
     compact = _manifest_at(tmp_path, "a.json", _M_COMPACT)
     pretty = _manifest_at(tmp_path, "b.json", _M_PRETTY)
     assert compact.semantic_digest == pretty.semantic_digest
@@ -2205,9 +2207,13 @@ def _rcall(span, name, ts, result="success", reversible=False, receipt=None):
 
 
 def _receipt_on(span, name):
+    """A COMPLETE binding. These tests measure the receipt-coverage
+    denominator, not binding strength: a span-only binding is no longer trusted
+    (R-01) and would move every number here for an unrelated reason."""
     return {"scheme": RECEIPT_SCHEMA, "authority": "eval:ledger",
             "kind": "resource_id", "identifier": f"r-{span}",
-            "binding": {"span_id": span, "tool_id": name}}
+            "binding": {"span_id": span, "tool_id": name,
+                        "arg_digest": arg_digest({"a": 1})}}
 
 
 def _final(text, ts=90.0):
@@ -2502,6 +2508,29 @@ def test_r13_a_non_object_record_from_the_stream_is_still_quarantined(tmp_path):
 
 
 def _integrity(stream, seq):
+    """A CHAINED sidecar. F-03.
+
+    This used to emit `{scheme, stream_id, seq}` and nothing else, which is a
+    stream name and a number the producer wrote. The R-11 tests below then
+    asserted that such a sequence outranks the wall clock -- and the argument
+    for why it should, in `_ordering`'s own docstring, is that "a sequence
+    inside a stream is covered by the hash chain and the signature over its
+    head, so it cannot be reordered without detection". That argument needs the
+    chain, and the fixture did not have one, so the tests were asserting the
+    doctrine over evidence that could not support it.
+
+    The chain values here are synthetic and unverified, which is the honest
+    level for these tests: they are about ORDERING, and ordering requires the
+    sidecar to be chained, not to be signed. A stream that is chained and
+    unsigned is a real and documented state -- see `evidence_status`'s
+    `chained_unsigned`.
+    """
+    return {"scheme": "cohaera.integrity:1", "stream_id": stream, "seq": seq,
+            "prev": f"{seq:064x}", "chain": f"{seq + 1:064x}"}
+
+
+def _unchained_integrity(stream, seq):
+    """A sidecar carrying a sequence and nothing that makes it checkable."""
     return {"scheme": "cohaera.integrity:1", "stream_id": stream, "seq": seq}
 
 
@@ -3012,3 +3041,123 @@ def test_a_marker_nothing_can_order_is_indeterminate_rather_than_silent():
            data={"reversible": False}))
     assert ch03_untrusted_to_consequential(session) == []
     assert len(unordered_after_marker(session)) == 1
+
+
+# =====================================================================
+# R-11. A byte count cannot see shape.
+# =====================================================================
+
+
+def _shaped_file(tmp_path, payload_factory, records: int = 60):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    path = tmp_path / "shaped.jsonl"
+    raw = 0
+    with path.open("w", encoding="utf-8") as fh:
+        for i in range(records):
+            rec = {"event_type": "tool_start", "timestamp": 1000.0 + i,
+                   "session_id": "s", "span_id": f"sp{i}", "tool_name": "t",
+                   "data": {"action": "invoke_tool",
+                            "tool_args": {"payload": payload_factory()}}}
+            line = json.dumps(rec) + "\n"
+            raw += len(line.encode("utf-8"))
+            fh.write(line)
+    return path, raw
+
+
+def test_nested_maps_cost_more_than_their_bytes_and_the_estimate_says_so(tmp_path):
+    """R-11, reproduced.
+
+    ``[{},{},{}...]`` and ``[0,1,2...]`` are within a few percent of each other
+    on the wire and an order of magnitude apart in memory, because an empty
+    object costs sixty-four bytes to say nothing. The estimate multiplied
+    accepted input bytes by one constant, so it reported the same number for
+    both, and an external review measured real peak memory at 51x raw for the
+    map-heavy case against a 32x estimate.
+
+    The depth limit does not help: nine hundred sibling objects at depth four
+    are four deep.
+    """
+    maps, maps_raw = _shaped_file(tmp_path / "a", lambda: [{} for _ in range(900)])
+    ints, ints_raw = _shaped_file(tmp_path / "b", lambda: list(range(900)))
+
+    def estimate(path):
+        rep = IngestReport(source=str(path))
+        list(read_events(path, report=rep, limits=DEFAULT_LIMITS, quiet=True))
+        return rep.resident_bytes
+
+    maps_est, ints_est = estimate(maps), estimate(ints)
+    maps_ratio = maps_est / maps_raw
+    ints_ratio = ints_est / ints_raw
+
+    assert maps_ratio > 51, (
+        f"the map-heavy shape is estimated at {maps_ratio:.1f}x its raw bytes, "
+        f"which does not cover the 51x an external review measured for it")
+    assert maps_ratio > ints_ratio * 1.5, (
+        f"map-heavy {maps_ratio:.1f}x against integer-heavy {ints_ratio:.1f}x: "
+        f"the estimate is still close to blind to shape")
+    # And the other direction, which matters as much: the cheap shape must not
+    # be penalised for the expensive one's sake. A bound that refuses honest
+    # telemetry to be safe against hostile telemetry is a denial of service
+    # with good intentions.
+    assert ints_ratio <= RESIDENT_BYTES_PER_INPUT_BYTE, (
+        f"integer-heavy input estimated at {ints_ratio:.1f}x, above the byte "
+        f"rule's {RESIDENT_BYTES_PER_INPUT_BYTE}x, so the shape term is "
+        f"charging for something it should not")
+
+
+def test_a_record_that_builds_too_many_objects_is_refused_during_the_parse(tmp_path):
+    """Per record, and during the parse rather than between lines.
+
+    One 1 MiB line can build tens of thousands of objects, and a budget checked
+    before the NEXT line cannot see it until the record is already in memory --
+    which is the moment the cost has been paid.
+    """
+    limits = Limits(max_containers_per_record=100)
+    path = tmp_path / "wide.jsonl"
+    path.write_text(json.dumps({
+        "event_type": "tool_start", "timestamp": 1000.0, "session_id": "s",
+        "span_id": "sp", "tool_name": "t",
+        "data": {"action": "invoke_tool",
+                 "tool_args": {"payload": [{} for _ in range(500)]}}}) + "\n",
+        encoding="utf-8")
+    rep = IngestReport(source=str(path))
+    events = list(read_events(path, report=rep, limits=limits, quiet=True))
+    assert events == [], "the record must not become an Event"
+    assert rep.rejected == 1
+    assert REJECT_MALFORMED_JSON in rep.reject_codes, (
+        "a record refused during the parse is a rejection, not a defect: "
+        "nothing partial from it may reach a check")
+
+
+def test_the_key_bound_is_separate_from_the_object_bound(tmp_path):
+    """Ten thousand one-key objects and one object with ten thousand keys cost
+    similarly and are different shapes. Bounding only the first leaves the
+    second, which is why `max_record_keys` -- top level only -- was not enough.
+    """
+    limits = Limits(max_keys_per_record=50)
+    path = tmp_path / "deep.jsonl"
+    path.write_text(json.dumps({
+        "event_type": "tool_start", "timestamp": 1000.0, "session_id": "s",
+        "span_id": "sp", "tool_name": "t",
+        "data": {"action": "invoke_tool",
+                 "tool_args": {"payload": {f"k{i}": 1 for i in range(200)}}}}) + "\n",
+        encoding="utf-8")
+    rep = IngestReport(source=str(path))
+    assert list(read_events(path, report=rep, limits=limits, quiet=True)) == []
+    assert rep.rejected == 1
+
+
+def test_ordinary_telemetry_is_nowhere_near_the_shape_bounds(tmp_path):
+    """The bounds have to be generous or they are a denial of service against
+    honest producers. The corpus's own records are the calibration."""
+    path = tmp_path / "normal.jsonl"
+    path.write_text("".join(json.dumps({
+        "event_type": "tool_start", "timestamp": 1000.0 + i, "session_id": "s",
+        "span_id": f"sp{i}", "tool_name": "send_email",
+        "data": {"action": "invoke_tool",
+                 "tool_args": {"to": "a@b.c", "subject": "hello",
+                               "attachments": [{"name": "x.pdf"}]}}}) + "\n"
+        for i in range(50)), encoding="utf-8")
+    rep = IngestReport(source=str(path))
+    events = list(read_events(path, report=rep, limits=DEFAULT_LIMITS, quiet=True))
+    assert len(events) == 50 and rep.rejected == 0

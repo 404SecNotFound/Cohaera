@@ -40,6 +40,8 @@ from typing import Any
 
 from .capabilities import CapabilityManifest
 from .evidence import (
+    ARGS_UNBINDABLE,
+    BINDING_CONTEXT,
     BINDING_TRUSTED,
     BOUND_ARG_MISMATCH,
     BOUND_EXACT,
@@ -65,6 +67,7 @@ from .evidence import (
     R_SEQUENCE_GAP,
     R_SEQUENCE_REPLAY,
     R_SIGNATURE_INVALID,
+    R_SIGNATURE_PREFIX_ONLY,
     R_STALE,
     R_STREAM_FORKED,
     R_STREAM_REPLAYED,
@@ -106,6 +109,7 @@ __all__ = [
     "R_SEQUENCE_GAP",
     "R_SEQUENCE_REPLAY",
     "R_SIGNATURE_INVALID",
+    "R_SIGNATURE_PREFIX_ONLY",
     "R_STALE",
     "R_STREAM_FORKED",
     "R_STREAM_REPLAYED",
@@ -169,10 +173,17 @@ class SequenceGrammar:
     START = "<START>"
     END = "<END>"
 
-    def __init__(self) -> None:
+    # R-14. One grammar over every training session, and the name says so. A
+    # future per-agent or peer-group model sets this to what it actually scoped
+    # by; a reader of the verdict can then tell the two apart without knowing
+    # which version produced it.
+    SCOPE_FLEET = "fleet"
+
+    def __init__(self, scope: str = SCOPE_FLEET) -> None:
         self.bigrams: Counter[tuple[str, str]] = Counter()
         self.unigrams: Counter[str] = Counter()
         self.sessions_fitted = 0
+        self.scope = scope
 
     def fit(self, sessions: Iterable[Session]) -> SequenceGrammar:
         for s in sessions:
@@ -417,6 +428,22 @@ def ch01_sequence_order(session: Session, grammar: SequenceGrammar | None,
             "observed_sequence_truncated": dropped_seq,
             "baseline_sessions": grammar.sessions_fitted,
             "baseline_hash": grammar.fingerprint(),
+            # R-14. WHOSE normal this was measured against, stated on the
+            # finding rather than left for a reader to assume. `fleet` means
+            # one grammar fitted over every session in the baseline, with no
+            # scoping by agent, owner, role, workflow, tenant or time -- so a
+            # transition that is ordinary for the finance agent is ordinary for
+            # the incident-response agent too, and a rare action by an agent
+            # that has never done it is not rare if some other agent does it
+            # daily. The documentation talks about an agent's own history; the
+            # implementation trains one workload-wide model, and the gap
+            # between those two sentences belongs in the output.
+            #
+            # Per-agent and peer-group baselines are the fix and they are a
+            # design change: they need a minimum-sample rule, time decay, and a
+            # corpus that has more than one population in it. Naming the scope
+            # is what stops the current model being read as the eventual one.
+            "baseline_scope": grammar.scope,
         },
     )]
 
@@ -538,9 +565,16 @@ def _ordering(call: ToolCall, event: Event) -> str:
     when it is strictly unequal, and INDETERMINATE otherwise -- reported, never
     silently resolved.
     """
-    seq_a, seq_b = call.start_seq, event.integrity.seq if event.integrity else None
+    # F-03. `chained` throughout: a stream id and a sequence with no `prev`
+    # and no `chain` are two numbers the producer wrote, and this function is
+    # exactly where letting them win hands the producer the ordering CH03 and
+    # CH04 rest on. call.start_seq is already gated the same way in the model.
+    _sidecar = event.integrity
+    _chained = _sidecar is not None and _sidecar.chained
+    seq_a = call.start_seq
+    seq_b = _sidecar.seq if _sidecar is not None and _chained else None
     stream_a = call.start_stream
-    stream_b = event.integrity.stream_id if event.integrity else None
+    stream_b = _sidecar.stream_id if _sidecar is not None and _chained else None
     if (seq_a is not None and seq_b is not None
             and stream_a is not None and stream_a == stream_b):
         if seq_a == seq_b:
@@ -594,8 +628,9 @@ class _References:
         for event in events:
             self.count += 1
             integrity = event.integrity
-            stream = integrity.stream_id if integrity else None
-            seq = integrity.seq if integrity else None
+            chained = integrity is not None and integrity.chained
+            stream = integrity.stream_id if integrity is not None and chained else None
+            seq = integrity.seq if integrity is not None and chained else None
             if stream is not None and seq is not None:
                 low = self.min_seq.get(stream)
                 if low is None or seq < low:
@@ -764,6 +799,22 @@ def ch02_concealment_gap(session: Session,
     response = session.final_response
     if response is None:
         return []          # not clean: see coverage()
+    if session.response_text_truncated:
+        # F-04. This check's entire output is an ABSENCE claim -- "the response
+        # does not mention what the agent did" -- and the response was cut
+        # short before Cohaera saw the end of it. The truncation was recorded
+        # as a field defect and then ignored, so a disclosure thirty-three
+        # characters past the cap produced a CRITICAL concealment finding at
+        # confidence 1.0.
+        #
+        # That is the objection this project was started over, appearing inside
+        # the project: a check that could not finish reading, reporting itself
+        # as having read. Abstain, and let coverage say why.
+        #
+        # Only the absence direction is affected. A disclosure FOUND in a
+        # truncated prefix is still a disclosure, which is why
+        # `ambiguous_disclosures` below is left alone.
+        return []
 
     consequential = session.consequential_calls
     if not consequential:
@@ -1101,6 +1152,16 @@ def _approval_state(session: Session, call: ToolCall) -> tuple[str, Any]:
     for m in matches:
         if m.fresh is False:
             return APPROVAL_EXPIRED, m
+    # R-10. Ordered last of the failure states deliberately. A mismatch and an
+    # expiry are things the approval SAYS that rule this call out; an incomplete
+    # binding is a thing the approval does not say, and the two must not be
+    # rounded together. It sits above APPROVAL_NONE because an approval that was
+    # presented and did not fit is a stronger fact than no approval at all --
+    # which is the same reason approvals_for returns these rather than dropping
+    # them.
+    for m in matches:
+        if m.binding in BINDING_CONTEXT:
+            return APPROVAL_SPAN_ONLY, m
     return APPROVAL_NONE, None
 
 
@@ -1109,12 +1170,17 @@ APPROVAL_COVERED = "approved"
 APPROVAL_DENIED = "denied"
 APPROVAL_ARG_MISMATCH = "approval_for_other_arguments"
 APPROVAL_EXPIRED = "approval_expired"
+# R-10. An approval naming the span and at most one of the other two fields. It
+# used to be indistinguishable from APPROVAL_COVERED, which meant one field the
+# producer could omit switched CH04 off entirely for that call.
+APPROVAL_SPAN_ONLY = "approval_not_argument_bound"
 
 # The states in which a completed call after a control is NOT covered. Named
-# rather than written as "!= APPROVAL_COVERED" so that adding a sixth state
+# rather than written as "!= APPROVAL_COVERED" so that adding a further state
 # later cannot silently make it count as approval.
 UNAPPROVED_STATES = frozenset({APPROVAL_NONE, APPROVAL_DENIED,
-                               APPROVAL_ARG_MISMATCH, APPROVAL_EXPIRED})
+                               APPROVAL_ARG_MISMATCH, APPROVAL_EXPIRED,
+                               APPROVAL_SPAN_ONLY})
 
 _APPROVAL_WORDING = {
     APPROVAL_NONE: "no approval was presented for it",
@@ -1122,6 +1188,8 @@ _APPROVAL_WORDING = {
     APPROVAL_ARG_MISMATCH: "the only approval naming it was granted for "
                            "different arguments",
     APPROVAL_EXPIRED: "the approval naming it was outside its validity window",
+    APPROVAL_SPAN_ONLY: "the only approval naming it was bound by span alone "
+                        "and does not constrain what the call did",
 }
 
 # Scalar policy fields worth carrying into evidence. An unbounded copy of the
@@ -1208,7 +1276,8 @@ def ch04_guardrail_overrun(session: Session,
         # Keyed on the sequence pulled out first, so the comparison key cannot
         # be a narrowing mypy has already lost by the time the lambda runs.
         sequenced = [(e.integrity.seq, e) for e in events
-                     if e.integrity is not None and e.integrity.seq is not None]
+                     if e.integrity is not None and e.integrity.chained
+                     and e.integrity.seq is not None]
         earliest[etype] = min(sequenced)[1] if sequenced else events[0]
     if not earliest:
         return []
@@ -1268,6 +1337,15 @@ def ch04_guardrail_overrun(session: Session,
             "policy_enforcement_source": source,
             "approved_continuations": len(approved),
             "approval_states": sorted({states[id(c)][0] for c in completed}),
+            # R-10. Which PATH the approvals in play arrived by, not who signed
+            # them. Every approval Cohaera can parse today is in-band, so this
+            # reads the same in every deployment -- which is the point: an
+            # "approved continuation" is the producer's claim that a decision
+            # was made, and the verdict now says so in a field rather than in a
+            # docstring. See evidence.APPROVAL_ORIGIN_IN_BAND.
+            "approval_origins": sorted(
+                {m.approval.origin for c in completed + approved
+                 if (m := states[id(c)][1]) is not None}),
         }
 
         if enforcement == ENFORCEMENT_ADVISORY:
@@ -1484,10 +1562,31 @@ CH06_INTEGRITY = "CH06_evidence_integrity"
 # on every finding, because a verdict built on a stream somebody could have
 # edited should not be presented at the same confidence as one built on a stream
 # that chained and verified.
-EVIDENCE_VERIFIED = "verified"          # chained AND signature-checked
+# R-05. ``verified`` used to be one of these values and is gone, because it
+# answered the wrong question. It was returned whenever ANY signature verified,
+# which is a fact about whether signing happened at all rather than about what
+# the signatures covered -- so a 150-record stream signed at sequence 0 and 100
+# was reported ``verified`` with 49 records past the last attestation, covered
+# by nothing, and CH06 scored it 1.0. A signature covers the chain head at its
+# own sequence, so it attests every record up to that point and none after it;
+# the two cases below are that distinction, and collapsing them is how an
+# unsigned tail rides in under a word an analyst reads as settled.
+EVIDENCE_VERIFIED_COMPLETE = "verified_complete"  # attested to the final record
+EVIDENCE_VERIFIED_PREFIX = "verified_prefix"      # attested to a point, then not
 EVIDENCE_CHAINED = "chained_unsigned"   # chained, nothing to verify it against
 EVIDENCE_UNATTESTED = "unattested"      # no sidecars at all: today's default
 EVIDENCE_INADMISSIBLE = "inadmissible"  # a gap, a break or a bad signature
+# CH06's own finding. Its subject IS the integrity evidence, so asking how far
+# that evidence was established is a category error rather than a hard question.
+# It used to be stamped ``verified``, which was the one place the old vocabulary
+# stated something false rather than merely incomplete.
+EVIDENCE_NOT_APPLICABLE = "not_applicable"
+
+# Every value the field can take, so a conformance test and a SIEM parser have
+# one list to read rather than a grep.
+EVIDENCE_STATES = frozenset({
+    EVIDENCE_VERIFIED_COMPLETE, EVIDENCE_VERIFIED_PREFIX, EVIDENCE_CHAINED,
+    EVIDENCE_UNATTESTED, EVIDENCE_INADMISSIBLE, EVIDENCE_NOT_APPLICABLE})
 
 
 def evidence_status(session: Session) -> str:
@@ -1504,9 +1603,15 @@ def evidence_status(session: Session) -> str:
         return EVIDENCE_UNATTESTED
     if audit.inadmissible:
         return EVIDENCE_INADMISSIBLE
-    if audit.signatures_verified > 0:
-        return EVIDENCE_VERIFIED
-    return EVIDENCE_CHAINED
+    if audit.signatures_verified == 0:
+        return EVIDENCE_CHAINED
+    # R-05. Not ``signatures_verified > 0``. The question is how far the
+    # attestation reached, not whether one exists: see
+    # SessionIntegrity.signature_covers_final, which requires the last record of
+    # EVERY stream feeding this session to be covered.
+    if audit.signature_covers_final:
+        return EVIDENCE_VERIFIED_COMPLETE
+    return EVIDENCE_VERIFIED_PREFIX
 
 
 def ch06_evidence_integrity(session: Session,
@@ -1610,6 +1715,14 @@ def ch06_evidence_integrity(session: Session,
 CH07_FAMILY = "CH07_effect_contradiction"
 CH07_CONTRADICTED = "CH07_reported_failure_with_effect_receipt"
 CH07_UNBOUND = "CH07_effect_receipt_does_not_bind"
+# R-01. Distinct from CH07_UNBOUND, and the distinction is the doctrine rather
+# than a taxonomy preference. A receipt that names a DIFFERENT span, tool or
+# argument digest actively disagrees with the call it arrived on, which is what
+# a receipt copied off another call looks like. A receipt that simply omits a
+# field disagrees with nothing -- it constrains nothing. Absent is not weaker;
+# it is a different fact, and reporting the second as the first would invent an
+# accusation against every adapter that has not implemented argument digests.
+CH07_PARTIAL = "CH07_effect_receipt_partially_bound"
 
 
 def _receipted_calls(session: Session) -> list[ToolCall]:
@@ -1617,7 +1730,16 @@ def _receipted_calls(session: Session) -> list[ToolCall]:
 
 
 def _receipt_binding(call: ToolCall) -> str:
-    """How well this call's receipt binds to it. See evidence.Binding."""
+    """How well this call's receipt binds to it. See evidence.Binding.
+
+    R-01. This used to return ``BOUND_EXACT`` whenever the two argument digests
+    agreed, whatever else the binding did or did not name, and ``BOUND_SPAN_ONLY``
+    -- then a trusted value -- whenever it could not compare them at all. Both
+    halves were wrong in the same direction. A receipt naming only the arguments
+    is a receipt that names no call; a receipt naming nothing is not a binding.
+    Each of the three fields is now either CHECKED or the result is not exact,
+    and "the field was absent" is never the same answer as "the field matched".
+    """
     receipt = call.receipt
     if receipt is None:
         return BOUND_NONE
@@ -1626,9 +1748,18 @@ def _receipt_binding(call: ToolCall) -> str:
         return BOUND_NONE
     if b.tool_id and b.tool_id != call.name:
         return BOUND_NONE
-    if b.arg_digest and call.arg_digest:
-        return (BOUND_EXACT if b.arg_digest == call.arg_digest
-                else BOUND_ARG_MISMATCH)
+    if call.arg_digest_source in ARGS_UNBINDABLE:
+        # F-01. The CALL's own two argument identities disagree, so there is
+        # nothing here for a receipt to bind to and a contradiction resting on
+        # it would be an accusation built on evidence the producer wrote both
+        # halves of. A receipt matching the declared digest of a call whose
+        # captured arguments say otherwise is exactly the shape of a producer
+        # manufacturing the evidence used to accuse it.
+        return BOUND_ARG_MISMATCH
+    if b.arg_digest and call.arg_digest and b.arg_digest != call.arg_digest:
+        return BOUND_ARG_MISMATCH
+    if b.complete and call.span_id and call.arg_digest:
+        return BOUND_EXACT
     return BOUND_SPAN_ONLY
 
 
@@ -1660,16 +1791,29 @@ def ch07_effect_contradiction(session: Session,
 
     contradicted: list[ToolCall] = []
     unbound: list[ToolCall] = []
+    partial: list[ToolCall] = []
     for c in receipted:
         binding = _receipt_binding(c)
-        if binding not in BINDING_TRUSTED:
+        if binding in BINDING_TRUSTED:
+            if not c.executed:
+                # ``not executed`` rather than ``result == failure``: an orphan
+                # or duplicate terminal event carrying a bound receipt is the
+                # same contradiction wearing a different pairing state, and
+                # enumerating the states would leave the next one added
+                # silently uncovered.
+                contradicted.append(c)
+        elif binding in BINDING_CONTEXT:
+            # R-01. Incomplete, so it cannot carry a contradiction -- but it is
+            # reported only where the trust decision actually changed, on a call
+            # whose telemetry did NOT report success. A partial receipt on a
+            # completed call is a producer-shape gap and belongs in coverage:
+            # emitting a finding per call would put every adapter that has not
+            # implemented argument digests on the pager, which is the same
+            # mistake as a finding per receiptless call.
+            if not c.executed:
+                partial.append(c)
+        else:
             unbound.append(c)
-        elif not c.executed:
-            # ``not executed`` rather than ``result == failure``: an orphan or
-            # duplicate terminal event carrying a bound receipt is the same
-            # contradiction wearing a different pairing state, and enumerating
-            # the states would leave the next one added silently uncovered.
-            contradicted.append(c)
 
     findings: list[Finding] = []
     if contradicted:
@@ -1725,6 +1869,36 @@ def ch07_effect_contradiction(session: Session,
                       "unbound_total": len(unbound),
                       "receipted_calls": len(receipted)},
         ))
+
+    if partial:
+        shown, dropped = cap_list(
+            [{**c.brief(limits),
+              "receipt": c.receipt.as_dict() if c.receipt else None,
+              "binding": _receipt_binding(c)} for c in partial],
+            limits.max_evidence_items)
+        findings.append(Finding(
+            check=CH07_PARTIAL,
+            family=CH07_FAMILY,
+            severity="low",
+            session_id=session.session_id,
+            title="Effect receipt on a call that did not report success is "
+                  "incompletely bound",
+            detail=(
+                f"{len(partial)} call(s) did not report success and carry an "
+                "effect receipt that names only part of the call. Nothing here "
+                "disagrees with anything -- the receipt does not name a "
+                "different span, tool or arguments, it declines to name them, "
+                "so it cannot establish that the effect belongs to THIS call. "
+                "Before the binding rule was tightened this reported as a "
+                "critical contradiction on the strength of a binding that had "
+                "never been checked. It is reported at all because the shape is "
+                "worth an analyst's attention and the remedy is one field on "
+                "the adapter, not because the effect has been established."
+            ),
+            evidence={"partial": shown, "partial_truncated": dropped,
+                      "partial_total": len(partial),
+                      "receipted_calls": len(receipted)},
+        ))
     return findings
 
 
@@ -1761,6 +1935,10 @@ SURFACE_APPROVAL = "approval_binding"
 R_NO_BASELINE = "NO_BENIGN_BASELINE_FITTED"
 R_BASELINE_VOCABULARY_MISMATCH = "BASELINE_VOCABULARY_MISMATCH"
 R_NO_RESPONSE = "NO_FINAL_RESPONSE_TEXT"
+# F-04. Present, and not all of it. Distinct from absent, because the operator
+# remedy is different: absent needs cold-path capture turned on, truncated
+# needs a bound raised.
+R_TRUNCATED_RESPONSE = "FINAL_RESPONSE_TRUNCATED"
 R_BAD_RESPONSE = "FINAL_RESPONSE_WRONG_TYPE"
 R_NO_TOOL_RESULT = "NO_TOOL_RESULT_CAPTURED"
 R_NO_SCANNER = "NO_INJECTION_SCANNER_EVIDENCE"
@@ -1782,6 +1960,11 @@ R_FIELD_DEFECTS = "RECORD_FIELD_DEFECTS_PRESENT"
 # P1. The three absences that are now STATED rather than passed over.
 R_NO_APPROVAL_EVIDENCE = "NO_APPROVAL_EVIDENCE"
 R_APPROVAL_NOT_ARGUMENT_BOUND = "APPROVAL_BOUND_BY_SPAN_ONLY"
+# R-01, the receipt half of the same gap. Its approval twin above has existed
+# since P1.3; the receipt side had none, so a deployment whose adapter emitted
+# no argument digest was told CH07 was fully covered while CH07 could not have
+# established a contradiction against any call in the session.
+R_RECEIPT_NOT_ARGUMENT_BOUND = "RECEIPT_BOUND_BY_SPAN_ONLY"
 R_ENFORCEMENT_FROM_PRODUCER = "POLICY_ENFORCEMENT_DECLARED_IN_BAND"
 R_NO_EFFECT_RECEIPT = "NO_EFFECT_RECEIPT"
 R_DANGLING_APPROVAL = "APPROVAL_MATCHES_NO_CALL"
@@ -2092,7 +2275,26 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
 
     # ---- CH02 -----------------------------------------------------------
     required = [SURFACE_FINAL_RESPONSE, SURFACE_TOOL_CLASS, SURFACE_CORRELATION_KEY]
-    if session.final_response is None:
+    if session.final_response is not None and session.response_text_truncated:
+        # F-04. Present but incomplete, which is a third state the contract did
+        # not have. Reported as not_evaluated rather than degraded: the missing
+        # part is not a fraction of the answer, it is the part that would have
+        # falsified it.
+        contracts.append(CheckContract(
+            check="CH02_concealment_gap", status=STATUS_NOT_EVALUATED,
+            confidence=0.0, required_surfaces=required,
+            present_surfaces=[SURFACE_TOOL_CLASS, SURFACE_CORRELATION_KEY],
+            missing_surfaces=[SURFACE_FINAL_RESPONSE],
+            reasons=[R_TRUNCATED_RESPONSE],
+            remedies=[f"Raise max_response_chars above "
+                      f"{limits.max_response_chars}, or have the adapter "
+                      f"emit the final response in full. A concealment finding "
+                      f"needs the whole text: the disclosure it would be "
+                      f"looking for may be in the part that was cut."],
+            assumptions=["A truncated response cannot support an absence "
+                         "claim. A disclosure found inside the surviving "
+                         "prefix is still sound."]))
+    elif session.final_response is None:
         reasons = [R_BAD_RESPONSE] if session.response_text_rejected else [R_NO_RESPONSE]
         contracts.append(CheckContract(
             check="CH02_concealment_gap", status=STATUS_NOT_EVALUATED, confidence=0.0,
@@ -2147,8 +2349,24 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
                               SURFACE_CORRELATION_KEY],
             missing_surfaces=[SURFACE_INJECTION_SCANNER],
             reasons=[R_NO_SCANNER],
-            remedies=["Emit has_injection_patterns on scanned events, or capture "
-                      "tool_result so Cohaera can scan locally."],
+            # F-16. The second half of this used to read "or capture
+            # tool_result so Cohaera can scan locally", and Cohaera does not
+            # scan locally. An operator who captured the result got the same
+            # not_evaluated verdict, the same remedy, and no way to find out
+            # why. A remedy that does not work is worse than no remedy: it
+            # spends the operator's effort and their trust.
+            #
+            # Not replaced with a local scanner. Cohaera VERIFIES evidence and
+            # does not manufacture it, and a regex pass of its own would be a
+            # new source of exactly the false confidence E09 already describes
+            # -- with the added problem that the detector would then be
+            # grading its own scanner's output.
+            remedies=["Emit has_injection_patterns on the events whose results "
+                      "were scanned, from a scanner that runs where the content "
+                      "arrives. Cohaera does not scan content itself: capturing "
+                      "tool_result does not enable this check, and a detector "
+                      "that generated its own taint evidence would be grading "
+                      "its own work."],
             assumptions=["No marker field in the stream means no scanner ran, not "
                          "that nothing was found; see EVASION.md E09."]))
     else:
@@ -2334,6 +2552,30 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
                 "Supply the collector's public key with --trust-store. An "
                 "unsigned chain proves the stream is self-consistent, which an "
                 "attacker who rewrote the whole stream can also arrange.")
+        elif not audit.signature_covers_final:
+            # R-05. Signed, and not to the end. The share is the honest
+            # multiplier because it is literally how much of this session a
+            # signature reaches -- and there was no term for it at all, so a
+            # stream signed at sequence 0 and 100 of 149 scored 1.0.
+            share = audit.signature_coverage
+            conf *= share
+            int_reasons.append(R_SIGNATURE_PREFIX_ONLY)
+            unattested = [
+                f"{r['stream_id']}: signed to "
+                f"{r['verified_to'] if r['verified_to'] is not None else 'nothing'}"
+                f" of {r['last_seq']}"
+                for r in audit.signature_ranges
+                if r["verified_to"] is None or r["verified_to"] < r["last_seq"]]
+            int_remedies.append(
+                "Sign the final record of each stream, or set the collector's "
+                "sampling so the last record is always a signing position. A "
+                "signature covers the chain head at its own sequence and "
+                "nothing after it, so records past the last one are chained "
+                "and unattested (" + "; ".join(unattested[:3]) + ").")
+            int_assumptions.append(
+                f"A verified signature reaches {share:.0%} of this session's "
+                f"attested records. The remainder is self-consistent and "
+                f"vouched for by nobody.")
         # Replay is the one attack every other check here is blind to by
         # construction, because a replayed stream is a genuine stream. Whether
         # it was even considered is a property of how the run was invoked, so it
@@ -2446,18 +2688,47 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
         r7 = common_reasons + class_reasons()
         if share < 1.0:
             r7.append(R_NO_EFFECT_RECEIPT)
+        # R-01. The share of receipts that could actually carry the check's one
+        # conclusion. A receipt bound by span alone cannot establish that an
+        # effect belongs to the call it arrived on, so it buys presence, not
+        # coverage -- and the difference has to reach the contract, or a
+        # deployment that emits partial bindings everywhere reads as fully
+        # evaluated while CH07 is structurally unable to fire.
+        #
+        # Half weight per loose receipt, not zero, and the difference is a real
+        # distinction rather than a fudge. A span-only receipt cannot carry the
+        # contradiction -- but CH07 still reads it and still reports on it, as
+        # CH07_PARTIAL and as CH07_UNBOUND when it names a different call. A
+        # session with nothing but loose receipts is degraded, not blind, and
+        # scoring it 0.0 would put a not_evaluated contract in the same verdict
+        # as a finding the check had just produced.
+        loose = [c for c in receipted
+                 if _receipt_binding(c) in BINDING_CONTEXT]
+        if loose:
+            r7.append(R_RECEIPT_NOT_ARGUMENT_BOUND)
+            conf *= 1.0 - 0.5 * len(loose) / len(receipted)
         if any(c.arg_digest_disagrees for c in session.tool_calls):
             conf *= 0.5
             r7.append(R_ARG_DIGEST_CONTRADICTS)
+        remedies = []
+        if share < 1.0:
+            remedies.append(
+                f"{effectful_total - len(receipted)} consequential or "
+                "unclassified call(s) carry no receipt; their reported "
+                "outcome is unfalsifiable.")
+        if loose:
+            remedies.append(
+                f"{len(loose)} receipt(s) name the span but not the argument "
+                "digest. A receipt that does not constrain the arguments "
+                "cannot establish that an effect belongs to this call; emit "
+                "arg_digest on the binding.")
         contracts.append(CheckContract(
             check=CH07_FAMILY,
             status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
             confidence=conf, required_surfaces=required,
             present_surfaces=required, missing_surfaces=[],
             reasons=r7,
-            remedies=([f"{effectful_total - len(receipted)} consequential or "
-                       "unclassified call(s) carry no receipt; their reported "
-                       "outcome is unfalsifiable."] if share < 1.0 else []),
+            remedies=remedies,
             assumptions=["A receipt is not verified with the authority that "
                          "minted it. Cohaera is offline; it checks that the "
                          "receipt BINDS to this call, not that it is real."]))
@@ -2484,6 +2755,16 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
 
     return {
         "schema": COVERAGE_SCHEMA,
+        # R-05, second half. `evidence_status` was stamped on every FINDING and
+        # nowhere else, so a session that triggered nothing said nothing about
+        # whether its own telemetry had been established -- and the quiet
+        # session is exactly where it matters. "This agent did nothing unusual"
+        # rests on records, and a reader has no way to ask which ones unless
+        # something happens to have gone wrong. It belongs in coverage because
+        # it is the same kind of statement as the rest of this object: not what
+        # the agent did, but how much of the answer Cohaera was in a position
+        # to give.
+        "evidence_status": evidence_status(session),
         "checks_total": len(contracts),
         "checks_evaluated": evaluated,
         "checks_degraded": degraded,
@@ -2524,7 +2805,7 @@ ALL_CHECKS = ["CH01_sequence_order", "CH02_concealment_gap",
               CH04_COMPLETED, CH04_ATTEMPTED, CH04_BYPASSED,
               "CH05_unpaired_calls",
               CH06_INTEGRITY,
-              CH07_CONTRADICTED, CH07_UNBOUND]
+              CH07_CONTRADICTED, CH07_UNBOUND, CH07_PARTIAL]
 
 # check id -> the coverage contract that governs it
 CHECK_FAMILIES = {
@@ -2539,6 +2820,7 @@ CHECK_FAMILIES = {
     CH06_INTEGRITY: CH06_INTEGRITY,
     CH07_CONTRADICTED: CH07_FAMILY,
     CH07_UNBOUND: CH07_FAMILY,
+    CH07_PARTIAL: CH07_FAMILY,
 }
 
 
@@ -2567,5 +2849,6 @@ def run_all(session: Session, grammar: SequenceGrammar | None = None,
     status = evidence_status(session)
     for f in findings:
         f.confidence = by_check.get(f.family, by_check.get(f.check, 1.0))
-        f.evidence_status = EVIDENCE_VERIFIED if f.check == CH06_INTEGRITY else status
+        f.evidence_status = (EVIDENCE_NOT_APPLICABLE if f.check == CH06_INTEGRITY
+                             else status)
     return findings, cov

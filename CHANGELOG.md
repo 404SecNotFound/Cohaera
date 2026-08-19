@@ -21,6 +21,137 @@ reports recall is a marketing document.
 Pre-alpha. The evaluation card is regenerated on every change and CI fails on
 any diff, so the numbers below are derived rather than claimed.
 
+### Breaking — the output contract moved to `cohaera:0.3`
+
+An external review of the merged branch raised twenty-one findings. Closing the
+evidence-layer ones changed what a verdict *says*, not only whether it fires,
+so the schema version moves with them. A parser or rule built against
+`cohaera:0.2` will not break loudly — it will read absent fields and report
+empty — which is precisely why the version has to move.
+
+- **`evidence_status` no longer emits `verified`.** It emits
+  `verified_complete` when a signature verified through the final accepted
+  record, and `verified_prefix` when it did not. A signature covers the chain
+  head at its own sequence, so a collector signing every hundredth record left
+  everything after the last signing position attested by nobody — and the old
+  vocabulary reported that session exactly like a fully signed one, at
+  confidence 1.0 (R-05). Content matching the literal `verified` now matches
+  nothing, deliberately.
+- **A receipt or an approval must bind completely to be trusted.** Span, tool
+  *and* argument digest. A receipt naming only a span was in the trusted set,
+  so an unbound identifier could support a critical CH07 contradiction — a
+  finding framed as evidence-backed, resting on evidence that identified no
+  call. Span-only is now context, never authority, and CH07 reports it as
+  `CH07_effect_receipt_partially_bound` (R-01, R-10).
+- **`analysis_run_id` and `verdict_id` change for the same input** when the
+  trust configuration differs, because provenance now carries a
+  `trust_config_digest` that the run identity commits to (R-06).
+- **`stream_ledger` provenance gained `generation_read` and
+  `state_digest_read`** — the ledger state this run's replay and fork verdicts
+  were actually judged against.
+
+### Fixed — a second external review, with executable proofs
+
+A second reviewer read `main` and shipped eight reproduction probes rather
+than eight assertions. Six reproduced. Four of the six are one root cause:
+**a producer-supplied value was being treated as a fact.**
+
+- **Captured arguments are authoritative** (F-01). An event carries both
+  `tool_args` and `arg_digest`, and the declared digest won whenever it was
+  present — the disagreement was recorded as a flag nothing acted on. A call
+  sending to an attacker, declaring the digest of a send to Alice, inherited
+  Alice's approval and CH04 said nothing. This defeated the whole point of
+  requiring a complete binding: the producer chose the value being bound to.
+  The digest over the arguments Cohaera saw now wins, and a call whose two
+  identities disagree is bindable by nothing.
+- **An approval must be observed before the call it covers** (F-02).
+  `granted_at` is a number the producer writes, so an approval emitted after
+  the call completed and backdated to before it satisfied the freshness window
+  perfectly and silenced the bypass.
+- **Only a chained sidecar may order events** (F-03). `stream_id` and `seq`
+  with no `prev` and no `chain` are two numbers the producer wrote, and they
+  were deciding whether a consequential call happened before or after the
+  control governing it. `attested` also stops meaning "every record carried a
+  sidecar" — a much weaker question, published under the stronger one's name.
+  That question is now `sidecars_complete`.
+- **An absence claim abstains on truncated text** (F-04). This one is this
+  project's founding objection appearing inside the project. A response cut at
+  the cap was recorded as a defect and the defect was then ignored, so CH02
+  concluded "the agent did not disclose" from text it had not finished
+  reading, at confidence 1.0 and severity critical. A disclosure found in a
+  surviving prefix is still sound; only the absence conclusion is not.
+- **`chain` and `prev` must be SHA-256 digests** (F-14). Any length of hex was
+  accepted and copied into the verdict, so twelve records carrying 64 KiB each
+  turned 788 KB of input into 9.58 MB of output at exit code zero. Now 0.17x.
+- **CH03 no longer promises a scanner that does not exist** (F-16). It told
+  operators to capture `tool_result` "so Cohaera can scan locally". Cohaera
+  does not scan locally, and an operator who captured it got the same verdict
+  and the same remedy with no way to learn why.
+
+All eight probes are permanent regressions in `tests/test_review_probes.py`,
+which is the reviewer's own success condition: every probe fails closed or
+returns an explicit non-evaluated state.
+
+### Fixed — the rest of the external review
+
+Twenty-one findings were raised against the merged branch. The four that
+change the output contract are above; these change behaviour, bounds or
+claims. [REVIEW-RESPONSE.md](REVIEW-RESPONSE.md) accounts for all of them,
+including the three recommended remedies that were declined.
+
+- **The ledger now proves continuity** (R-02). Advancement requires the next
+  exact sequence *and* the predecessor matching the stored head. A gap is
+  discontinuous and a mismatching head is a fork; neither reads as ordinary
+  advancement, which is what a collector omitting a batch boundary used to get.
+- **Only evidence that held may write to it** (R-03), it is transactional
+  against concurrent runs (R-04), and it is called an *observation ledger*
+  rather than claiming exactly-once scoring.
+- **Attested files are resolved once** (R-07), so the digest describes the
+  bytes that were parsed rather than whatever a second `open()` found.
+- **Freshness is bounded at both ends** (R-13). A record dated past
+  `max_future_skew_s` is inadmissible, and `--evidence-as-of` refuses `nan`,
+  which silently disabled the whole bound.
+- **Record shape is metered during the parse** (R-11). The resident estimate is
+  the larger of a byte term and a container/key term, because arrays of empty
+  maps and arrays of integers are the same size on the wire and an order of
+  magnitude apart in memory.
+- **Signature work has a wall clock as well as a count** (R-12), and
+  `SECURITY.md` publishes the measured envelope.
+- **CH01 findings say whose normal they were measured against** (R-14):
+  `baseline_scope: fleet`. One grammar over every training session, which the
+  documentation had been describing as an agent's own history.
+- **Receipt adapters give each path its own kind and assurance** (R-17). A
+  Kubernetes `uid` is no longer reported as a `resourceVersion`, and `nan` is
+  not an identifier.
+- **The lab's required probe targets an address the agent can reach** (R-08),
+  the negative property it was standing in front of is asserted, and `LAB.md`
+  no longer describes a third topology.
+- **The evaluation card reports task-cluster intervals** (R-15) and the corpus
+  must be a bijection between labels and telemetry (R-16). It also names a
+  property of itself: every family has identical counts and produces an
+  identical rate, so a family holdout here tests less than the name suggests.
+- **Counts are derived from a declared status column** (R-20). The file said
+  20 of 21 constructed evasions work and, separately, that two are closed —
+  which cannot both be true. Two inferences were wrong: an id ending in a
+  letter was read as "remedy", hiding an open evasion, and a cell had to say
+  exactly `CLOSED`, missing one that says `CLOSED` followed by a clause. The
+  truth is 22 constructed, 2 closed, 20 working.
+- **The wheel is a function of the source** (R-18). `SOURCE_DATE_EPOCH` makes
+  two builds of one commit byte-identical, which the SBOM job now proves.
+  `requires-python` is bounded above, and the classifiers name every version CI
+  runs.
+
+### Changed — what this project claims to be
+
+- **The positioning is corrected** (R-19). Agent behaviour analytics ships;
+  pitching session correlation as the missing layer was late. Cohaera is the
+  evidence-quality layer that feeds one. See
+  [POSITIONING.md](POSITIONING.md), which also carries the language this
+  project will not use about its own results — enforced by a test.
+- **A local lab** ([`lab/local/`](lab/local/)) runs the evidence path end to
+  end in about a second and commits what it produced. CI re-runs it, so a
+  change in what a verdict *says* fails a diff.
+
 ### Added
 
 - **Evidence trust (P1).** Three sidecar schemas the collector can emit and
@@ -68,6 +199,226 @@ any diff, so the numbers below are derived rather than claimed.
   re-assembling the same corpus once per regime.
 
 ### Fixed
+- **A stream signed at its start was reported `verified` however much of it went
+  unsigned (R-05).** `evidence_status` returned `verified` whenever
+  `signatures_verified > 0` — a fact about whether signing happened at all, not
+  about what it covered. A signature covers the chain head at its own sequence,
+  so it attests every record up to that point and **none after it**. The
+  review's fixture — 150 records signed at sequence 0 and 100 — reported
+  `verified` with 49 records chained and attested by nobody, and with freshness
+  and a ledger in force CH06 scored it exactly **1.0**.
+
+  **Breaking, and schema-visible.** `verified` is gone as an output value,
+  replaced by `verified_complete` (a verified signature reaches the last record
+  of *every* stream feeding the session) and `verified_prefix` (signatures
+  verified and stop short). Every stream, not most: a session assembled from two
+  streams is only as attested as its weaker half. A rule matching the old
+  literal `verified` now matches nothing, which is deliberate — it should fail
+  loudly rather than quietly stop firing. CH06's own finding is stamped
+  `not_applicable` rather than `verified`; its subject *is* the integrity
+  evidence, so the question is a category error, and that was the one place the
+  old vocabulary said something false rather than merely incomplete.
+
+  Additive: `signature_ranges` (`stream_id`, `first_seq`, `last_seq`,
+  `verified_to`), `signature_coverage` and `signature_covers_final` in the
+  integrity evidence; `INTEGRITY_SIGNATURE_COVERS_PREFIX_ONLY` as a CH06
+  coverage reason, with confidence multiplied by the record-weighted share
+  actually reached.
+
+  **`tools/collector_sign.py`:** `sign_every` must now be an integer ≥ 1. `0`
+  emitted a stream with no signature on any record and reported success — `if
+  sign_every and seq % sign_every == 0` short-circuits, so the ZeroDivisionError
+  never arrived to give it away — and `-1` signed everything, since `seq % -1 ==
+  0` always. The signer also always signs the **final** record now, without
+  which `verified_complete` is unreachable for any sampled stream whose batch
+  does not end on a signing position.
+- **Receipts and approvals that bound to almost nothing were trusted as if they
+  bound to everything (R-01, R-10).** `BINDING_TRUSTED` contained
+  `bound_span_only`, and `Binding.parse` accepted `{}` as a binding. Together
+  that meant a receipt carrying a valid authority, kind and identifier and an
+  empty `binding` object produced a **critical** CH07 contradiction on a failed
+  egress call — a critical detection resting on a check that had never run — and
+  an approval naming the span and the tool but not the argument digest
+  suppressed CH04 outright, so a bypass approved on evidence the schema was not
+  designed to carry reported as nothing at all. The `Binding` docstring had said
+  for two releases that `arg_digest` "is the only one of the three that
+  constrains what the call actually DID"; the code disagreed with it.
+
+  All three fields must now be present and all three must match for a binding to
+  be trusted. `bound_span_only` moved to a new `BINDING_CONTEXT` set that may be
+  shown to an analyst and may never gate a trust decision, and an empty binding
+  object is rejected as a defect rather than accepted as a weak binding.
+  Verified over all seven proper subsets of {span, tool, arg}, on both paths.
+
+  **Breaking for content, and additive for the record.** A new check ID
+  `CH07_effect_receipt_partially_bound` (`low`) reports a receipt that omits a
+  field on a call that did not report success — kept distinct from
+  `CH07_effect_receipt_does_not_bind`, which is a receipt that names a
+  *different* call, because omission and disagreement are different facts and
+  only the second looks like a copied receipt. A new CH04 approval state
+  `approval_not_argument_bound`. A new CH07 coverage reason
+  `RECEIPT_BOUND_BY_SPAN_ONLY`, which costs half a loose receipt's worth of
+  confidence — degraded rather than blind, because CH07 still reads and reports
+  those receipts. New Sigma rule `cohaera_effect_receipt_partially_bound.yml`.
+  **No evaluation-card number moved**: the corpus emits complete bindings on
+  every receipt and approval, so the fix changes what would happen to a
+  real producer's partial evidence and changes nothing about the measurement.
+- **Anything with a sequence number could write to the ledger that says what was
+  scored (R-03, scoped).** `record` was called for every stream that had a first
+  and a last sequence, with no requirement that any of it verified. Three
+  poisoning paths, all reproduced: (1) under a **loaded** trust store a
+  chained-but-unsigned stream — which needs no key, since chaining is arithmetic —
+  was recorded with its head, so the genuine signed stream at the same positions
+  then read as `forked`, turning a squatted stream id into a critical finding
+  against the real collector; (2) assembly drops events past `max_sessions` and
+  `max_events_per_session`, and the ledger advanced across their positions
+  anyway, so records nobody scored were marked as already seen and can never be
+  scored; (3) a broken chain, invalid signature, revoked or unauthorised key, or
+  stale record did not stop the position being committed as a scored fact.
+
+  A stream is now written only if every record it carried reached a scored
+  session, none of its own evidence was inadmissible, and — when a trust store is
+  loaded — at least one record carried a signature that store accepts. The trust
+  store is the switch on the last rule deliberately: an operator who loaded no
+  keys has said nothing about who may attest, and requiring a signature would
+  turn the ledger off for every unsigned deployment. A refused stream is reported
+  as the new `STREAM_LEDGER_NOT_ADVANCED` and named in the new
+  `stream_ledger_refusals` summary field, because a stream absent from the ledger
+  looks exactly like one never seen. A refused stream is never created, so it
+  cannot spend `max_ledger_streams` either.
+
+  Evidence codes are now tracked per stream as well as per session. A session is
+  fed by many streams, so judging stream A on a code raised by stream B would
+  refuse to advance for an unrelated reason and make the next run read A as a
+  replay.
+
+  **`cohaera score` now writes the ledger AFTER emitting verdicts**, reversing
+  the previous ordering and its stated reasoning. Saving first advanced past
+  findings nobody ever saw, so re-running reported a replay and the findings were
+  gone; saving last means a run that dies mid-emission is re-scored and may
+  duplicate. A duplicate alert is noise an analyst dismisses; a missed one is
+  what this project exists to prevent.
+
+  **Renamed in concept to an observation ledger, and the exactly-once-scoring
+  implication is withdrawn.** It records what Cohaera observed and scored, not
+  what any sink durably received. A transactional version needs durable sink
+  acknowledgement across stdout, files and future SIEM sinks — a design, not a
+  patch — and is deliberately not attempted here. The on-disk
+  `cohaera.stream_ledger:1` identifier is unchanged for now so existing ledgers
+  keep loading; the schema-visible rename belongs with the version bump, where
+  everything downstream regenerates once.
+- **Two runs sharing a ledger silently discarded each other's work (R-04).**
+  `save()` was atomic — mkstemp, fsync, `os.replace` — and the read-modify-write
+  around it was not. Two processes on one host each loaded, each scored, and each
+  replaced; the file left behind had no record of whichever finished first. A
+  two-process test loses an update on most runs, and which one it loses is a coin
+  flip. A stream missing from the ledger is a stream whose next replay is
+  undetectable, and both runs exited zero.
+
+  `StreamLedger.locked()` holds an exclusive `flock` on a `<ledger>.lock` sidecar
+  from load until the run finishes. A sidecar because `os.replace` swaps the
+  inode, so a lock on the ledger's own descriptor protects a file that is no
+  longer at that name. **Held for the whole run, not just the write**, and the
+  cost is deliberate: locking only the write would stop updates being lost and
+  would not stop the thing the ledger exists to catch, since two runs scoring the
+  same stream would each read the position before the other wrote it and neither
+  would see the replay. Runs sharing a ledger now serialise. The wait is bounded
+  (30s) and ends in a refusal rather than a hang.
+
+  A monotonic `generation` is the backstop for when the lock was not taken or is
+  not honoured — `flock` is advisory, local, and does not travel over NFS. A save
+  whose parent generation is not what is on disk is **refused**, loudly, rather
+  than merged: a merge would have to guess which of two disagreeing histories for
+  a stream is real, and guessing wrong writes the wrong reference for every run
+  afterwards. The generation sits outside the digest on purpose, so ledgers
+  written before this version still load — folding it in would force every
+  upgrading deployment to delete its replay memory.
+
+  `os.replace` is now followed by an fsync of the containing directory, so a
+  crash cannot leave the directory entry pointing at the old ledger.
+  **Single host only**, stated in the docstring: this is a file lock, not a
+  distributed transaction, and a second Cohaera host with its own ledger is
+  unchanged and still catalogued in `EVASION.md`.
+- **A stream could be continued from a boundary nothing had ever scored, and
+  the fabrication became the reference (R-02).** `StreamLedger.compare` judged a
+  continuation with one test — `first_seq > previous.last_seq` — which
+  establishes that the new records came *after* the old ones and never that they
+  came *from* them. Somebody holding a collector key could mint a second,
+  mutually exclusive history, start it at exactly `last_seq + 1`, declare a
+  predecessor the ledger had never recorded, and have it read as ordinary
+  advancement. Every signature verifies and the chain within the run is perfect,
+  so nothing inside a single run can see it — which is the entire class of attack
+  the ledger exists for. `record` then advanced on `advanced`, so the fabricated
+  head became the reference every later run was measured against.
+
+  `compare` now asks three questions in order. Sequence contiguity first, because
+  across a gap there is no stored head at the boundary to compare against, so
+  calling a gap a fork would invent an answer. Then the declared predecessor.
+  Only a continuation that is both contiguous **and** joins onto the stored head
+  is `advanced`.
+
+  New status `discontinuous` for a gap — it keeps `INTEGRITY_STREAM_RECORDS_NEVER_SCORED`
+  and stays non-inadmissible, since an operator scoring a subset on purpose is
+  the same input, but it no longer calls itself ordinary advancement. A
+  contiguous continuation onto a different history is `forked` and inadmissible,
+  and does not advance the ledger. A first record that declares no predecessor
+  still advances — refusing would break every collector that omits the field —
+  but carries the new non-inadmissible `INTEGRITY_STREAM_BOUNDARY_UNVERIFIED`
+  and a `boundary` of `unstated`, never `match`.
+
+  Additive: `boundary`, `declared_prev` and `previous_head` on the stream
+  verdict, and `first_prev` in `stream_summary`.
+- **A freshness window only bounded one direction, and one CLI argument switched
+  it off in silence (R-13).** `Freshness.stale` reported a future-dated record as
+  not stale and computed nothing else, so a signed record dated a year ahead read
+  in the verdict exactly like one written a second ago: a collector with a wrong
+  clock, or one an attacker holds, bought unlimited freshness by adding to a
+  number. The docstring called clock skew "somebody else's finding" and nobody
+  else made it. A signed record dated more than `--max-future-skew` seconds past
+  `--evidence-as-of` is now `INTEGRITY_EVIDENCE_FROM_FUTURE` and **inadmissible**
+  — the whole argument for trusting the timestamp is that a replayer can re-send
+  bytes and cannot re-date them, and a record dated after the instant it was
+  scored breaks that argument at the root. It is a separate code from
+  `INTEGRITY_EVIDENCE_STALE` because the remedies differ. Default tolerance 300s,
+  the same reason Kerberos uses it: it absorbs ordinary NTP disagreement and
+  nothing more.
+
+  Separately, `--evidence-as-of` was `type=float` and `float("nan")` succeeds, so
+  `--evidence-as-of nan` disabled the freshness bound entirely — `enabled` went
+  false, the bound line never printed, and the run exited **zero** having skipped
+  the check it was asked for. It now goes through a finite-float validator and
+  exits 2 as a usage error, as does `--max-future-skew`; `Limits` refuses a
+  non-finite or negative value directly, since the CLI is one door of several.
+
+  Additive: `max_future_skew_s` in `Limits` and in the `evidence_freshness`
+  provenance block, `furthest_future_s` in the integrity evidence, and the
+  `--max-future-skew` flag. **The evaluation card's `config_hash` moves** — a new
+  bound joined the set, so two runs either side of this are correctly reported as
+  not comparable in configuration. No detection number moved.
+- **A policy file could be swapped between the read that parsed it and the read
+  that hashed it (R-07).** `CapabilityManifest.from_file` resolved the path and
+  parsed it; the CLI then resolved the same path again to hash it for the
+  signature, and the baseline was hashed by path and reopened by `load`. A path
+  is not bytes: an atomic rename in that window left Cohaera scoring one file and
+  attesting the digest of another, with the signature still holding, so the
+  verdict carried `POLICY_SIGNATURE_VERIFIED` for a file that had not been used.
+
+  Each artefact is resolved once now. `CapabilityManifest.from_bytes` parses and
+  digests a single buffer and `from_file` is a bounded read in front of it; the
+  manifest carries `file_sha256` over exactly those bytes and `_attest_policy`
+  takes a digest instead of a path, so it can no longer reach the filesystem.
+  The baseline keeps its streaming read — it is telemetry and may be large — and
+  is instead opened once, hashed through the new `stream_sha256`, rewound and
+  handed to the reader, since an open descriptor keeps its inode whatever
+  happens to the path. `load` and `read_events` take an optional descriptor for
+  that. The baseline is hashed only when `--baseline-sig` was supplied, so an
+  oversize baseline is still truncated by the reader's budget rather than
+  refused. Additive: `file_sha256` in the manifest's provenance block.
+- **`approved` in a verdict was an authorization fact and is now an approval
+  claim.** Every approval Cohaera can parse arrives in band, on the stream the
+  agent produces. Approvals now carry `approval_origin` (`in_band`), CH04
+  findings carry `approval_origins`, and `policy_engine` is defined for an
+  out-of-band attested decision that nothing emits yet.
 - **A signature forgery in the bundled Ed25519 verifier, reported by a seventh
   review and reproduced here.** Verification checks `[s]G == R + [k]A`. Supply
   the identity point as `A` and the `[k]A` term vanishes, so any `R = [s]G`
@@ -271,7 +622,7 @@ any diff, so the numbers below are derived rather than claimed.
   of COH-R12 is the one exception, and it reached the card only as a side
   effect of the `producer_flag` ablation rather than by design; see
   `eval/README.md`.
-- **21 constructed evasions are catalogued and 20 still work**, on purpose:
+- **22 constructed evasions are catalogued and 20 still work**, on purpose:
   `tests/test_evasion.py` asserts they do, so that closing one without updating
   the catalogue fails the build.
 - **Cohaera still holds the whole run in memory.** `load` materialises every

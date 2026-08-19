@@ -39,7 +39,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from . import __version__
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest, ManifestError
@@ -57,13 +57,13 @@ from .evidence import (
     StreamLedger,
     TrustStore,
     TrustStoreError,
-    file_sha256,
+    stream_sha256,
     verify_policy_signature,
 )
-from .identity import Correlator, run_id
+from .identity import Correlator, run_id, trust_config_digest
 from .ingest import load
 from .limits import DEFAULT_LIMITS, Limits, LimitsError
-from .model import json_safe, to_cim_event
+from .model import SESSION_SCHEMA, json_safe, to_cim_event
 from .validate import IngestReport, sanitise_display
 
 EXIT_OK = 0
@@ -123,6 +123,37 @@ def positive_float(text: str) -> float:
     return value
 
 
+def finite_float(text: str) -> float:
+    """Any real number, and nothing that is not one. R-13.
+
+    ``type=float`` accepts ``nan`` and ``inf``, and argparse reports no error
+    because ``float("nan")`` succeeds. ``--evidence-as-of nan`` therefore
+    *silently disabled the freshness bound entirely*: every comparison against a
+    NaN is false, ``Freshness.enabled`` went false, the "freshness bound:" line
+    never printed, and the run exited zero having checked nothing an operator
+    had explicitly asked it to check. Turning a control off is not a thing an
+    argument value may do quietly, which is the same argument C4-05 made for
+    ``positive_int``.
+    """
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+    if not math.isfinite(value):
+        raise argparse.ArgumentTypeError(
+            f"must be a finite number, got {text!r}. A non-finite value here "
+            "would disable the bound rather than set it.")
+    return value
+
+
+def non_negative_float(text: str) -> float:
+    """A tolerance that may be zero, but may not be negative or non-finite."""
+    value = finite_float(text)
+    if value < 0.0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {value}")
+    return value
+
+
 def unit_ratio(text: str) -> float:
     """A fraction in 0.0..1.0. ``--max-reject-ratio 2.0`` can never trip."""
     try:
@@ -144,11 +175,15 @@ def _limits_from(args: argparse.Namespace) -> Limits:
         max_evidence_items=args.max_evidence_items,
         max_rejects=args.max_rejects,
         max_reject_ratio=args.max_reject_ratio,
+        max_future_skew_s=getattr(args, "max_future_skew", None),
     )
 
 
 def _load_manifest(path: str | None,
                    limits: Limits = DEFAULT_LIMITS) -> CapabilityManifest:
+    """One read. The manifest carries the digest of the bytes it was parsed
+    from, so nothing downstream has to resolve the path again -- see R-07 and
+    ``CapabilityManifest.from_bytes``."""
     if not path:
         return EMPTY_MANIFEST
     manifest = CapabilityManifest.from_file(path, limits=limits)
@@ -179,10 +214,18 @@ def _load_keys(path: str | None,
     return store
 
 
-def _attest_policy(path: str | None, sig_path: str | None, artifact: str,
-                   store: TrustStore, max_bytes: int,
+def _attest_policy(digest: str | None, sig_path: str | None, artifact: str,
+                   store: TrustStore,
                    limits: Limits = DEFAULT_LIMITS) -> PolicyAttestation:
     """Verify a detached signature over one operator-supplied file.
+
+    R-07. This used to take a PATH and open it, having been called with a file
+    the caller had already read -- two reads of a name where there should be one
+    read of a file. A rename in the window between them left Cohaera scoring one
+    manifest while attesting the digest of another, and the signature still
+    held, because it was checked against whichever bytes the second read found.
+    It now takes the digest of the exact bytes the caller parsed or is about to
+    parse, and has no way to look at the filesystem at all.
 
     Returns an attestation in every case, including the case where nothing was
     supplied, because ``POLICY_SIGNATURE_ABSENT`` in the verdict is the point:
@@ -193,10 +236,9 @@ def _attest_policy(path: str | None, sig_path: str | None, artifact: str,
     An operator who passed --tool-manifest-sig asked for the file to be checked,
     and scoring on it anyway would answer a question they did not ask.
     """
-    if not path or not sig_path:
+    if not digest or not sig_path:
         return PolicyAttestation(artifact=artifact, status=P_ABSENT)
     signature = PolicySignature.from_file(sig_path, limits=limits)
-    digest = file_sha256(path, max_bytes)
     return verify_policy_signature(signature, digest, artifact, store)
 
 
@@ -224,6 +266,21 @@ def _budget_exceeded(report: IngestReport, limits: Limits) -> str:
 
 
 def cmd_score(args: argparse.Namespace) -> int:
+    """R-07. The stack owns every descriptor opened for an artefact that is both
+    hashed and read.
+
+    An artefact whose signature Cohaera checks has to be hashed and parsed from
+    the same bytes, and a path is not bytes -- resolving it twice is a race an
+    atomic rename wins every time. The fix is to resolve it once and keep the
+    descriptor, which means something has to own that descriptor across the run.
+    This wrapper does, so that every early return below closes it without each
+    of them having to remember to.
+    """
+    with contextlib.ExitStack() as stack:
+        return _score(args, stack)
+
+
+def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
     try:
         limits = _limits_from(args)
     except LimitsError as exc:
@@ -259,14 +316,27 @@ def cmd_score(args: argparse.Namespace) -> int:
     # normal looks like. Editing either changes every verdict without touching a
     # single telemetry record, which is why they are attested before they are
     # used rather than after.
+    # R-07. The baseline is opened ONCE, here, and the same descriptor is what
+    # `load` reads further down. It is hashed only when a signature was supplied,
+    # which keeps the max_input_bytes error confined to the attestation path it
+    # has always belonged to: without a signature there is nothing to disagree
+    # with, and the reader's own budget stops an oversize file by truncating it
+    # rather than by refusing.
+    #
+    # The manifest needs no descriptor. It was already read whole and bounded by
+    # _load_manifest, and it carries the digest of exactly those bytes.
+    baseline_fh: BinaryIO | None = None
     try:
+        if args.baseline:
+            baseline_fh = stack.enter_context(Path(args.baseline).open("rb"))
+        baseline_digest = (
+            stream_sha256(baseline_fh, limits.max_input_bytes, str(args.baseline))
+            if baseline_fh is not None and args.baseline_sig else None)
         attestations = [
-            _attest_policy(args.tool_manifest, args.tool_manifest_sig,
-                           POLICY_ARTIFACT_MANIFEST, keys,
-                           limits.max_manifest_bytes, limits),
-            _attest_policy(args.baseline, args.baseline_sig,
-                           POLICY_ARTIFACT_BASELINE, keys,
-                           limits.max_input_bytes, limits),
+            _attest_policy(manifest.file_sha256 or None, args.tool_manifest_sig,
+                           POLICY_ARTIFACT_MANIFEST, keys, limits),
+            _attest_policy(baseline_digest, args.baseline_sig,
+                           POLICY_ARTIFACT_BASELINE, keys, limits),
         ]
     except (PolicySignatureError, OSError) as exc:
         _err(f"[cohaera] policy signature rejected: "
@@ -300,10 +370,13 @@ def cmd_score(args: argparse.Namespace) -> int:
 
     freshness = Freshness(max_age_s=args.evidence_max_age,
                           as_of=(args.evidence_as_of if args.evidence_as_of
-                                 is not None else time.time()))
+                                 is not None else time.time()),
+                          max_future_skew_s=limits.max_future_skew_s)
     if freshness.enabled:
         _err(f"[cohaera] freshness bound: signed records older than "
-             f"{args.evidence_max_age:g}s as of {freshness.as_of:.0f} are stale")
+             f"{args.evidence_max_age:g}s as of {freshness.as_of:.0f} are stale, "
+             f"and records dated more than {limits.max_future_skew_s:g}s after "
+             f"it are INTEGRITY_EVIDENCE_FROM_FUTURE")
 
     if args.reject_log:
         try:
@@ -316,7 +389,12 @@ def cmd_score(args: argparse.Namespace) -> int:
     ledger: StreamLedger | None = None
     if args.seen_streams:
         try:
-            ledger = StreamLedger.load(args.seen_streams, limits)
+            # R-04. Under an exclusive lock held until this run finishes, so
+            # that two runs sharing a ledger cannot each read the position
+            # before the other writes it. The stack releases it on every exit
+            # path, including the error returns below.
+            ledger = stack.enter_context(
+                StreamLedger.locked(args.seen_streams, limits))
         except (LedgerError, OSError) as exc:
             # Refused, not started fresh. An unreadable ledger scores every
             # stream as new, which is precisely the state an attacker who
@@ -325,7 +403,11 @@ def cmd_score(args: argparse.Namespace) -> int:
                  f"{sanitise_display(str(exc), 400)}")
             return EXIT_ERROR
         _err(f"[cohaera] seen-stream ledger {sanitise_display(args.seen_streams, 160)}: "
-             f"{len(ledger.streams)} stream(s) previously scored")
+             f"{len(ledger.streams)} stream(s) previously scored, "
+             f"generation {ledger.generation}"
+             + ("" if ledger.locked_exclusively else
+                " (WARNING: no file locking on this host, so concurrent runs "
+                "sharing this ledger cannot exclude each other)"))
 
     report = IngestReport(source=str(args.telemetry))
     correlator = _correlator(args, limits)
@@ -337,7 +419,8 @@ def cmd_score(args: argparse.Namespace) -> int:
         baseline_report = IngestReport(source=str(args.baseline))
         benign = load(args.baseline, limits=limits,
                       correlator=Correlator(None, limits=limits),
-                      manifest=manifest, report=baseline_report)
+                      manifest=manifest, report=baseline_report,
+                      fh=baseline_fh)
         # C5-07. A partial baseline used to produce a warning and then be fitted
         # anyway. That is the worst of both: CH01 is the one detector here that
         # LEARNS, its whole output is "unlike what I was shown", and quietly
@@ -379,6 +462,25 @@ def cmd_score(args: argparse.Namespace) -> int:
          f"{sum(len(s.events) for s in sessions)} events in {len(sessions)} sessions, "
          f"{report.rejected} record(s) quarantined\n")
 
+    # R-06. Assembled BEFORE the ledger is written to and before the provenance
+    # block below, because it must describe the configuration this run was
+    # scored under rather than the state it left behind.
+    ledger_identity = ({"enabled": True, "generation": ledger.generation,
+                        "state": ledger.state_digest()} if ledger is not None
+                       else {"enabled": False})
+    trust_config = trust_config_digest(
+        trust_store=keys.as_dict(limits.max_evidence_items),
+        policy_attestations=[a.as_dict() for a in attestations],
+        freshness=freshness.as_dict(),
+        # See trust_config_digest: a pinned instant is part of the identity and
+        # a defaulted wall clock cannot be, but which of the two happened is.
+        freshness_as_of_pinned=args.evidence_as_of is not None,
+        ledger=ledger_identity,
+        correlation_key_version=correlator.key_version,
+        correlation_keyed=correlator.keyed,
+        baseline_partial_allowed=bool(args.allow_partial_baseline),
+        schema=SESSION_SCHEMA,
+    )
     run = run_id(
         detector_version=__version__,
         config_hash=limits.digest(),
@@ -387,28 +489,21 @@ def cmd_score(args: argparse.Namespace) -> int:
         input_digest=report.content_digest,
         baseline_hash=baseline_hash,
         manifest_hash=manifest.file_digest,
+        trust_config=trust_config,
     )
     if ledger is not None:
         # Stamped here because analysis_run_id is a digest of everything read
-        # and does not exist until reading finishes. Written before any verdict
-        # is emitted: a run that dies while printing has still SCORED these
-        # streams, and forgetting that would let the same input through again.
+        # and does not exist until reading finishes. WRITTEN LATER -- see the
+        # save below the emission loop.
         ledger.stamp(run)
-        try:
-            ledger.save()
-        except (LedgerError, OSError) as exc:
-            # Same reasoning as the quarantine ledger (C4-04). Losing the record
-            # of what has been scored while reporting success means the next
-            # replay of this stream is undetectable and nothing said so.
-            _err(f"[cohaera] could not write the seen-stream ledger to "
-                 f"{sanitise_display(str(args.seen_streams), 160)}: "
-                 f"{sanitise_display(str(exc), 300)}")
-            return EXIT_ERROR
 
     provenance = {
         "analysis_run_id": run,
         "detector_version": __version__,
         "config_hash": limits.digest(),
+        # R-06. Emitted as well as folded into analysis_run_id, so that two runs
+        # whose IDs differ can be told WHY they differ without re-deriving it.
+        "trust_config_digest": trust_config,
         "baseline_hash": baseline_hash,
         # C5-07. What the baseline was actually built from, so a verdict can be
         # audited against the reference it was measured against rather than
@@ -426,7 +521,11 @@ def cmd_score(args: argparse.Namespace) -> int:
         "evidence_freshness": freshness.as_dict(),
         "stream_ledger": (
             {"enabled": True, "path": str(args.seen_streams),
-             "streams_known": len(ledger.streams)} if ledger
+             "streams_known": len(ledger.streams),
+             # The generation and state READ, which is what the replay and fork
+             # verdicts in this run were judged against (R-06).
+             "generation_read": ledger_identity["generation"],
+             "state_digest_read": ledger_identity["state"]} if ledger
             else {"enabled": False}),
         # Stream identity and extent, so that two runs which scored the same
         # collector stream twice are distinguishable after the fact. Cohaera
@@ -468,6 +567,33 @@ def cmd_score(args: argparse.Namespace) -> int:
     _err(f"[cohaera] {total_findings} finding(s) across {len(sessions)} session(s); "
          f"{report.accepted} record(s) accepted, {report.rejected} quarantined, "
          f"{report.defective} accepted with field defects")
+
+    if ledger is not None:
+        # R-03, and a deliberate reversal. This used to run BEFORE the verdicts
+        # were printed, reasoning that a run which dies mid-emission has still
+        # SCORED those streams and forgetting that would let the same input
+        # through again. The other side of that trade is worse: a run that dies
+        # while printing has advanced the ledger past findings nobody ever saw,
+        # and re-running now reports a replay, so the findings are lost and
+        # unrecoverable. A duplicate alert is noise an analyst dismisses in
+        # seconds; a missed one is the thing this project exists to prevent.
+        #
+        # Which is exactly why the concept is an OBSERVATION ledger and the
+        # exactly-once-scoring language is gone. Saving after emission admits
+        # the duplicate; saving before it hid a loss. Neither is exactly-once,
+        # and only one of them fails in the direction an analyst can recover
+        # from. A transactional version needs durable sink acknowledgement
+        # across stdout, files and future SIEM sinks -- a design, not a patch.
+        try:
+            ledger.save()
+        except (LedgerError, OSError) as exc:
+            # Same reasoning as the quarantine ledger (C4-04). Losing the record
+            # of what has been scored while reporting success means the next
+            # replay of this stream is undetectable and nothing said so.
+            _err(f"[cohaera] could not write the seen-stream ledger to "
+                 f"{sanitise_display(str(args.seen_streams), 160)}: "
+                 f"{sanitise_display(str(exc), 300)}")
+            return EXIT_ERROR
 
     if args.reject_log:
         try:
@@ -587,15 +713,21 @@ def _add_common(p: argparse._ActionsContainer) -> None:
                         "because it would break every existing deployment; on, it is "
                         "what turns the signature from an option into a control.")
     p.add_argument("--seen-streams", metavar="PATH",
-                   help="JSON ledger of collector streams already scored, kept "
-                        "BETWEEN runs. It is what detects a stream re-fed inside "
-                        "the freshness window, which every other check passes "
-                        "because the replayed stream is genuine. Created on "
-                        "first use; a file that exists and does not parse is a "
-                        "hard error, because scoring everything as new is what "
-                        "deleting it would achieve. Unsigned local state: an "
-                        "attacker who can delete it removes the detection "
-                        "(EVASION.md E22).")
+                   help="JSON OBSERVATION ledger of collector streams already "
+                        "seen, kept BETWEEN runs. It is what detects a stream "
+                        "re-fed inside the freshness window, which every other "
+                        "check passes because the replayed stream is genuine. "
+                        "It records what Cohaera observed and scored, NOT what "
+                        "any sink durably received, and it does not provide "
+                        "exactly-once scoring: it is written after verdicts are "
+                        "emitted, so a run that dies mid-emission is re-scored "
+                        "and may duplicate. Created on first use; a file that "
+                        "exists and does not parse is a hard error, because "
+                        "scoring everything as new is what deleting it would "
+                        "achieve. Only streams whose evidence held are written "
+                        "to it. Unsigned local state and a single-host file "
+                        "lock: an attacker who can delete it removes the "
+                        "detection (EVASION.md E22).")
     p.add_argument("--evidence-max-age", type=positive_float, metavar="SECONDS",
                    help="Report signed records older than this as stale "
                         "(INTEGRITY_EVIDENCE_STALE). This is the bound that makes "
@@ -603,11 +735,21 @@ def _add_common(p: argparse._ActionsContainer) -> None:
                         "passes on a replayed stream, because it really was written "
                         "by that collector. Off by default, and coverage says "
                         "NO_FRESHNESS_BOUND when it is off.")
-    p.add_argument("--evidence-as-of", type=float, metavar="EPOCH",
+    p.add_argument("--evidence-as-of", type=finite_float, metavar="EPOCH",
                    help="The instant --evidence-max-age is measured from, in seconds "
                         "since the epoch. Defaults to the wall clock at run start; "
                         "set it to make a run reproducible, or to score an archive "
-                        "as of the day it was captured.")
+                        "as of the day it was captured. Must be finite: a NaN here "
+                        "used to disable the freshness bound rather than set it.")
+    p.add_argument("--max-future-skew", type=non_negative_float, metavar="SECONDS",
+                   help=f"How far after --evidence-as-of a signature-verified "
+                        f"record may be dated before it is reported as "
+                        f"INTEGRITY_EVIDENCE_FROM_FUTURE and the evidence becomes "
+                        f"inadmissible (default "
+                        f"{DEFAULT_LIMITS.max_future_skew_s:g}). A freshness window "
+                        f"bounds only how OLD a record may be; without this a "
+                        f"collector with a wrong clock buys unlimited freshness by "
+                        f"adding to a number.")
     p.add_argument("--correlation-secret-env", metavar="NAME", default=SECRET_ENV,
                    help=f"Environment variable holding the HMAC key for anonymous "
                         f"correlation keys (default {SECRET_ENV}).")
@@ -631,8 +773,17 @@ def _add_common(p: argparse._ActionsContainer) -> None:
                    help=f"Maximum JSON container depth "
                         f"(default {DEFAULT_LIMITS.max_nesting_depth}).")
     p.add_argument("--max-events", type=positive_int, metavar="N",
-                   help=f"Maximum records read per run "
-                        f"(default {DEFAULT_LIMITS.max_events_total}).")
+                   # R-20. It said "records read", and it is not that. It caps
+                   # ACCEPTED events; the bound on records read is
+                   # max_records_total, which is a different number and is not
+                   # exposed here. An operator who set this believing it capped
+                   # reading got a weaker bound than they asked for.
+                   help=f"Maximum ACCEPTED events per run (default "
+                        f"{DEFAULT_LIMITS.max_events_total}). This is not the "
+                        f"number of records READ -- that is max_records_total, "
+                        f"currently {DEFAULT_LIMITS.max_records_total}, and a "
+                        f"file of pure garbage is bounded by it rather than by "
+                        f"this.")
     p.add_argument("--max-sessions", type=positive_int, metavar="N",
                    help=f"Maximum sessions assembled per run "
                         f"(default {DEFAULT_LIMITS.max_sessions}).")

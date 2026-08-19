@@ -1,0 +1,11 @@
+{
+  "keys": {
+    "ed25519:ed6a47a39da869b5": {
+      "key": "7WpHo52oabVEYVXkCy2T8ePwFnviZzK656PvnY46P9M=",
+      "roles": [
+        "collector"
+      ]
+    }
+  },
+  "scheme": "cohaera.trust_store:1"
+}

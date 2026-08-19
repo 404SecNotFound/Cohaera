@@ -71,6 +71,20 @@ def sign_stream(records: list[dict], stream_id: str, secret: bytes,
     scalar multiplication it does. Signing every record is the default because
     it is the easiest thing to reason about, not because it is required.
     """
+    if not isinstance(sign_every, int) or isinstance(sign_every, bool) \
+            or sign_every < 1:
+        # R-05. `seq % sign_every` accepted anything an int could be, and two
+        # values silently produced a stream nobody had attested. Zero raised
+        # ZeroDivisionError only if it reached the modulo -- it did not, because
+        # `if sign_every and ...` short-circuited, so EVERY record went out
+        # unsigned and the tool reported success. Minus one signs every record,
+        # since seq % -1 == 0 always, which is merely surprising. An operator
+        # tuning a sampling rate must not be able to switch signing off by
+        # typing a number.
+        raise ValueError(
+            f"sign_every must be an integer >= 1, got {sign_every!r}. It is a "
+            f"sampling rate, not a switch: 0 would emit a stream with no "
+            f"signature on any record and report success.")
     head = chain_seed(stream_id, key_id)
     out = []
     for seq, record in enumerate(records):
@@ -84,7 +98,13 @@ def sign_stream(records: list[dict], stream_id: str, secret: bytes,
             "prev": prev,
             "chain": head,
         }
-        if sign_every and seq % sign_every == 0:
+        # R-05. The final record too, always. A signature covers the chain head
+        # at its own sequence, so sampling leaves everything after the last
+        # signing position attested by nobody -- which is exactly the state that
+        # used to report as `verified`. Signing the last record is what makes
+        # `verified_complete` reachable at all for a sampled stream, and it
+        # costs one scalar multiplication per stream.
+        if seq % sign_every == 0 or seq == len(records) - 1:
             sidecar["key_id"] = key_id
             sidecar["sig"] = base64.b64encode(
                 ed25519.sign(secret, signing_input(stream_id, seq, head))

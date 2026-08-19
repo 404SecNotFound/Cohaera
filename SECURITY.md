@@ -9,7 +9,7 @@
 
 Cohaera is a **research prototype**. It has never been run against real agent
 traffic, its numbers come from a synthetic corpus written by its own author, and
-[EVASION.md](EVASION.md) catalogues 21 constructed ways to defeat its checks, 20
+[EVASION.md](EVASION.md) catalogues 22 constructed ways to defeat its checks, 20
 of which currently work.
 
 The single most important thing to know is not a vulnerability, it is a design
@@ -38,10 +38,13 @@ Please include:
 
 - what you attacked — a check, the ingest path, the CLI, the emitted record;
 - a **reproduction**. This project reproduces every reported defect before
-  fixing it, and three of the twenty-two defects fixed so far turned out to be
-  real for a different reason than the reporter gave, with one aimed at the
-  wrong function entirely. A reproduction is not bureaucracy here, it is the
-  step that catches that;
+  fixing it, and several have turned out to be real for a different reason
+  than the reporter gave, with one aimed at the wrong function entirely. A
+  reproduction is not bureaucracy here, it is the step that catches that.
+  (R-20: this sentence used to carry a running total of defects fixed. Nothing
+  derived it, nothing could, and it was wrong within a week of being written.
+  A number that cannot be checked should not be published — which is the
+  argument this whole file makes about detector results.);
 - what an attacker gains. "Cohaera crashes" and "Cohaera reports a session as
   clean" are different severities and the second is usually worse.
 
@@ -68,9 +71,9 @@ Credit in the advisory and in [EVASION.md](EVASION.md) unless you ask otherwise.
 Not because these do not matter, but because they are **already written down**
 and a report restating them tells nobody anything new:
 
-- **Anything in [EVASION.md](EVASION.md).** Seventeen catalogued evasions, each
-  with an executable test that passes while the evasion works. A *new* evasion
-  is very much in scope. Adding detail to a catalogued one — a cheaper variant,
+- **Anything in [EVASION.md](EVASION.md).** 22 constructed evasions, each with
+  an executable test that passes while the case behaves as the file records it.
+  A *new* evasion is very much in scope. Adding detail to a catalogued one — a cheaper variant,
   a case where the stated cost is wrong — is welcome as an issue.
 - **Lexical false positives in CH02.** An honest paraphrase reads as
   concealment. That is E04, it is measured on the corpus, and it is the check's
@@ -81,6 +84,43 @@ and a report restating them tells nobody anything new:
   whatever corpus it is handed. E03, and a process control rather than a code
   one.
 - **Findings from a scanner with no reproduction.** Send the reproduction.
+
+## The cost of verifying a signature, measured
+
+R-12. Cohaera's Ed25519 verifier is pure Python and has no runtime
+dependencies, which is a deliberate trade and is stated here rather than
+discovered. A signature that is structurally well-formed, carries a **trusted**
+key id, and does not verify costs a full scalar multiplication: the answer is
+not known until the work is done, and the producer decides how many such
+records arrive.
+
+Measured on the development host, Python 3.11, after the fixed-base and
+variable-base comb work:
+
+| | |
+|---|---|
+| one full invalid verification | ~0.5 ms |
+| `max_signature_verifications` (default 100,000) | ~50 s of CPU |
+| `max_signature_seconds` (default 30.0) | the bound that holds on a slow host |
+
+An external review measured about three minutes for the same count bound on a
+slower machine, which is the reason there are two bounds rather than one: a
+count is not a time, and the cost of one verification is a property of the host
+and not of this repository.
+
+Unauthorised keys are rejected **before** any scalar work, so the vector needs
+a key the operator has already trusted. Exhausting either budget is not a crash
+and not a silent pass: the session reports
+`INTEGRITY_SIGNATURE_BUDGET_EXHAUSTED`, its evidence status says the
+attestation was not established through the final record, and the run's report
+carries the seconds actually spent so the bound can be tuned against a
+measurement rather than a guess.
+
+The verifier handles public data and is not a signing oracle, so the usual
+constant-time concern does not apply to it. `tools/collector_sign.py` says on
+its face that it is not constant-time and is a format reference rather than a
+signing service; a production collector should sign with a maintained backend,
+an OS key store, an HSM or a KMS.
 
 ## Supply chain
 

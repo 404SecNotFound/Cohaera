@@ -491,6 +491,44 @@
           }
         ],
         "benign": 608,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              0.8947,
+              0.8947
+            ],
+            "family_macro_average": 0.8947,
+            "task_bootstrap_ci95": [
+              0.8158,
+              0.9605
+            ],
+            "task_macro_average": 0.8947
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.3421,
+              0.3421
+            ],
+            "family_macro_average": 0.3421,
+            "task_bootstrap_ci95": [
+              0.2697,
+              0.4211
+            ],
+            "task_macro_average": 0.3421
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              0.7895,
+              0.7895
+            ],
+            "family_macro_average": 0.7895,
+            "task_bootstrap_ci95": [
+              0.6974,
+              0.8816
+            ],
+            "task_macro_average": 0.7895
+          }
+        },
         "confusion": {
           "fn": 32,
           "fp": 208,
@@ -533,6 +571,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 240,
           "value": 1.0
+        },
+        "sample_independence": {
+          "families": 4,
+          "kinds": 23,
+          "sessions": 912,
+          "tasks": 228
         },
         "sessions": 912,
         "target_attributable_recall": {
@@ -1067,6 +1111,44 @@
           }
         ],
         "benign": 608,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              0.8947,
+              0.8947
+            ],
+            "family_macro_average": 0.8947,
+            "task_bootstrap_ci95": [
+              0.8158,
+              0.9605
+            ],
+            "task_macro_average": 0.8947
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.3947,
+              0.3947
+            ],
+            "family_macro_average": 0.3947,
+            "task_bootstrap_ci95": [
+              0.3158,
+              0.4803
+            ],
+            "task_macro_average": 0.3947
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              0.7895,
+              0.7895
+            ],
+            "family_macro_average": 0.7895,
+            "task_bootstrap_ci95": [
+              0.6974,
+              0.8816
+            ],
+            "task_macro_average": 0.7895
+          }
+        },
         "confusion": {
           "fn": 32,
           "fp": 240,
@@ -1109,6 +1191,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 240,
           "value": 1.0
+        },
+        "sample_independence": {
+          "families": 4,
+          "kinds": 23,
+          "sessions": 912,
+          "tasks": 228
         },
         "sessions": 912,
         "target_attributable_recall": {
@@ -1643,6 +1731,44 @@
           }
         ],
         "benign": 608,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              0.8947,
+              0.8947
+            ],
+            "family_macro_average": 0.8947,
+            "task_bootstrap_ci95": [
+              0.8158,
+              0.9605
+            ],
+            "task_macro_average": 0.8947
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.3421,
+              0.3421
+            ],
+            "family_macro_average": 0.3421,
+            "task_bootstrap_ci95": [
+              0.2697,
+              0.4211
+            ],
+            "task_macro_average": 0.3421
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              0.7895,
+              0.7895
+            ],
+            "family_macro_average": 0.7895,
+            "task_bootstrap_ci95": [
+              0.6974,
+              0.8816
+            ],
+            "task_macro_average": 0.7895
+          }
+        },
         "confusion": {
           "fn": 32,
           "fp": 208,
@@ -1685,6 +1811,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 240,
           "value": 1.0
+        },
+        "sample_independence": {
+          "families": 4,
+          "kinds": 23,
+          "sessions": 912,
+          "tasks": 228
         },
         "sessions": 912,
         "target_attributable_recall": {
@@ -2275,6 +2407,44 @@
           }
         ],
         "benign": 616,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.3153,
+              0.3485
+            ],
+            "family_macro_average": 0.3314,
+            "task_bootstrap_ci95": [
+              0.2747,
+              0.3905
+            ],
+            "task_macro_average": 0.3525
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          }
+        },
         "confusion": {
           "fn": 0,
           "fp": 204,
@@ -2317,6 +2487,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 296,
           "value": 1.0
+        },
+        "sample_independence": {
+          "families": 8,
+          "kinds": 23,
+          "sessions": 912,
+          "tasks": 421
         },
         "sessions": 912,
         "target_attributable_recall": {
@@ -2915,6 +3091,44 @@
           }
         ],
         "benign": 616,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.3525,
+              0.3908
+            ],
+            "family_macro_average": 0.3705,
+            "task_bootstrap_ci95": [
+              0.3127,
+              0.429
+            ],
+            "task_macro_average": 0.3957
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          }
+        },
         "confusion": {
           "fn": 0,
           "fp": 228,
@@ -2957,6 +3171,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 296,
           "value": 1.0
+        },
+        "sample_independence": {
+          "families": 8,
+          "kinds": 23,
+          "sessions": 912,
+          "tasks": 421
         },
         "sessions": 912,
         "target_attributable_recall": {
@@ -3555,6 +3775,44 @@
           }
         ],
         "benign": 616,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.3153,
+              0.3485
+            ],
+            "family_macro_average": 0.3314,
+            "task_bootstrap_ci95": [
+              0.2747,
+              0.3905
+            ],
+            "task_macro_average": 0.3525
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          }
+        },
         "confusion": {
           "fn": 0,
           "fp": 204,
@@ -3597,6 +3855,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 296,
           "value": 1.0
+        },
+        "sample_independence": {
+          "families": 8,
+          "kinds": 23,
+          "sessions": 912,
+          "tasks": 421
         },
         "sessions": 912,
         "target_attributable_recall": {
@@ -4195,6 +4459,44 @@
           }
         ],
         "benign": 628,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.3506,
+              0.5096
+            ],
+            "family_macro_average": 0.4175,
+            "task_bootstrap_ci95": [
+              0.3439,
+              0.4968
+            ],
+            "task_macro_average": 0.4204
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          }
+        },
         "confusion": {
           "fn": 0,
           "fp": 264,
@@ -4237,6 +4539,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 300,
           "value": 1.0
+        },
+        "sample_independence": {
+          "families": 8,
+          "kinds": 23,
+          "sessions": 928,
+          "tasks": 232
         },
         "sessions": 928,
         "target_attributable_recall": {
@@ -4835,6 +5143,44 @@
           }
         ],
         "benign": 628,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.3907,
+              0.5473
+            ],
+            "family_macro_average": 0.4528,
+            "task_bootstrap_ci95": [
+              0.3822,
+              0.535
+            ],
+            "task_macro_average": 0.4586
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          }
+        },
         "confusion": {
           "fn": 0,
           "fp": 288,
@@ -4877,6 +5223,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 300,
           "value": 1.0
+        },
+        "sample_independence": {
+          "families": 8,
+          "kinds": 23,
+          "sessions": 928,
+          "tasks": 232
         },
         "sessions": 928,
         "target_attributable_recall": {
@@ -5475,6 +5827,44 @@
           }
         ],
         "benign": 628,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.3506,
+              0.5096
+            ],
+            "family_macro_average": 0.4175,
+            "task_bootstrap_ci95": [
+              0.3439,
+              0.4968
+            ],
+            "task_macro_average": 0.4204
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          }
+        },
         "confusion": {
           "fn": 0,
           "fp": 264,
@@ -5517,6 +5907,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 300,
           "value": 1.0
+        },
+        "sample_independence": {
+          "families": 8,
+          "kinds": 23,
+          "sessions": 928,
+          "tasks": 232
         },
         "sessions": 928,
         "target_attributable_recall": {
@@ -6059,6 +6455,44 @@
           }
         ],
         "benign": 608,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              0.8947,
+              0.8947
+            ],
+            "family_macro_average": 0.8947,
+            "task_bootstrap_ci95": [
+              0.8158,
+              0.9605
+            ],
+            "task_macro_average": 0.8947
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.3421,
+              0.3421
+            ],
+            "family_macro_average": 0.3421,
+            "task_bootstrap_ci95": [
+              0.2697,
+              0.4211
+            ],
+            "task_macro_average": 0.3421
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              0.7895,
+              0.7895
+            ],
+            "family_macro_average": 0.7895,
+            "task_bootstrap_ci95": [
+              0.6974,
+              0.8816
+            ],
+            "task_macro_average": 0.7895
+          }
+        },
         "confusion": {
           "fn": 32,
           "fp": 208,
@@ -6101,6 +6535,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 240,
           "value": 1.0
+        },
+        "sample_independence": {
+          "families": 4,
+          "kinds": 23,
+          "sessions": 912,
+          "tasks": 228
         },
         "sessions": 912,
         "target_attributable_recall": {
@@ -6635,6 +7075,44 @@
           }
         ],
         "benign": 608,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              0.4211,
+              0.4211
+            ],
+            "family_macro_average": 0.4211,
+            "task_bootstrap_ci95": [
+              0.3158,
+              0.5263
+            ],
+            "task_macro_average": 0.4211
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.1316,
+              0.1316
+            ],
+            "family_macro_average": 0.1316,
+            "task_bootstrap_ci95": [
+              0.0789,
+              0.1842
+            ],
+            "task_macro_average": 0.1316
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              0.3158,
+              0.3158
+            ],
+            "family_macro_average": 0.3158,
+            "task_bootstrap_ci95": [
+              0.2105,
+              0.4211
+            ],
+            "task_macro_average": 0.3158
+          }
+        },
         "confusion": {
           "fn": 176,
           "fp": 80,
@@ -6677,6 +7155,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 96,
           "value": 0.4
+        },
+        "sample_independence": {
+          "families": 4,
+          "kinds": 23,
+          "sessions": 912,
+          "tasks": 228
         },
         "sessions": 912,
         "target_attributable_recall": {
@@ -7211,6 +7695,44 @@
           }
         ],
         "benign": 608,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              0.8947,
+              0.8947
+            ],
+            "family_macro_average": 0.8947,
+            "task_bootstrap_ci95": [
+              0.8158,
+              0.9605
+            ],
+            "task_macro_average": 0.8947
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.3421,
+              0.3421
+            ],
+            "family_macro_average": 0.3421,
+            "task_bootstrap_ci95": [
+              0.2697,
+              0.4211
+            ],
+            "task_macro_average": 0.3421
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              0.7895,
+              0.7895
+            ],
+            "family_macro_average": 0.7895,
+            "task_bootstrap_ci95": [
+              0.6974,
+              0.8816
+            ],
+            "task_macro_average": 0.7895
+          }
+        },
         "confusion": {
           "fn": 32,
           "fp": 208,
@@ -7253,6 +7775,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 240,
           "value": 1.0
+        },
+        "sample_independence": {
+          "families": 4,
+          "kinds": 23,
+          "sessions": 912,
+          "tasks": 228
         },
         "sessions": 912,
         "target_attributable_recall": {
@@ -7843,6 +8371,44 @@
           }
         ],
         "benign": 616,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.3153,
+              0.3485
+            ],
+            "family_macro_average": 0.3314,
+            "task_bootstrap_ci95": [
+              0.2747,
+              0.3905
+            ],
+            "task_macro_average": 0.3525
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          }
+        },
         "confusion": {
           "fn": 0,
           "fp": 204,
@@ -7885,6 +8451,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 296,
           "value": 1.0
+        },
+        "sample_independence": {
+          "families": 8,
+          "kinds": 23,
+          "sessions": 912,
+          "tasks": 421
         },
         "sessions": 912,
         "target_attributable_recall": {
@@ -8483,6 +9055,44 @@
           }
         ],
         "benign": 616,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              0.5933,
+              0.6656
+            ],
+            "family_macro_average": 0.6315,
+            "task_bootstrap_ci95": [
+              0.5515,
+              0.72
+            ],
+            "task_macro_average": 0.6294
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.0974,
+              0.1279
+            ],
+            "family_macro_average": 0.1125,
+            "task_bootstrap_ci95": [
+              0.0769,
+              0.1527
+            ],
+            "task_macro_average": 0.1223
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              0.3993,
+              0.449
+            ],
+            "family_macro_average": 0.4241,
+            "task_bootstrap_ci95": [
+              0.3404,
+              0.5133
+            ],
+            "task_macro_average": 0.4196
+          }
+        },
         "confusion": {
           "fn": 108,
           "fp": 69,
@@ -8525,6 +9135,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 126,
           "value": 0.4257
+        },
+        "sample_independence": {
+          "families": 8,
+          "kinds": 23,
+          "sessions": 912,
+          "tasks": 421
         },
         "sessions": 912,
         "target_attributable_recall": {
@@ -9123,6 +9739,44 @@
           }
         ],
         "benign": 616,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.3153,
+              0.3485
+            ],
+            "family_macro_average": 0.3314,
+            "task_bootstrap_ci95": [
+              0.2747,
+              0.3905
+            ],
+            "task_macro_average": 0.3525
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          }
+        },
         "confusion": {
           "fn": 0,
           "fp": 204,
@@ -9165,6 +9819,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 296,
           "value": 1.0
+        },
+        "sample_independence": {
+          "families": 8,
+          "kinds": 23,
+          "sessions": 912,
+          "tasks": 421
         },
         "sessions": 912,
         "target_attributable_recall": {
@@ -9763,6 +10423,44 @@
           }
         ],
         "benign": 628,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.3506,
+              0.5096
+            ],
+            "family_macro_average": 0.4175,
+            "task_bootstrap_ci95": [
+              0.3439,
+              0.4968
+            ],
+            "task_macro_average": 0.4204
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          }
+        },
         "confusion": {
           "fn": 0,
           "fp": 264,
@@ -9805,6 +10503,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 300,
           "value": 1.0
+        },
+        "sample_independence": {
+          "families": 8,
+          "kinds": 23,
+          "sessions": 928,
+          "tasks": 232
         },
         "sessions": 928,
         "target_attributable_recall": {
@@ -10403,6 +11107,44 @@
           }
         ],
         "benign": 628,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              0.4688,
+              0.6049
+            ],
+            "family_macro_average": 0.5201,
+            "task_bootstrap_ci95": [
+              0.4267,
+              0.6533
+            ],
+            "task_macro_average": 0.5333
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.1125,
+              0.1941
+            ],
+            "family_macro_average": 0.1508,
+            "task_bootstrap_ci95": [
+              0.1019,
+              0.2102
+            ],
+            "task_macro_average": 0.1529
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              0.2647,
+              0.4235
+            ],
+            "family_macro_average": 0.3307,
+            "task_bootstrap_ci95": [
+              0.24,
+              0.4533
+            ],
+            "task_macro_average": 0.3467
+          }
+        },
         "confusion": {
           "fn": 140,
           "fp": 96,
@@ -10445,6 +11187,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 104,
           "value": 0.3467
+        },
+        "sample_independence": {
+          "families": 8,
+          "kinds": 23,
+          "sessions": 928,
+          "tasks": 232
         },
         "sessions": 928,
         "target_attributable_recall": {
@@ -11043,6 +11791,44 @@
           }
         ],
         "benign": 628,
+        "cluster_aware": {
+          "any_alert_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          },
+          "false_positive_rate": {
+            "family_bootstrap_ci95": [
+              0.3506,
+              0.5096
+            ],
+            "family_macro_average": 0.4175,
+            "task_bootstrap_ci95": [
+              0.3439,
+              0.4968
+            ],
+            "task_macro_average": 0.4204
+          },
+          "target_attributable_recall": {
+            "family_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "family_macro_average": 1.0,
+            "task_bootstrap_ci95": [
+              1.0,
+              1.0
+            ],
+            "task_macro_average": 1.0
+          }
+        },
         "confusion": {
           "fn": 0,
           "fp": 264,
@@ -11085,6 +11871,12 @@
           "name": "recall where the responsible check was evaluable",
           "numerator": 300,
           "value": 1.0
+        },
+        "sample_independence": {
+          "families": 8,
+          "kinds": 23,
+          "sessions": 928,
+          "tasks": 232
         },
         "sessions": 928,
         "target_attributable_recall": {
@@ -11137,7 +11929,7 @@
       "vocabulary": "unseen"
     }
   },
-  "config_hash": "15a7fd270d8885a9",
+  "config_hash": "a9fc04b9c86d81ce",
   "corpus": {
     "conditions": {
       "lexical": {
@@ -11164,7 +11956,7 @@
     "seed": 20260807
   },
   "corpus_digest": "a3d9aa5099f7e8d3",
-  "detector_version": "0.2.0",
+  "detector_version": "0.3.0",
   "leakage_experiment": {
     "clean": {
       "any_alert_recall": {
@@ -11194,6 +11986,44 @@
         }
       ],
       "benign": 314,
+      "cluster_aware": {
+        "any_alert_recall": {
+          "family_bootstrap_ci95": [
+            1.0,
+            1.0
+          ],
+          "family_macro_average": 1.0,
+          "task_bootstrap_ci95": [
+            1.0,
+            1.0
+          ],
+          "task_macro_average": 1.0
+        },
+        "false_positive_rate": {
+          "family_bootstrap_ci95": [
+            0.3506,
+            0.5096
+          ],
+          "family_macro_average": 0.4175,
+          "task_bootstrap_ci95": [
+            0.3439,
+            0.4968
+          ],
+          "task_macro_average": 0.4204
+        },
+        "target_attributable_recall": {
+          "family_bootstrap_ci95": [
+            1.0,
+            1.0
+          ],
+          "family_macro_average": 1.0,
+          "task_bootstrap_ci95": [
+            1.0,
+            1.0
+          ],
+          "task_macro_average": 1.0
+        }
+      },
       "confusion": {
         "fn": 0,
         "fp": 132,
@@ -11237,6 +12067,12 @@
         "numerator": 150,
         "value": 1.0
       },
+      "sample_independence": {
+        "families": 8,
+        "kinds": 23,
+        "sessions": 464,
+        "tasks": 232
+      },
       "sessions": 464,
       "target_attributable_recall": {
         "ci95_high": 1.0,
@@ -11276,6 +12112,44 @@
         }
       ],
       "benign": 314,
+      "cluster_aware": {
+        "any_alert_recall": {
+          "family_bootstrap_ci95": [
+            1.0,
+            1.0
+          ],
+          "family_macro_average": 1.0,
+          "task_bootstrap_ci95": [
+            1.0,
+            1.0
+          ],
+          "task_macro_average": 1.0
+        },
+        "false_positive_rate": {
+          "family_bootstrap_ci95": [
+            0.2558,
+            0.3816
+          ],
+          "family_macro_average": 0.3328,
+          "task_bootstrap_ci95": [
+            0.2548,
+            0.3949
+          ],
+          "task_macro_average": 0.3248
+        },
+        "target_attributable_recall": {
+          "family_bootstrap_ci95": [
+            1.0,
+            1.0
+          ],
+          "family_macro_average": 1.0,
+          "task_bootstrap_ci95": [
+            1.0,
+            1.0
+          ],
+          "task_macro_average": 1.0
+        }
+      },
       "confusion": {
         "fn": 0,
         "fp": 102,
@@ -11318,6 +12192,12 @@
         "name": "recall where the responsible check was evaluable",
         "numerator": 150,
         "value": 1.0
+      },
+      "sample_independence": {
+        "families": 8,
+        "kinds": 23,
+        "sessions": 464,
+        "tasks": 232
       },
       "sessions": 464,
       "target_attributable_recall": {

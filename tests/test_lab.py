@@ -26,6 +26,7 @@ weaker than executing the script, and they are much stronger than nothing.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -269,3 +270,232 @@ def test_the_manual_list_no_longer_claims_the_probes_are_manual():
     assert "Virtual Network Editor" in verify, (
         "the genuinely-manual host-only check was dropped; the probes pass "
         "just as happily on a bridged segment")
+
+
+# ---------------------------------------------------------------------------
+# R-08. A required positive probe that no routing table could satisfy.
+# ---------------------------------------------------------------------------
+
+_NIC = re.compile(r"@\{\s*Net\s*=\s*'([^']+)';\s*Ip\s*=\s*'([\d.]+)/\d+'\s*\}")
+_VM_NAME = re.compile(r"Name\s*=\s*'([^']+)'")
+
+
+def interfaces() -> dict[str, set[str]]:
+    """Every VM's static addresses, by name, read out of the Vms block."""
+    body = config()
+    start = body.index("Vms = @(")
+    block = body[start:body.index("# Isolation, as assertions", start)]
+    out: dict[str, set[str]] = {}
+    current = ""
+    for line in block.splitlines():
+        name = _VM_NAME.search(line)
+        if name:
+            current = name.group(1)
+            out[current] = set()
+        for _net, ip in _NIC.findall(line):
+            if current:
+                out[current].add(ip)
+    return out
+
+
+def _subnet(address: str) -> str:
+    return ".".join(address.split(".")[:3])
+
+
+def test_every_required_positive_probe_is_on_a_segment_the_source_can_reach():
+    """R-08, reproduced as a rule rather than as one corrected address.
+
+    The matrix required ``agent-01`` to reach ``10.10.20.10:22`` -- the
+    collector's COLLECTION-side address. ``agent-01`` has one static interface,
+    on the generation segment, and its default route is NAT. ``NoForwarding``
+    asserts the collector is a boundary rather than a router, so nothing carries
+    that packet either. The build could only ever fail its own required check.
+
+    The address was not the defect. Believing a host can reach a segment it has
+    no interface on was, and one corrected address does not stop the next one.
+    So this asserts the property: every ``reach`` row must name a target on a
+    subnet the source host actually has an address on, or be an advisory row
+    that leaves the lab entirely.
+    """
+    nics = interfaces()
+    unreachable = []
+    for source, kind, target, expect in probes():
+        if expect != "reach" or kind in ("https", "dns"):
+            continue
+        host = target.split(":")[0]
+        if not host[0].isdigit():
+            continue
+        if _subnet(host) not in {_subnet(ip) for ip in nics.get(source, set())}:
+            unreachable.append(
+                f"{source} -> {target}: {source} has "
+                f"{sorted(nics.get(source, set())) or 'no static address'}, "
+                f"none of them on {_subnet(host)}.0/24")
+    assert not unreachable, (
+        "these rows require a route that the declared interfaces cannot "
+        "provide, and no forwarding is permitted:\n  " + "\n  ".join(unreachable))
+
+
+def test_the_agent_is_asserted_off_the_collection_segment():
+    """The property the impossible row was standing in front of.
+
+    An agent that can reach the collection segment can reach the archive it is
+    being judged from. That is the boundary the whole lab exists to create, and
+    until R-08 nothing asserted it -- the row in that position was a positive
+    one, pointed at the same segment, and could not pass.
+    """
+    rows = [r for r in probes() if r[0] == "agent-01"]
+    collection = [r for r in rows if r[2].startswith("10.10.20.")]
+    assert collection, "nothing constrains agent-01's access to collection"
+    assert all(r[3] == "blocked" for r in collection), (
+        "agent-01 must not be asserted to reach the collection segment")
+    assert {r[2].split(":")[0] for r in collection} >= {"10.10.20.10",
+                                                        "10.10.20.30"}, (
+        "assert it against both hosts on that segment: the collector's foot "
+        "there and the scoring host")
+
+
+def test_the_agent_can_still_ship_telemetry_to_the_collector():
+    """And the positive half, which the lab is useless without."""
+    rows = [r for r in probes()
+            if r[0] == "agent-01" and r[2].startswith("10.10.10.20")]
+    assert rows, "nothing asserts the agent can reach the collector at all"
+    assert all(r[3] == "reach" for r in rows)
+
+
+def test_the_documentation_addresses_agree_with_the_built_lab():
+    """R-08's other half. ``LAB.md`` described a third topology -- collector on
+    10.10.20.10 alone, analysis on 10.10.30.10, SIEM on 10.10.40.10 -- and its
+    commands followed it. An operator configuring endpoints the built lab does
+    not have reads a silent scenario as a detector that declined to fire.
+    """
+    doc = (REPO / "LAB.md").read_text(encoding="utf-8")
+    section = doc[doc.index("| VM | Role |"):doc.index("Base image:")]
+    # Only the table's own rows. The prose beneath it quotes the addresses the
+    # stale version named, and a check that cannot tell a correction from the
+    # thing it corrects would forbid explaining the fix.
+    table = "\n".join(line for line in section.splitlines()
+                      if line.startswith("|"))
+    declared = set(re.findall(r"10\.10\.\d+\.\d+", table))
+    built = {ip for ips in interfaces().values() for ip in ips}
+    assert declared <= built, (
+        f"LAB.md's hardware table names addresses the lab does not build: "
+        f"{sorted(declared - built)}")
+    assert built <= declared, (
+        f"LAB.md's hardware table omits addresses the lab does build: "
+        f"{sorted(built - declared)}")
+
+
+# ---------------------------------------------------------------------------
+# The local lab, and the committed evidence it produces.
+# ---------------------------------------------------------------------------
+
+LOCAL_RUN = LAB / "local" / "runs" / "latest" / "RUN-MANIFEST.json"
+
+
+def local_manifest() -> dict:
+    return json.loads(LOCAL_RUN.read_text(encoding="utf-8"))
+
+
+def test_the_local_lab_has_a_committed_run():
+    """The point of the local lab is that its output is in the repository. A
+    lab whose results live only on the author's machine is a claim."""
+    assert LOCAL_RUN.is_file(), "no committed run manifest"
+    assert (LAB / "local/runs/latest/RESULTS.md").is_file()
+    assert (LAB / "local/runs/latest/verdicts.jsonl").is_file()
+
+
+def test_the_committed_run_demonstrates_each_state_distinctly():
+    """Six states of one workflow. If two of them produce the same output the
+    demonstration is not demonstrating anything, and that is a failure worth
+    catching before somebody is shown it."""
+    doc = local_manifest()
+    outcomes = {}
+    for state in doc["states"]:
+        for verdict in state["verdicts"]:
+            outcomes[state["state"]] = (
+                tuple(verdict["triggered_rules"]),
+                verdict["evidence_status"],
+            )
+    assert len(outcomes) == 6, f"expected six states, found {sorted(outcomes)}"
+    assert len(set(outcomes.values())) == len(outcomes), (
+        f"two states produce identical output: {outcomes}")
+
+
+def test_the_bound_receipt_contradicts_and_the_unbound_one_does_not():
+    """R-01, as a product behaviour rather than as a unit test.
+
+    The two states carry the same claim -- the agent says the refund failed --
+    and the same provider identifier. One binds to the exact span, tool and
+    argument digest; the other names no arguments. Before R-01 both produced
+    the same critical contradiction.
+    """
+    doc = local_manifest()
+    by_state = {s["state"]: s["verdicts"][0] for s in doc["states"]
+                if s["verdicts"]}
+    bound = by_state["04-contradiction"]
+    unbound = by_state["04b-unbound-receipt"]
+    assert "CH07_reported_failure_with_effect_receipt" in bound["triggered_rules"]
+    assert "CH07_reported_failure_with_effect_receipt" not in unbound["triggered_rules"], (
+        "an incomplete binding must never carry a contradiction")
+    assert "CH07_effect_receipt_partially_bound" in unbound["triggered_rules"], (
+        "and it must not vanish either: absent is a different fact, not a "
+        "weaker one, and an analyst should still see the receipt")
+
+
+def test_the_unsigned_tail_is_a_prefix_and_not_a_verified_session():
+    """R-05, likewise. The state signed at every fourth record, read while the
+    tail was still being written, must not claim its last records were
+    attested."""
+    doc = local_manifest()
+    partial = next(s for s in doc["states"]
+                   if s["state"].startswith("05"))
+    assert partial["verdicts"][0]["evidence_status"] == "verified_prefix"
+
+    normal = next(s for s in doc["states"] if s["state"].startswith("01"))
+    assert normal["verdicts"][0]["evidence_status"] == "verified_complete", (
+        "and a fully signed stream must still reach complete, or the fix has "
+        "made every session look partial")
+
+
+def test_the_ledger_tells_a_replay_from_a_fork():
+    """The two cases that need memory between runs, and that every other check
+    passes because the records really are genuine."""
+    doc = local_manifest()
+    codes = {entry["pass"]: entry["integrity_codes"] for entry in doc["ledger"]}
+    assert codes["first"] == [], "the first pass of a fresh stream is clean"
+    assert "INTEGRITY_STREAM_REPLAYED" in codes["replay"]
+    assert "INTEGRITY_STREAM_FORKED" in codes["fork"]
+    assert "INTEGRITY_STREAM_REPLAYED" not in codes["fork"], (
+        "a rewritten history is not a re-feed, and collapsing the two would "
+        "make the more serious one invisible")
+
+
+def test_the_local_lab_does_not_claim_to_be_the_isolated_one():
+    """Two labs, one of which has never been built. Saying so is the difference
+    between a reproducible demonstration and an overstated one."""
+    readme = (LAB / "local" / "README.md").read_text(encoding="utf-8")
+    lowered = readme.lower()
+    assert "network" in lowered and "not" in lowered
+    assert "eval/EVALUATION-CARD.md" in readme, (
+        "it must point at the efficacy numbers rather than let six sessions "
+        "stand in for them")
+
+
+def test_the_run_manifest_carries_no_environment_facts():
+    """The manifest asserts that these inputs produce these verdicts. That has
+    to hold on every interpreter the project supports, so CI running a
+    different one from whoever regenerated the file is the POINT of the check.
+
+    Caught the hard way: the manifest stamped the interpreter version, and the
+    first CI run failed on 3.12 against a file written on 3.11 -- a real
+    property turned into a host fact, and a green local check that meant
+    nothing.
+    """
+    raw = LOCAL_RUN.read_text(encoding="utf-8")
+    doc = local_manifest()
+    assert "python" not in doc, (
+        "the compared document names an interpreter; a manifest that depends "
+        "on the environment cannot assert a property of the detector")
+    for host_fact in ("3.10", "3.11", "3.12", "3.13", "elapsed", "duration"):
+        assert f'"{host_fact}"' not in raw, (
+            f"{host_fact!r} appears as a value in the compared manifest")

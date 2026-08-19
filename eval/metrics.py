@@ -63,10 +63,20 @@ C5-04 is fixed in the harness rather than here; see ``leakage_experiment``.
 from __future__ import annotations
 
 import math
+import random
+from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 Z95 = 1.959963984540054          # two-sided 95%
+
+# R-15. Fixed, because a published interval that moves between runs is not a
+# measurement. 2000 draws puts the Monte-Carlo error on a 95% percentile well
+# below the width of the interval it is estimating, and the resample is over
+# clusters rather than sessions so the cost is in the hundreds, not thousands.
+BOOTSTRAP_DRAWS = 2000
+BOOTSTRAP_SEED = 20260818
 
 
 def wilson(successes: int, total: int, z: float = Z95) -> tuple[float, float]:
@@ -122,6 +132,92 @@ class Rate:
         lo, hi = self.interval
         return (f"{self.value:.1%} [{lo:.1%}-{hi:.1%}] "
                 f"({self.numerator}/{self.denominator})")
+
+
+def cluster_bootstrap(
+        clusters: list[tuple[int, int]], *,
+        draws: int = BOOTSTRAP_DRAWS,
+        seed: int = BOOTSTRAP_SEED) -> tuple[float, float]:
+    """A 95% interval for a ratio, resampling CLUSTERS rather than sessions.
+
+    R-15. The card computed ordinary Wilson intervals over sessions, and the
+    generator says in its own docstring that the attempts of one task are near
+    duplicates. The main task-disjoint condition has 928 sessions and 232
+    tasks. Treating each attempt as an independent Bernoulli trial narrows the
+    interval by roughly the square root of the attempts per task and gives a
+    template that was rendered four times four times the weight of a task
+    family seen once.
+
+    Task-disjoint splitting stops a task's attempts spanning train and test. It
+    does nothing about the attempts INSIDE the test set still being the same
+    task, which is what an interval is supposed to account for.
+
+    ``clusters`` is one ``(numerator, denominator)`` pair per independent unit.
+    A ratio statistic needs nothing else, which is what keeps 2000 draws cheap:
+    a draw is a sum over a few hundred pairs.
+
+    Returns ``(0.0, 1.0)`` for fewer than two clusters -- with one cluster there
+    is nothing to resample, and reporting a point as an interval would be the
+    same overstatement in a different place.
+    """
+    usable = [(n, d) for n, d in clusters if d > 0]
+    if len(usable) < 2:
+        return (0.0, 1.0)
+    rng = random.Random(seed)
+    size = len(usable)
+    values = []
+    for _ in range(draws):
+        num = den = 0
+        for _ in range(size):
+            n, d = usable[rng.randrange(size)]
+            num += n
+            den += d
+        if den:
+            values.append(num / den)
+    if not values:
+        return (0.0, 1.0)
+    values.sort()
+    lo = values[int(0.025 * (len(values) - 1))]
+    hi = values[math.ceil(0.975 * (len(values) - 1))]
+    return (lo, hi)
+
+
+def _clusters(outcomes: list[Outcome], key: str,
+              hit: Callable[[Outcome], bool]) -> list[tuple[int, int]]:
+    grouped: dict[str, list[int, int]] = defaultdict(lambda: [0, 0])
+    for outcome in outcomes:
+        cell = grouped[getattr(outcome, key)]
+        cell[0] += 1 if hit(outcome) else 0
+        cell[1] += 1
+    return [(n, d) for n, d in (grouped[k] for k in sorted(grouped))]
+
+
+def macro_average(outcomes: list[Outcome], key: str,
+                  hit: Callable[[Outcome], bool]) -> float:
+    """The unweighted mean of the per-cluster rates.
+
+    R-15's other half. A micro average over sessions is dominated by whichever
+    task or family the generator happened to render most often. The macro
+    average gives every task -- or every family -- one vote, which is the
+    quantity a reader means when they ask whether this generalises.
+    """
+    cells = _clusters(outcomes, key, hit)
+    rates = [n / d for n, d in cells if d]
+    return sum(rates) / len(rates) if rates else 0.0
+
+
+def independence(outcomes: list[Outcome]) -> dict[str, int]:
+    """How many INDEPENDENT things this sample actually contains.
+
+    Published beside the session count because the two are very different
+    numbers and only one of them is what an interval should be computed over.
+    """
+    return {
+        "sessions": len(outcomes),
+        "tasks": len({o.task_id for o in outcomes}),
+        "families": len({o.family for o in outcomes}),
+        "kinds": len({o.kind for o in outcomes}),
+    }
 
 
 @dataclass(frozen=True)
@@ -246,6 +342,42 @@ def summarise(outcomes: list[Outcome]) -> dict[str, Any]:
         "mean_coverage_completeness": round(
             sum(o.completeness for o in outcomes) / len(outcomes), 4)
         if outcomes else 0.0,
+        # R-15. What this sample independently contains, beside what it
+        # nominally contains. The gap between `sessions` and `tasks` is the
+        # factor by which a session-level interval is too narrow.
+        "sample_independence": independence(outcomes),
+        "cluster_aware": _cluster_aware(attacks, benign),
+    }
+
+
+def _cluster_aware(attacks: list[Outcome],
+                   benign: list[Outcome]) -> dict[str, Any]:
+    """Intervals and macro averages that treat a task, not a session, as the
+    independent unit. R-15.
+
+    Reported ALONGSIDE the Wilson figures rather than instead of them, because
+    the two answer different questions and replacing one with the other would
+    hide the correction rather than publish it. The Wilson interval is right
+    about this corpus. The bootstrap interval is the one to quote when asking
+    whether the result would survive a different set of tasks -- and it is
+    wider, which is the point.
+    """
+    def block(outcomes: list[Outcome],
+              hit: Callable[[Outcome], bool]) -> dict[str, Any]:
+        task_lo, task_hi = cluster_bootstrap(_clusters(outcomes, "task_id", hit))
+        fam_lo, fam_hi = cluster_bootstrap(_clusters(outcomes, "family", hit))
+        return {
+            "task_bootstrap_ci95": [round(task_lo, 4), round(task_hi, 4)],
+            "family_bootstrap_ci95": [round(fam_lo, 4), round(fam_hi, 4)],
+            "task_macro_average": round(macro_average(outcomes, "task_id", hit), 4),
+            "family_macro_average": round(
+                macro_average(outcomes, "family", hit), 4),
+        }
+
+    return {
+        "target_attributable_recall": block(attacks, attributed),
+        "any_alert_recall": block(attacks, lambda o: o.flagged),
+        "false_positive_rate": block(benign, lambda o: o.flagged),
     }
 
 

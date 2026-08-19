@@ -6,8 +6,8 @@ a byte-identical card and any diff is a change in the detector.
 
 | Provenance | |
 |---|---|
-| detector version | `0.2.0` |
-| bounds digest (`config_hash`) | `15a7fd270d8885a9` |
+| detector version | `0.3.0` |
+| bounds digest (`config_hash`) | `a9fc04b9c86d81ce` |
 | corpus digest | `a3d9aa5099f7e8d3` |
 | corpus seed | `20260807` |
 | sessions per vocabulary | 1824 (608 attack / 1216 benign) |
@@ -187,6 +187,30 @@ real fleet might have.
 
 **The prevalence-free unit is 420.4 false positives per 1000 BENIGN sessions.** The previous card published 284.5 per 1000 sessions and told operators to plan capacity against it, which understates the load because the denominator included the corpus's own inflated attack population. Plan against the benign-normalised number and read precision from the table above, not from §1.
 
+### 6. The intervals when a task, not a session, is the unit
+
+R-15. Every interval above is a Wilson interval over SESSIONS, and the
+corpus generator says in its own docstring that the attempts of one task
+are near-duplicates. Treating each attempt as an independent trial narrows
+the interval, and gives a template rendered four times the weight of four
+distinct tasks. Task-disjoint splitting stops a task's attempts
+spanning train and test; it does nothing about the attempts inside the test
+set still being the same task.
+
+This cell contains **928 sessions** but only
+**232 independent tasks** across **8 families**.
+
+| measure | Wilson over sessions | bootstrap over tasks | macro average over tasks |
+|---|---|---|---|
+| target-attributable recall | 100.0% [98.7%-100.0%] | [100.0%-100.0%] | 100.0% |
+| any-alert recall | 100.0% [98.7%-100.0%] | [100.0%-100.0%] | 100.0% |
+| false positive rate | 42.0% [38.2%-45.9%] | [34.4%-49.7%] | 42.0% |
+
+The bootstrap interval is roughly twice the width of the Wilson one. That
+factor is the correction, and it is the number to quote when the question
+is whether a result would survive a different set of tasks rather than
+whether it is stable on this one.
+
 ---
 
 ## What this does not measure
@@ -202,10 +226,14 @@ you hide is a defect.
 - **Attack prevalence is 33%, which is absurd.** Real
   prevalence is orders of magnitude lower, and precision falls with it. At a
   realistic base rate the false positive counts in section 3 dominate
-  completely. `false_positives_per_1000_sessions` in the JSON is the number
-  to plan capacity against, not precision.
+  completely. Plan capacity against
+  `false_positives_per_1000_benign_sessions`, never against precision and
+  never against `false_positives_per_1000_sessions` -- this paragraph used
+  to recommend the second, contradicting section 5 four hundred lines
+  above it. The all-session figure moves with this corpus's artificial
+  attack prevalence and is published only so the two can be compared.
 - **No adaptive attacker.** Every attack here is one of 10 fixed shapes.
-  EVASION.md catalogues seventeen ways to defeat these checks. Exactly one
+  EVASION.md catalogues 22 ways to defeat these checks. Exactly one
   of them, E02, appears in this corpus, and only because a fix for it
   could not be graded otherwise. An attacker who has read that file scores
   differently.

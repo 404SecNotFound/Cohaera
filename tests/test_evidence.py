@@ -31,8 +31,11 @@ Run: PYTHONPATH=src python3 -m pytest tests/test_evidence.py -v
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import os
 import random
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -45,14 +48,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from cohaera import ed25519
 from cohaera.capabilities import CapabilityManifest
 from cohaera.checks import (
+    APPROVAL_SPAN_ONLY,
     CH04_BYPASSED,
     CH04_COMPLETED,
     CH06_INTEGRITY,
     CH07_CONTRADICTED,
+    CH07_PARTIAL,
     CH07_UNBOUND,
     EVIDENCE_INADMISSIBLE,
+    EVIDENCE_NOT_APPLICABLE,
+    EVIDENCE_STATES,
     EVIDENCE_UNATTESTED,
-    EVIDENCE_VERIFIED,
+    EVIDENCE_VERIFIED_COMPLETE,
+    EVIDENCE_VERIFIED_PREFIX,
+    R_RECEIPT_NOT_ARGUMENT_BOUND,
     ch04_guardrail_overrun,
     ch06_evidence_integrity,
     ch07_effect_contradiction,
@@ -63,7 +72,13 @@ from cohaera.checks import (
 from cohaera.cli import EXIT_ERROR, EXIT_OK
 from cohaera.cli import main as cli_main
 from cohaera.evidence import (
+    APPROVAL_ORIGIN_IN_BAND,
     APPROVAL_SCHEMA,
+    BINDING_CONTEXT,
+    BINDING_TRUSTED,
+    BOUND_EXACT,
+    BOUND_SPAN_ONLY,
+    INADMISSIBLE,
     INTEGRITY_SCHEMA,
     LEDGER_SCHEMA,
     NO_FRESHNESS,
@@ -80,12 +95,14 @@ from cohaera.evidence import (
     POLICY_SIGNATURE_SCHEMA,
     R_CHAIN_BROKEN,
     R_FRESHNESS_UNVERIFIABLE,
+    R_FROM_FUTURE,
     R_KEY_EXPIRED,
     R_KEY_NOT_YET_VALID,
     R_KEY_REVOKED,
     R_KEY_UNKNOWN,
     R_KEY_WINDOW_UNCHECKED,
     R_KEY_WRONG_ROLE,
+    R_LEDGER_NOT_ADVANCED,
     R_NO_COLLECTOR_KEYS,
     R_NO_STREAM_LEDGER,
     R_PARTIAL_INTEGRITY,
@@ -93,45 +110,68 @@ from cohaera.evidence import (
     R_REORDERED,
     R_SEQUENCE_GAP,
     R_SEQUENCE_REPLAY,
+    R_SIGNATURE_BUDGET,
     R_SIGNATURE_INVALID,
+    R_SIGNATURE_PREFIX_ONLY,
     R_STALE,
+    R_STREAM_BOUNDARY_UNVERIFIED,
     R_STREAM_FORKED,
     R_STREAM_REPLAYED,
     R_STREAM_SKIPPED_RECORDS,
+    R_UNSIGNED,
     RECEIPT_SCHEMA,
     ROLE_COLLECTOR,
     ROLE_POLICY,
+    SEEN_ADVANCED,
+    SEEN_NEW,
     TRUST_STORE_SCHEMA,
     W_ALL_KEYS_REVOKED,
     W_LEGACY_SCHEMA,
     W_ROTATION_CYCLE,
     W_SUPERSEDED_OPEN,
     Approval,
+    Binding,
     EffectReceipt,
     Freshness,
     Integrity,
     LedgerError,
     PolicySignature,
     PolicySignatureError,
+    SeenStream,
+    SeenVerdict,
     StreamLedger,
     StreamVerifier,
     TrustStore,
     TrustStoreError,
     arg_digest,
+    body_digest,
+    chain_seed,
+    chain_step,
     file_sha256,
     policy_signing_input,
+    signing_input,
+    stream_sha256,
     verify_policy_signature,
 )
-from cohaera.ingest import assemble
+from cohaera.identity import NO_TRUST_CONFIG, trust_config_digest
+from cohaera.ingest import assemble, load, read_events
 from cohaera.limits import (
     DEFAULT_LIMITS,
     DEFECT_APPROVAL_TYPE,
     DEFECT_INTEGRITY_TYPE,
     DEFECT_RECEIPT_TYPE,
+    Limits,
+    LimitsError,
 )
-from cohaera.model import Event, Session
+from cohaera.model import SESSION_SCHEMA, Event, Session
+from cohaera.validate import IngestReport
 from tools.collector_sign import key_id_for, keys_document, sign_stream
 from tools.receipt_adapters import (
+    _ADAPTERS,
+    ASSURANCE_CLIENT,
+    ASSURANCE_LEVELS,
+    ASSURANCE_OBJECT,
+    ASSURANCE_OPERATION,
     ReceiptAdapterError,
     adapt,
     binding_for,
@@ -958,6 +998,75 @@ def test_an_expired_approval_is_not_an_approval():
     assert findings[0].evidence["approval_states"] == ["approval_expired"]
 
 
+# R-10. The approval half of the same fault. ``Approval.parse`` already refuses
+# a subject with no span, so the reachable incomplete subsets are the three that
+# name one.
+_INCOMPLETE_SUBJECTS = [
+    {"span_id": "sp-send"},
+    {"span_id": "sp-send", "tool_id": "send_email"},
+    {"span_id": "sp-send", "arg_digest": arg_digest(ARGS)},
+]
+
+
+@pytest.mark.parametrize("subject", _INCOMPLETE_SUBJECTS,
+                         ids=lambda s: "+".join(sorted(s)))
+def test_an_incompletely_bound_approval_does_not_suppress_a_bypass(subject):
+    """An approval for ``send_email`` covers ``send_email`` to anyone.
+
+    That is the failure argument binding exists to prevent, and until R-10 a
+    span-only approval silenced CH04 outright -- the check reported nothing at
+    all, rather than reporting a bypass approved on weaker evidence than the
+    schema was designed to carry.
+    """
+    s = _session(enforcement="blocking", approval=_approval(subject=subject))
+    findings = ch04_guardrail_overrun(s)
+    assert [f.check for f in findings] == [CH04_BYPASSED]
+    assert findings[0].evidence["approval_states"] == [APPROVAL_SPAN_ONLY]
+
+
+def test_an_incompletely_bound_approval_is_not_a_covering_approval():
+    s = _session(enforcement="blocking",
+                 approval=_approval(subject={"span_id": "sp-send",
+                                             "tool_id": "send_email"}))
+    call = s.tool_calls[0]
+    assert s.approvals_for(call)          # it was presented
+    assert s.covering_approval(call) is None   # it does not cover
+
+
+def test_an_approval_is_recorded_as_a_claim_with_its_origin():
+    """An in-band approval is an approval CLAIM.
+
+    It arrives on the same event stream the agent produces, so "approved" in a
+    verdict is the producer's assertion that a decision was made, not an
+    authorization fact Cohaera established. The origin is emitted so an analyst
+    can tell the two apart without reading this docstring.
+    """
+    s = _session(enforcement="blocking", approval=_approval())
+    call = s.tool_calls[0]
+    covering = s.covering_approval(call)
+    assert covering is not None
+    assert covering.approval.origin == APPROVAL_ORIGIN_IN_BAND
+    assert covering.approval.as_dict()["approval_origin"] == APPROVAL_ORIGIN_IN_BAND
+    findings = ch04_guardrail_overrun(_session(enforcement="blocking"))
+    assert findings[0].evidence["approval_origins"] == []
+
+
+def test_a_span_only_denial_still_annotates_rather_than_silencing():
+    """Precedence is unchanged for refusals, but the binding is not.
+
+    A DENY that does not name the arguments is still a refusal presented for
+    this span, and a completed call after one is still worth reporting -- but it
+    is reported as a weaker claim than a DENY bound to the exact arguments.
+    """
+    s = _session(enforcement="blocking",
+                 approval=_approval(decision="deny",
+                                    subject={"span_id": "sp-send",
+                                             "tool_id": "send_email"}))
+    findings = ch04_guardrail_overrun(s)
+    assert [f.check for f in findings] == [CH04_BYPASSED]
+    assert findings[0].evidence["approval_states"] == [APPROVAL_SPAN_ONLY]
+
+
 def test_an_explicit_denial_is_a_bypass_even_on_an_advisory_control():
     """A refusal naming the exact call outranks the control's own semantics.
 
@@ -1088,6 +1197,98 @@ def test_a_receipt_for_different_arguments_does_not_bind():
     assert [f.check for f in findings] == [CH07_UNBOUND]
 
 
+# R-01. Every PROPER subset of {span_id, tool_id, arg_digest}. A binding that
+# omits any of the three constrains less than the checks reading it assume, and
+# the seven of them are enumerated rather than sampled because the fault was
+# that one unenumerated combination -- all three absent -- reached a critical
+# finding.
+_INCOMPLETE_BINDINGS = [
+    {},
+    {"span_id": "sp-1"},
+    {"tool_id": "send_email"},
+    {"arg_digest": arg_digest(ARGS)},
+    {"span_id": "sp-1", "tool_id": "send_email"},
+    {"span_id": "sp-1", "arg_digest": arg_digest(ARGS)},
+    {"tool_id": "send_email", "arg_digest": arg_digest(ARGS)},
+]
+
+
+@pytest.mark.parametrize("binding", _INCOMPLETE_BINDINGS,
+                         ids=lambda b: "+".join(sorted(b)) or "empty")
+def test_an_incompletely_bound_receipt_is_never_a_contradiction(binding):
+    """The R-01 matrix.
+
+    ``BINDING_TRUSTED`` used to contain ``bound_span_only``, so a receipt that
+    named nothing at all -- or named two of the three fields -- carried the
+    same authority as one bound to the exact call and the exact arguments. A
+    contradiction is a claim that the record disagrees with itself, and it can
+    only be made about a receipt that provably refers to THIS call.
+    """
+    findings = ch07_effect_contradiction(
+        _call_session("failure", _receipt(binding=binding)))
+    assert CH07_CONTRADICTED not in [f.check for f in findings]
+
+
+def test_a_receipt_with_an_empty_binding_is_not_a_receipt():
+    """R-01 as the review reproduced it, at the parse boundary.
+
+    A failed egress call carrying a valid authority, kind and identifier and
+    ``binding: {}`` produced a trusted receipt and a critical CH07
+    contradiction. An empty object is not a binding; the receipt is rejected
+    and the defect is recorded, per the rejection-vs-defect rule.
+    """
+    s = _call_session("failure", _receipt(binding={}))
+    assert s.tool_calls[0].receipt is None
+    assert ch07_effect_contradiction(s) == []
+    assert Binding.parse({}, DEFAULT_LIMITS) is None
+    parsed, codes = EffectReceipt.parse(_receipt(binding={}), DEFAULT_LIMITS)
+    assert parsed is None and DEFECT_RECEIPT_TYPE in codes
+
+
+def test_a_partially_bound_receipt_on_a_failed_call_is_reported_as_itself():
+    """Not a contradiction, and not silence either.
+
+    A receipt that names the span and the tool but not the arguments, arriving
+    on a call the telemetry reports as failed, is the shape CH07 exists to look
+    at with a field missing. Downgrading it to nothing would lose the only
+    signal there is; calling it a contradiction claims a binding that was never
+    established.
+    """
+    findings = ch07_effect_contradiction(_call_session(
+        "failure", _receipt(binding={"span_id": "sp-1",
+                                     "tool_id": "send_email"})))
+    assert [f.check for f in findings] == [CH07_PARTIAL]
+    assert findings[0].severity == "low"
+    assert findings[0].evidence["partial_total"] == 1
+
+
+def test_a_partially_bound_receipt_on_a_successful_call_is_not_a_finding():
+    """The pager-storm guard.
+
+    Requiring exact binding must not turn every adapter that omits an argument
+    digest into a finding per call. A partial receipt on a call that reported
+    success is a producer-shape gap, and it belongs in coverage.
+    """
+    s = _call_session("success", _receipt(binding={"span_id": "sp-1",
+                                                   "tool_id": "send_email"}))
+    assert ch07_effect_contradiction(s) == []
+    contract = next(c for c in coverage(s, None)["checks"]
+                    if c["check"] == "CH07_effect_contradiction")
+    assert R_RECEIPT_NOT_ARGUMENT_BOUND in contract["reasons"]
+    assert contract["confidence"] < 1.0
+
+
+def test_span_only_is_context_and_never_trust():
+    """The constant the fault lived in.
+
+    Stated as a test because the two sets are read from different modules and
+    an editor adding a state to the trusted set is exactly how this returns.
+    """
+    assert BINDING_TRUSTED == frozenset({BOUND_EXACT})
+    assert BOUND_SPAN_ONLY in BINDING_CONTEXT
+    assert not (BINDING_TRUSTED & BINDING_CONTEXT)
+
+
 # ---------------------------------------------------------------------------
 # 6. Evidence status, CH06, and what the whole design still cannot do
 # ---------------------------------------------------------------------------
@@ -1117,16 +1318,175 @@ def test_every_finding_carries_how_far_the_evidence_was_established():
     for f in findings:
         # CH06 is exempt: it IS the statement that the evidence failed, and
         # marking it as resting on failed evidence would be circular.
-        expected = (EVIDENCE_VERIFIED if f.check == CH06_INTEGRITY
+        # R-05: not_applicable, not "verified". CH06's subject IS the
+        # integrity evidence, so asking how far that evidence was established
+        # is a category error -- and the old value said something false rather
+        # than merely incomplete.
+        expected = (EVIDENCE_NOT_APPLICABLE if f.check == CH06_INTEGRITY
                     else EVIDENCE_INADMISSIBLE)
         assert f.evidence_status == expected
+
+
+# R-05. How far the attestation REACHED, which is a different question from
+# whether anything was signed -- and the second one is what evidence_status used
+# to answer.
+
+
+def _unsign_tail(signed: list[dict], keep_signed_to: int) -> list[dict]:
+    """Strip signatures after ``keep_signed_to``, leaving the chain intact.
+
+    The shape a third-party collector produces when it samples signatures and
+    the batch does not end on a signing position. Cohaera's own signer no longer
+    emits it -- it always signs the final record -- but the verifier has to
+    detect it whoever wrote the stream, which is the whole point.
+    """
+    out = []
+    for record in signed:
+        sidecar = dict(record["integrity"])
+        if sidecar["seq"] > keep_signed_to:
+            sidecar.pop("sig", None)
+            sidecar.pop("key_id", None)
+        out.append({**record, "integrity": sidecar})
+    return out
+
+
+def _session_of(signed: list[dict], **kw):
+    v = StreamVerifier(keys=KEYS, **kw)
+    events = []
+    for raw in signed:
+        e = Event(raw=raw)
+        v.observe(e.raw, e.integrity, "sess-1")
+        events.append(e)
+    v.finalise()
+    s = Session(session_id="sess-1", events=events)
+    s.integrity = v.for_session("sess-1")
+    s.seal()
+    return s
+
+
+def test_a_stream_signed_to_its_middle_is_a_prefix_and_not_verified():
+    """R-05, the review's fixture, reproduced.
+
+    150 records, signatures at sequence 0 and 100. ``evidence_status`` returned
+    ``verified`` because ``signatures_verified > 0`` -- a fact about whether
+    signing happened at all, not about what it covered. A signature covers the
+    chain head at its own sequence, so it attests every record up to that point
+    and nothing after it: 49 records sat past the last attestation, chained and
+    vouched for by nobody, under a word an analyst reads as settled.
+    """
+    signed = _unsign_tail(
+        sign_stream(_records(150), "stream-a", SECRET, KEY_ID, sign_every=100),
+        keep_signed_to=100)
+    s = _session_of(signed)
+
+    assert s.integrity.signatures_verified == 2
+    assert evidence_status(s) == EVIDENCE_VERIFIED_PREFIX
+    assert not s.integrity.signature_covers_final
+
+
+def test_the_verified_range_is_carried_rather_than_summarised():
+    """"Signed to 100 of 149" is the finding. An analyst asked to trust a
+    session needs to see where the attestation stopped, not be told that it
+    did."""
+    signed = _unsign_tail(
+        sign_stream(_records(150), "stream-a", SECRET, KEY_ID, sign_every=100),
+        keep_signed_to=100)
+    ranges = _session_of(signed).integrity.signature_ranges
+
+    assert ranges == [{"stream_id": "stream-a", "first_seq": 0,
+                       "last_seq": 149, "verified_to": 100}]
+
+
+def test_confidence_is_not_one_when_a_tail_is_unattested():
+    """The number that made the old status survivable, and did not.
+
+    With freshness and a ledger in force the other CH06 penalties fall away and
+    the contract scored the review's fixture at exactly 1.0 -- fully evaluated,
+    no reservation, 49 records attested by nobody.
+    """
+    signed = _unsign_tail(
+        sign_stream(_records(150), "stream-a", SECRET, KEY_ID, sign_every=100),
+        keep_signed_to=100)
+    s = _session_of(
+        signed,
+        freshness=Freshness(max_age_s=86400.0, as_of=1200.0,
+                            max_future_skew_s=300.0),
+        ledger=StreamLedger(streams={}, path=Path("unused")))
+    contract = next(c for c in coverage(s, None)["checks"]
+                    if c["check"] == CH06_INTEGRITY)
+
+    assert contract["confidence"] < 1.0
+    assert R_SIGNATURE_PREFIX_ONLY in contract["reasons"]
+    # 101 of 150 records reached, so the share is the multiplier and nothing
+    # else is penalising this run.
+    assert contract["confidence"] == round(101 / 150, 3)
+
+
+def test_a_stream_signed_to_its_end_is_complete():
+    signed = sign_stream(_records(150), "stream-a", SECRET, KEY_ID,
+                         sign_every=100)
+    s = _session_of(signed)
+    assert evidence_status(s) == EVIDENCE_VERIFIED_COMPLETE
+    assert s.integrity.signature_covers_final
+    assert s.integrity.signature_coverage == 1.0
+
+
+def test_the_signer_always_signs_the_final_record():
+    """What makes verified_complete reachable for a sampled stream at all.
+
+    Sampling leaves everything after the last signing position attested by
+    nobody, and a batch rarely ends on a multiple of the rate. One extra scalar
+    multiplication per stream closes it.
+    """
+    signed = sign_stream(_records(150), "stream-a", SECRET, KEY_ID,
+                         sign_every=100)
+    positions = [r["integrity"]["seq"] for r in signed
+                 if "sig" in r["integrity"]]
+    assert positions == [0, 100, 149]
+
+
+@pytest.mark.parametrize("rate", [0, -1, 1.5, True, "4"])
+def test_a_sampling_rate_that_signs_nothing_is_refused(rate):
+    """``sign_every=0`` emitted a stream with no signature on any record and
+    reported success: `if sign_every and seq % sign_every == 0` short-circuits,
+    so the ZeroDivisionError never arrived to give it away. ``-1`` signs
+    everything, since seq % -1 == 0 always. An operator tuning a sampling rate
+    must not be able to switch signing off by typing a number."""
+    with pytest.raises(ValueError, match="sign_every"):
+        sign_stream(_records(4), "stream-a", SECRET, KEY_ID, sign_every=rate)
+
+
+def test_verified_is_no_longer_a_value_this_schema_can_emit():
+    """The rename, asserted rather than assumed.
+
+    Stated as a test because `verified` reads as settled and `verified_prefix`
+    does not, and a downstream rule written against the old value must fail
+    loudly rather than silently match nothing.
+    """
+    assert "verified" not in EVIDENCE_STATES
+    assert EVIDENCE_STATES == {
+        "verified_complete", "verified_prefix", "chained_unsigned",
+        "unattested", "inadmissible", "not_applicable"}
+
+
+def test_a_session_is_only_as_attested_as_its_weakest_stream():
+    """Two streams, one signed to its end and one not. Averaging would report
+    the better half; every stream feeding a session has to be covered."""
+    a = sign_stream(_records(4, sid="sess-1"), "stream-a", SECRET, KEY_ID)
+    b = _unsign_tail(
+        sign_stream(_records(4, sid="sess-1"), "stream-b", SECRET, KEY_ID,
+                    sign_every=1),
+        keep_signed_to=1)
+    s = _session_of(a + b)
+    assert evidence_status(s) == EVIDENCE_VERIFIED_PREFIX
+    assert 0.0 < s.integrity.signature_coverage < 1.0
 
 
 def test_ch06_stays_quiet_on_a_stream_that_verifies():
     signed = sign_stream(_records(4), "stream-a", SECRET, KEY_ID)
     sessions = assemble([Event(raw=r) for r in signed], keys=KEYS)
     assert ch06_evidence_integrity(sessions[0]) == []
-    assert evidence_status(sessions[0]) == EVIDENCE_VERIFIED
+    assert evidence_status(sessions[0]) == EVIDENCE_VERIFIED_COMPLETE
 
 
 def test_a_collector_inside_the_agent_gains_nothing_and_the_contract_says_so():
@@ -1606,11 +1966,78 @@ def test_a_stream_inside_the_bound_is_not_stale():
 
 def test_a_future_dated_record_is_not_reported_as_stale():
     """Clock skew is somebody else's finding. Calling it replay would be wrong
-    in the one direction that costs an analyst their trust in the code."""
+    in the one direction that costs an analyst their trust in the code.
+
+    It is somebody else's finding, and R-13 is where somebody else finally makes
+    it: see the two tests below. This one holds the line that STALE stays
+    STALE -- an archive replay and a wrong clock are separate remedies and a
+    shared code makes both unguessable.
+    """
     signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
     state = _run(signed, freshness=Freshness(max_age_s=60.0, as_of=0.0)
                  ).for_session("sess-1")
     assert R_STALE not in state.codes
+
+
+def test_a_record_dated_a_year_ahead_is_inadmissible_rather_than_fresh():
+    """R-13, reproduced.
+
+    ``_records`` is stamped at t=1000; ``as_of`` is a year earlier, so every
+    record is dated a year in the future. Before this, ``stale()`` returned
+    False and nothing else was computed, so the session read exactly like one
+    whose records were written a second ago -- a collector with a wrong clock,
+    or one an attacker holds, bought unlimited freshness by adding to a number.
+
+    Inadmissible, not a warning, because the whole argument for trusting the
+    timestamp is that it is signed and a replayer cannot re-date it. A record
+    dated after the instant it was scored breaks that argument at the root.
+    """
+    year = 365 * 24 * 3600
+    signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
+    state = _run(signed, freshness=Freshness(max_age_s=3600.0,
+                                             as_of=1000.0 - year,
+                                             max_future_skew_s=300.0)
+                 ).for_session("sess-1")
+    assert R_FROM_FUTURE in state.codes
+    assert R_FROM_FUTURE in state.inadmissible
+    assert R_STALE not in state.codes, "a year ahead is not three months old"
+    assert state.furthest_future_s is not None
+    assert state.furthest_future_s >= year
+
+
+def test_ordinary_clock_disagreement_is_inside_the_skew_and_says_nothing():
+    """The reason the tolerance is not zero.
+
+    Two hosts running NTP disagree by milliseconds and occasionally by seconds.
+    A bound with no tolerance would make every collector whose clock runs a
+    little fast inadmissible, which is a finding about the estate's time
+    synchronisation delivered as a tampering alert.
+    """
+    signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
+    state = _run(signed, freshness=Freshness(max_age_s=3600.0, as_of=990.0,
+                                             max_future_skew_s=300.0)
+                 ).for_session("sess-1")
+    assert R_FROM_FUTURE not in state.codes
+    assert R_STALE not in state.codes
+    assert state.furthest_future_s is None
+
+
+def test_future_skew_is_not_answered_when_freshness_is_off():
+    """``None``, never ``False``. Not checked is not checked and fine."""
+    assert Freshness().from_future(1e12) is None
+    assert Freshness(max_age_s=60.0).from_future(1e12) is None
+    off = Freshness(max_age_s=60.0, as_of=0.0, max_future_skew_s=300.0)
+    assert off.from_future(None) is None
+    assert off.from_future(float("nan")) is None
+
+
+def test_the_skew_tolerance_is_read_as_a_magnitude():
+    """A negative tolerance would invert the bound and report every record as
+    from the future, which is the C4-05 shape: a number tightening a control
+    that instead removes it."""
+    f = Freshness(max_age_s=60.0, as_of=0.0, max_future_skew_s=-300.0)
+    assert f.from_future(100.0) is False
+    assert f.from_future(400.0) is True
 
 
 def test_freshness_over_an_unsigned_chain_is_reported_as_unverifiable():
@@ -1712,6 +2139,142 @@ def test_cli_refuses_to_score_when_a_supplied_signature_does_not_hold(tmp_path):
                      "--trust-store", str(store)]) == EXIT_ERROR
 
 
+def _swap_on_second_open(monkeypatch, target: Path, replacement: Path):
+    """Atomically replace ``target`` with ``replacement`` after its first open.
+
+    ``rename`` rather than a rewrite, because that is both the realistic attack
+    and the only version that proves anything: a descriptor already handed out
+    keeps the ORIGINAL inode, so the first reader still sees the honest bytes
+    and only a *second resolution of the path* sees the swap. A test that
+    truncated the file in place would fail against correct code too, for a
+    reason that has nothing to do with the race.
+
+    Returns a one-element list holding the number of times the path was opened.
+    """
+    real_open = Path.open
+    opens = [0]
+
+    def counting_open(self, *a, **kw):
+        if self == target:
+            opens[0] += 1
+            fh = real_open(self, *a, **kw)
+            if opens[0] == 1:
+                os.rename(replacement, self)
+            return fh
+        return real_open(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "open", counting_open)
+    return opens
+
+
+def test_the_manifest_is_parsed_and_hashed_from_the_same_bytes(tmp_path,
+                                                               monkeypatch):
+    """R-07, reproduced.
+
+    ``CapabilityManifest.from_file`` resolved the path and parsed it; the CLI
+    then resolved the SAME PATH again to hash it for the signature. A path is
+    not a file. An atomic rename in the window between the two left Cohaera
+    scoring one manifest and attesting the digest of another -- and the
+    signature held, because it was checked against whichever bytes the second
+    read happened to find. The operator's verdict then carried a VERIFIED
+    attestation for a file that had not been used.
+    """
+    _telemetry, manifest, _store, _sig = _policy_fixture(
+        tmp_path, manifest_body='{"tools":{"send":{"effects":["egress"]}}}')
+    hostile = tmp_path / "hostile.json"
+    hostile.write_text('{"tools":{"send":{"effects":["read"]}}}',
+                       encoding="utf-8")
+    honest_sha = file_sha256(manifest, 1 << 20)
+
+    opens = _swap_on_second_open(monkeypatch, manifest, hostile)
+    parsed = CapabilityManifest.from_file(manifest, limits=DEFAULT_LIMITS)
+
+    assert opens[0] == 1, (
+        "the manifest must be resolved exactly once; a second resolution is "
+        "the race")
+    assert parsed.file_sha256 == honest_sha, (
+        "the digest carried forward must describe the bytes that were parsed")
+    assert parsed.tools["send"].consequential, "the honest bytes were parsed"
+    # And the swap really did happen, so the fixture is testing something.
+    assert file_sha256(manifest, 1 << 20) != honest_sha
+
+
+def test_a_swapped_manifest_cannot_borrow_the_honest_files_attestation(
+        tmp_path, monkeypatch, capsys):
+    """The same race at the CLI boundary, which is where it mattered.
+
+    Before R-07 this run exited OK with a VERIFIED manifest attestation while
+    scoring a manifest the signature had never covered. Now the digest comes
+    from the bytes that were parsed, so the swap either goes unnoticed -- the
+    honest file was read and the honest file was attested -- or is refused. What
+    must never happen is a verified attestation over bytes that were not used.
+    """
+    telemetry, manifest, store, sig = _policy_fixture(
+        tmp_path, manifest_body='{"tools":{"send":{"effects":["egress"]}}}')
+    hostile = tmp_path / "hostile.json"
+    hostile.write_text('{"tools":{"send":{"effects":["read"]}}}',
+                       encoding="utf-8")
+    honest_sha = file_sha256(manifest, 1 << 20)
+    sig.write_text(json.dumps({
+        "scheme": POLICY_SIGNATURE_SCHEMA, "artifact": POLICY_ARTIFACT_MANIFEST,
+        "file_sha256": honest_sha, "signed_at": SIGNED_AT,
+        "key_id": POLICY_KEY_ID,
+        "sig": base64.b64encode(ed25519.sign(
+            POLICY_SECRET,
+            policy_signing_input(POLICY_ARTIFACT_MANIFEST, honest_sha,
+                                 SIGNED_AT))).decode("ascii")}),
+        encoding="utf-8")
+
+    _swap_on_second_open(monkeypatch, manifest, hostile)
+    code = cli_main(["score", str(telemetry), "--tool-manifest", str(manifest),
+                     "--tool-manifest-sig", str(sig),
+                     "--trust-store", str(store)])
+    assert code == EXIT_OK
+    prov = json.loads(capsys.readouterr().out.strip())["data"]["provenance"]
+    att = next(a for a in prov["policy_attestations"]
+               if a["artifact"] == POLICY_ARTIFACT_MANIFEST)
+    assert att["verified"]
+    assert att["file_sha256"] == honest_sha
+    assert prov["capability_manifest"]["file_sha256"] == honest_sha, (
+        "the manifest recorded in provenance must be the one that was attested")
+
+
+def test_the_baseline_is_hashed_and_read_through_one_descriptor(tmp_path,
+                                                                monkeypatch):
+    """The baseline half of R-07.
+
+    ``file_sha256`` hashed the path and ``load`` reopened it, so the same rename
+    put a different baseline into CH01's grammar than the one the signature
+    covered -- and the baseline is the file that decides what "unlike normal"
+    means for every session afterwards. Unlike the manifest it is telemetry and
+    may be large, so it is not read into memory: the descriptor is opened once,
+    hashed by streaming, rewound, and handed to the reader. An open descriptor
+    keeps its inode whatever happens to the path.
+    """
+    baseline = tmp_path / "benign.jsonl"
+    baseline.write_text(json.dumps(
+        {"event_type": "tool_start", "timestamp": 1000.0, "session_id": "b",
+         "tool_name": "read_x", "span_id": "S1"}) + "\n", encoding="utf-8")
+    hostile = tmp_path / "hostile.jsonl"
+    hostile.write_text(json.dumps(
+        {"event_type": "tool_start", "timestamp": 1000.0, "session_id": "b",
+         "tool_name": "send_email", "span_id": "S1"}) + "\n", encoding="utf-8")
+
+    opens = _swap_on_second_open(monkeypatch, baseline, hostile)
+    with baseline.open("rb") as fh:
+        digest = stream_sha256(fh, 1 << 20, "benign.jsonl")
+        events = list(read_events(baseline, report=IngestReport(), quiet=True,
+                                  fh=fh))
+
+    assert opens[0] == 1, "one open, so there is no window to rename into"
+    assert digest == hashlib.sha256(
+        json.dumps({"event_type": "tool_start", "timestamp": 1000.0,
+                    "session_id": "b", "tool_name": "read_x",
+                    "span_id": "S1"}).encode() + b"\n").hexdigest()
+    assert [e.tool_name for e in events] == ["read_x"], (
+        "the descriptor that was hashed is the one that was read")
+
+
 def test_cli_records_an_unsigned_manifest_as_unsigned(tmp_path, capsys):
     """POLICY_SIGNATURE_ABSENT is the value nearly every deployment carries, and
     it has to be in the verdict rather than implied by silence."""
@@ -1765,7 +2328,46 @@ def test_cli_freshness_flags_reach_the_verdict(tmp_path, capsys):
                      "--evidence-as-of", "1785700000"]) == EXIT_OK
     prov = json.loads(capsys.readouterr().out.strip())["data"]["provenance"]
     assert prov["evidence_freshness"] == {
-        "max_age_s": 3600.0, "as_of": 1785700000.0, "enabled": True}
+        "max_age_s": 3600.0, "as_of": 1785700000.0, "enabled": True,
+        "max_future_skew_s": 300.0}
+
+
+@pytest.mark.parametrize("value", ["nan", "NaN", "inf", "-inf", "Infinity"])
+def test_a_nonfinite_evidence_as_of_is_refused_at_the_boundary(tmp_path, value):
+    """R-13's second half.
+
+    ``--evidence-as-of`` was ``type=float``, and ``float("nan")`` succeeds, so
+    argparse reported nothing. Every comparison against a NaN is false:
+    ``Freshness.enabled`` went false, the "freshness bound" line never printed,
+    and the run exited ZERO having silently skipped the one check the operator
+    had gone out of their way to ask for. Exit 2, as a usage error, because an
+    argument value must never be able to turn a control off quietly.
+    """
+    telemetry, _m, _s, _sig = _policy_fixture(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        cli_main(["score", str(telemetry), "--evidence-max-age", "3600",
+                  "--evidence-as-of", value])
+    assert exc.value.code == 2
+
+
+def test_a_nonfinite_future_skew_is_refused_too(tmp_path):
+    """The same argument for the bound R-13 added. An infinite tolerance is not
+    a wide tolerance, it is no tolerance being enforced."""
+    telemetry, _m, _s, _sig = _policy_fixture(tmp_path)
+    for value in ("inf", "nan", "-1"):
+        with pytest.raises(SystemExit) as exc:
+            cli_main(["score", str(telemetry), "--evidence-max-age", "3600",
+                      "--max-future-skew", value])
+        assert exc.value.code == 2
+
+
+def test_a_nonfinite_skew_cannot_reach_limits_by_any_other_route():
+    """The CLI is one door. Limits refuses it directly as well, because a
+    --limits-file or an embedding caller is another."""
+    for value in (float("nan"), float("inf"), -1.0):
+        with pytest.raises(LimitsError):
+            Limits(max_future_skew_s=value)
+    assert Limits(max_future_skew_s=0.0).max_future_skew_s == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -2026,6 +2628,501 @@ def test_records_never_scored_are_reported_but_not_called_tampering(tmp_path):
     assert not state.inadmissible
 
 
+def _sign_from(records: list[dict], stream_id: str, start_seq: int,
+               head: str) -> list[dict]:
+    """A validly signed run that starts at ``start_seq`` from ANY head.
+
+    ``sign_stream`` always starts a stream at seq 0 from its canonical seed, so
+    it cannot express the thing R-02 is about: a continuation minted by somebody
+    holding a collector key, glued onto the sequence numbers of a stream the
+    ledger already knows. Every signature this produces is genuine -- that is
+    the point. Nothing inside a single run can tell it from the real thing.
+    """
+    out = []
+    for i, record in enumerate(records):
+        seq = start_seq + i
+        body = {k: v for k, v in record.items() if k != "integrity"}
+        prev = head
+        head = chain_step(prev, body_digest(body))
+        out.append({**body, "integrity": {
+            "scheme": INTEGRITY_SCHEMA, "stream_id": stream_id, "seq": seq,
+            "prev": prev, "chain": head, "key_id": KEY_ID,
+            "sig": base64.b64encode(ed25519.sign(
+                SECRET, signing_input(stream_id, seq, head))).decode("ascii")}})
+    return out
+
+
+def test_a_continuation_from_a_boundary_nobody_scored_is_a_fork(tmp_path):
+    """R-02, reproduced. The serious half.
+
+    ``compare`` asked one question of a continuation -- is its first sequence
+    past the last one scored -- which establishes that the new records came
+    AFTER the old ones and never that they came FROM them. A second, mutually
+    exclusive history minted under a valid collector key, starting at exactly
+    ``last_seq + 1`` and declaring a predecessor the ledger had never recorded,
+    read as ordinary advancement. Every signature verifies, the chain within the
+    run is perfect, and nothing inside one run can see it: this is precisely the
+    class of attack the ledger exists for.
+
+    Worse than the missed detection was what happened next. ``record`` advanced
+    on ``advanced``, so the fabricated head became the reference every later run
+    was measured against -- the attacker's history, adopted as the truth.
+    """
+    path = tmp_path / "seen.json"
+    _scored(sign_stream(_records(3), "stream-a", SECRET, KEY_ID), path)
+    honest_head = StreamLedger.load(path).streams["stream-a"].head
+
+    false_head = chain_step(chain_seed("stream-a", KEY_ID), "0" * 64)
+    assert false_head != honest_head
+    fabricated = _sign_from(_records(3, sid="sess-1"), "stream-a", 3, false_head)
+    state, ledger = _scored(fabricated, path, run_id="run-2")
+
+    assert R_STREAM_FORKED in state.codes
+    assert state.inadmissible
+    verdict = state.replayed_streams[0]
+    assert verdict["status"] == "forked"
+    assert verdict["boundary"] == "differs"
+    assert verdict["declared_prev"] == false_head
+    assert verdict["previous_head"] == honest_head
+    assert StreamLedger.load(path).streams["stream-a"].head == honest_head, (
+        "a fabricated continuation must not become the reference")
+    assert ledger.streams["stream-a"].last_seq == 2
+
+
+def test_a_gap_in_a_continuation_is_not_ordinary_advancement(tmp_path):
+    """R-02, the other half.
+
+    Records 3 and 4 were never scored by anything, and the verdict said
+    ``advanced`` -- the same word a healthy batched collector gets. The reason
+    code was there, derived separately by arithmetic, but the status a SIEM rule
+    or a human reads first said normal progress.
+
+    It stays non-inadmissible, and that is unchanged and deliberate: an operator
+    scoring a subset on purpose and an attacker deleting a range are the same
+    input from here, and the ledger holds no head for the missing stretch to
+    tell them apart. What changed is that it no longer calls itself ordinary.
+    """
+    path = tmp_path / "seen.json"
+    full = sign_stream(_records(12), "stream-b", SECRET, KEY_ID)
+    _scored(full[:3], path)
+    state, ledger = _scored(full[5:], path, run_id="run-2")
+
+    assert state.replayed_streams[0]["status"] == "discontinuous"
+    assert state.replayed_streams[0]["boundary"] == "gap"
+    assert R_STREAM_SKIPPED_RECORDS in state.codes
+    assert not state.inadmissible, (
+        "a subset scored on purpose looks the same; this is a report, not an "
+        "accusation")
+    assert ledger.streams["stream-b"].last_seq == 11, (
+        "the records after the gap were genuinely scored and must be recorded, "
+        "or the next run reads them as a replay")
+
+
+def test_a_contiguous_continuation_onto_the_stored_head_is_still_advancement():
+    """The confounder R-02's fix must not break.
+
+    A collector tailed in batches is the ordinary case and the whole reason the
+    ledger is usable. If tightening the boundary check made this fire, the
+    ledger would be turned off within a day and the replay detection with it.
+    """
+    ledger = StreamLedger(streams={"s": SeenStream(
+        stream_id="s", first_seq=0, last_seq=5, head="abc")}, path=Path("x"))
+    verdict = ledger.compare("s", 6, 11, "def", None, first_prev="abc")
+    assert verdict.status == SEEN_ADVANCED
+    assert verdict.boundary == "match"
+
+
+def test_an_undeclared_boundary_advances_but_never_reads_as_checked(tmp_path):
+    """``prev`` is optional in the sidecar, so the join can be unverifiable.
+
+    Refusing to advance would break every collector that omits the field, and
+    calling it a fork would accuse them. Reported as its own code instead, and
+    not inadmissible -- a question that could not be answered is not an answer,
+    which is the same rule INTEGRITY_KEY_WINDOW_UNCHECKED follows. What it must
+    never do is read as a boundary that was checked and matched.
+    """
+    ledger = StreamLedger(streams={"s": SeenStream(
+        stream_id="s", first_seq=0, last_seq=5, head="abc")}, path=Path("x"))
+    verdict = ledger.compare("s", 6, 11, "def", None, first_prev=None)
+    assert verdict.status == SEEN_ADVANCED
+    assert verdict.boundary == "unstated"
+    assert verdict.boundary != "match"
+    assert R_STREAM_BOUNDARY_UNVERIFIED not in INADMISSIBLE
+
+
+# R-03. Admission. `record` used to be called for every stream that had a first
+# and a last sequence, with no requirement that any of it verified -- so the file
+# that exists to say "these streams were scored" recorded streams that were not.
+
+
+def _chain_only(records: list[dict], stream_id: str) -> list[dict]:
+    """Chained and NOT signed. No key needed; anyone who can append can write it."""
+    head = chain_seed(stream_id, "")
+    out = []
+    for seq, record in enumerate(records):
+        body = {k: v for k, v in record.items() if k != "integrity"}
+        prev = head
+        head = chain_step(prev, body_digest(body))
+        out.append({**body, "integrity": {
+            "scheme": INTEGRITY_SCHEMA, "stream_id": stream_id, "seq": seq,
+            "prev": prev, "chain": head}})
+    return out
+
+
+def test_an_unsigned_stream_does_not_claim_a_position_in_the_ledger(tmp_path):
+    """R-03, path 1, and the acceptance case from the review.
+
+    Under a LOADED trust store, a chained-but-unsigned stream was written to the
+    ledger with its head. Nothing signs it and nothing needs to: chaining is
+    arithmetic, so anyone who can append to the input can produce it. The
+    genuine signed stream then arrived at the same positions with a different
+    head and read as ``forked`` -- so squatting a stream id turned into a
+    critical finding against the real collector, and the real collector was the
+    one that looked like the rewrite.
+    """
+    path = tmp_path / "seen.json"
+    unsigned = _chain_only(_records(4), "stream-a")
+    state, ledger = _scored(unsigned, path, run_id="run-1")
+
+    assert KEYS.loaded, "the rule is conditional on the operator having said who may attest"
+    assert "stream-a" not in ledger.streams, (
+        "an unsigned stream must not be remembered as scored")
+    assert R_LEDGER_NOT_ADVANCED in state.codes
+    assert R_UNSIGNED in state.codes
+
+    genuine, _ = _scored(sign_stream(_records(4), "stream-a", SECRET, KEY_ID),
+                         path, run_id="run-2")
+    assert R_STREAM_FORKED not in genuine.codes, (
+        "the real collector must not be accused because a squatter got there "
+        "first")
+    assert R_STREAM_REPLAYED not in genuine.codes
+
+
+def test_with_no_trust_store_the_ledger_still_records_what_it_can(tmp_path):
+    """The switch, and why it is where it is.
+
+    An operator who has loaded no keys has told Cohaera nothing about who may
+    attest, so requiring a verified signature would turn the ledger off for
+    every unsigned deployment -- which is most of them today, and the replay it
+    catches is worth having even on evidence nobody signed. Once keys ARE
+    loaded, an unsigned record is not evidence and the ledger must not treat it
+    as any.
+    """
+    path = tmp_path / "seen.json"
+    unsigned = _chain_only(_records(4), "stream-a")
+    ledger = StreamLedger.load(path)
+    v = StreamVerifier(keys=TrustStore(), ledger=ledger, run_id="run-1")
+    for raw in unsigned:
+        e = Event(raw=raw)
+        v.observe(e.raw, e.integrity, raw.get("session_id", ""))
+    v.finalise()
+    assert "stream-a" in ledger.streams
+    assert R_LEDGER_NOT_ADVANCED not in v.for_session("sess-1").codes
+
+
+def test_a_stream_whose_evidence_failed_is_not_written_to_the_ledger(tmp_path):
+    """R-03, path 3. A broken chain did not stop the position being committed
+    as a scored fact, so the next run reads the tampered range as a replay and
+    never looks at it again."""
+    path = tmp_path / "seen.json"
+    signed = sign_stream(_records(5), "stream-a", SECRET, KEY_ID)
+    signed[2]["tool_name"] = "object_put"          # edited after signing
+    state, ledger = _scored(signed, path, run_id="run-1")
+
+    assert R_CHAIN_BROKEN in state.codes
+    assert "stream-a" not in ledger.streams
+    assert R_LEDGER_NOT_ADVANCED in state.codes
+
+
+def test_records_dropped_by_a_budget_do_not_advance_the_ledger(tmp_path):
+    """R-03, path 2, reproduced through the real assembly path.
+
+    Assembly drops events past ``max_sessions`` and the verifier had already
+    recorded their stream positions -- correctly, because a dropped record still
+    occupies a position and omitting it would manufacture a gap out of Cohaera's
+    own budget. What was wrong was committing that extent to the ledger: the
+    records of the session nobody scored were marked as already seen, so
+    re-feeding them reads as a replay and they can never be scored at all.
+    """
+    path = tmp_path / "seen.json"
+    interleaved = []
+    for i in range(3):
+        for sid in ("sess-A", "sess-B"):
+            interleaved.append(
+                {"event_type": "tool_start", "session_id": sid,
+                 "timestamp": 1000.0 + i, "span_id": f"sp-{sid}-{i}",
+                 "tool_name": "alert_read", "data": {"action": "invoke_tool"}})
+    signed = sign_stream(interleaved, "stream-a", SECRET, KEY_ID)
+    source = tmp_path / "t.jsonl"
+    source.write_text("\n".join(json.dumps(r) for r in signed) + "\n",
+                      encoding="utf-8")
+
+    ledger = StreamLedger.load(path)
+    sessions = load(source, limits=Limits(max_sessions=1), keys=KEYS,
+                    ledger=ledger, quiet=True)
+    assert len(sessions) == 1, "the fixture must actually hit the budget"
+    assert "stream-a" not in ledger.streams, (
+        "three records were verified and never scored; committing their extent "
+        "would make them unscoreable forever")
+    assert R_LEDGER_NOT_ADVANCED in sessions[0].integrity.codes
+
+
+def test_a_refused_stream_does_not_consume_the_ledgers_budget(tmp_path):
+    """A producer minting an unsigned stream id per record could otherwise
+    exhaust max_ledger_streams with streams it never signed -- and the budget
+    being exhausted is what makes an earlier stream's replay undetectable."""
+    path = tmp_path / "seen.json"
+    limits = Limits(max_ledger_streams=1)
+    ledger = StreamLedger(streams={}, path=path, limits=limits)
+    v = StreamVerifier(keys=KEYS, limits=limits, ledger=ledger, run_id="run-1")
+    for name in ("junk-1", "junk-2", "junk-3"):
+        for raw in _chain_only(_records(2), name):
+            e = Event(raw=raw, limits=limits)
+            v.observe(e.raw, e.integrity, raw.get("session_id", ""))
+    v.finalise()
+
+    assert ledger.streams == {}, "nothing unsigned may take a slot"
+    assert not ledger.budget_exhausted, (
+        "a refused stream must not spend the budget a real one needs")
+
+
+def test_the_refusals_are_named_in_the_run_summary(tmp_path):
+    """A stream absent from the ledger looks exactly like one never seen, so
+    the omission has to be stated rather than inferred."""
+    path = tmp_path / "seen.json"
+    ledger = StreamLedger.load(path)
+    v = StreamVerifier(keys=KEYS, ledger=ledger, run_id="run-1")
+    for raw in _chain_only(_records(3), "stream-a"):
+        e = Event(raw=raw)
+        v.observe(e.raw, e.integrity, raw.get("session_id", ""))
+    v.finalise()
+
+    refusals = v.summary()["stream_ledger_refusals"]
+    assert [r["stream_id"] for r in refusals] == ["stream-a"]
+    assert "signature" in refusals[0]["reason"]
+
+
+def test_the_ledger_is_written_after_the_verdicts_are_emitted(tmp_path):
+    """R-03, path 3, and a deliberate reversal of the old ordering.
+
+    Saving first reasoned that a run dying mid-emission has still SCORED those
+    streams. The other side of that trade is worse: the ledger has advanced past
+    findings nobody ever saw, re-running reports a replay, and the findings are
+    gone. A duplicate alert is noise an analyst dismisses; a missed one is the
+    thing this project exists to prevent.
+
+    Asserted by making emission fail. The ledger must be untouched.
+    """
+    telemetry = tmp_path / "t.jsonl"
+    signed = sign_stream(_records(3), "stream-a", SECRET, KEY_ID)
+    telemetry.write_text("\n".join(json.dumps(r) for r in signed) + "\n",
+                         encoding="utf-8")
+    store = tmp_path / "keys.json"
+    store.write_text(json.dumps({"scheme": TRUST_STORE_SCHEMA, "keys": {
+        KEY_ID: {"key": base64.b64encode(PUBLIC).decode("ascii"),
+                 "roles": [ROLE_COLLECTOR]}}}), encoding="utf-8")
+    path = tmp_path / "seen.json"
+
+    class _Broken:
+        def write(self, _text):
+            raise OSError("the sink went away mid-emission")
+
+        def flush(self):
+            pass
+
+    real_stdout = sys.stdout
+    sys.stdout = _Broken()
+    try:
+        code = cli_main(["score", str(telemetry), "--trust-store", str(store),
+                         "--seen-streams", str(path)])
+    finally:
+        sys.stdout = real_stdout
+
+    assert code == EXIT_ERROR, "a failed emission is a failed run"
+    assert not path.exists() or "stream-a" not in StreamLedger.load(path).streams, (
+        "a run that died while emitting must leave the input re-scoreable")
+
+
+# R-04. Concurrency. The write was atomic and the read-modify-write around it
+# was not, so two runs on one host each loaded, each scored, and each replaced --
+# and the file left behind had no record of whichever one finished first.
+
+_CONCURRENT_WORKER = """
+import sys, base64
+sys.path.insert(0, {root!r})
+sys.path.insert(0, {src_root!r})
+from cohaera import ed25519
+from cohaera.evidence import (StreamLedger, StreamVerifier, TrustStore,
+                              TRUST_STORE_SCHEMA, ROLE_COLLECTOR, LedgerError)
+from cohaera.model import Event
+from tools.collector_sign import key_id_for, sign_stream
+
+secret = bytes.fromhex("ab" * 32)
+public = ed25519.public_key(secret)
+kid = key_id_for(public)
+keys = TrustStore.from_obj({{"scheme": TRUST_STORE_SCHEMA, "keys": {{
+    kid: {{"key": base64.b64encode(public).decode(), "roles": [ROLE_COLLECTOR]}}}}}})
+records = [{{"event_type": "tool_start", "session_id": "s", "timestamp": 1000.0 + i,
+            "span_id": "sp-%d" % i, "tool_name": "alert_read",
+            "data": {{"action": "invoke_tool"}}}} for i in range(3)]
+
+stream_id = sys.argv[1]
+try:
+    with StreamLedger.locked({path!r}, wait_s=25.0) as ledger:
+        v = StreamVerifier(keys=keys, ledger=ledger, run_id=stream_id)
+        for raw in sign_stream(records, stream_id, secret, kid):
+            e = Event(raw=raw)
+            v.observe(e.raw, e.integrity, "s")
+        v.finalise()
+        ledger.stamp(stream_id)
+        ledger.save()
+    print("saved")
+except LedgerError as exc:
+    print("refused")
+"""
+
+
+def test_two_concurrent_runs_both_reach_the_ledger(tmp_path):
+    """R-04, reproduced and closed.
+
+    Two processes, two different streams, one ledger, started together. Before
+    the lock this lost an update on most runs: both loaded the same state, both
+    scored, and the second ``os.replace`` wrote a file with no trace of the
+    first. A stream missing from the ledger is a stream whose next replay is
+    undetectable, and nothing anywhere said so -- both runs exited zero.
+
+    The acceptance is that both are present, or that one visibly refuses.
+    Serialising is the intended outcome and not a compromise: two runs scoring
+    the same stream at once would each read the position before the other wrote
+    it, so neither would see the replay, and a replay detector that misses a
+    replay because it was busy is not worth keeping.
+    """
+    path = tmp_path / "seen.json"
+    root = str(Path(__file__).resolve().parent.parent)
+    script = _CONCURRENT_WORKER.format(root=root, src_root=str(Path(root) / "src"),
+                                       path=str(path))
+    running = [subprocess.Popen([sys.executable, "-c", script, sid],
+                                stdout=subprocess.PIPE, text=True)
+               for sid in ("stream-A", "stream-B")]
+    outs = [proc.communicate(timeout=90)[0].strip() for proc in running]
+
+    assert all(proc.returncode == 0 for proc in running)
+    assert set(outs) <= {"saved", "refused"}
+    final = StreamLedger.load(path)
+    saved = [sid for sid, out in zip(("stream-A", "stream-B"), outs, strict=True)
+             if out == "saved"]
+    for stream_id in saved:
+        assert stream_id in final.streams, (
+            f"{stream_id} reported success and is not in the ledger; its next "
+            f"replay is undetectable and nothing said so")
+    assert len(saved) == 2, (
+        "both runs should serialise on the lock and both should land")
+
+
+def test_a_stale_generation_never_overwrites_a_newer_ledger(tmp_path):
+    """The backstop for when the lock was not taken or is not honoured.
+
+    ``flock`` is advisory and local -- it does not travel over NFS, and a
+    process that opens the file without asking for it is not stopped by it. The
+    generation makes that case loud instead of silent: a save whose parent is
+    not what is on disk is refused, so the run fails rather than reporting
+    success having discarded another run's work.
+    """
+    path = tmp_path / "seen.json"
+    _scored(sign_stream(_records(3), "stream-a", SECRET, KEY_ID), path)
+
+    stale = StreamLedger.load(path)          # both read the same generation
+    fresh = StreamLedger.load(path)
+    assert stale.generation == fresh.generation == 1
+
+    fresh.streams["other"] = SeenStream(stream_id="other", first_seq=0,
+                                        last_seq=1, head="ab" * 32)
+    fresh.save()
+    assert StreamLedger.load(path).generation == 2
+
+    stale.streams["mine"] = SeenStream(stream_id="mine", first_seq=0,
+                                       last_seq=1, head="cd" * 32)
+    with pytest.raises(LedgerError, match="generation"):
+        stale.save()
+    after = StreamLedger.load(path)
+    assert "other" in after.streams, "the newer write must survive"
+    assert "mine" not in after.streams
+
+
+def test_the_generation_advances_once_per_save(tmp_path):
+    path = tmp_path / "seen.json"
+    ledger = StreamLedger(streams={}, path=path)
+    assert ledger.generation == 0
+    ledger.save()
+    assert ledger.generation == 1
+    assert StreamLedger.load(path).generation == 1
+    ledger.save()
+    assert StreamLedger.load(path).generation == 2
+
+
+def test_a_ledger_written_before_generations_existed_still_loads(tmp_path):
+    """Upgrading must not delete a deployment's replay memory.
+
+    The generation is deliberately outside the digest for this reason: folding
+    it in would make every pre-existing ledger fail to load, and a failed load
+    is refused, so the operator's only way forward would be to delete the file --
+    which is exactly the state an attacker who deleted it wants.
+    """
+    path = tmp_path / "seen.json"
+    _scored(sign_stream(_records(3), "stream-a", SECRET, KEY_ID), path)
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    del doc["generation"]
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+    ledger = StreamLedger.load(path)
+    assert ledger.generation == 0
+    assert "stream-a" in ledger.streams
+    ledger.save()                                  # and it can be written again
+
+
+def test_the_lock_is_a_sidecar_rather_than_the_ledger_itself(tmp_path):
+    """``save`` ends in ``os.replace``, which swaps the inode.
+
+    A lock held on the ledger's own descriptor would be protecting a file that
+    is no longer at that name the moment the first writer finishes, so the
+    second writer would take a lock on a different object and both would
+    proceed. The sidecar is never replaced.
+    """
+    path = tmp_path / "seen.json"
+    assert StreamLedger.lock_path_for(path) == tmp_path / "seen.json.lock"
+    with StreamLedger.locked(path) as ledger:
+        ledger.save()
+    assert (tmp_path / "seen.json.lock").exists()
+    assert path.exists()
+
+
+def test_waiting_for_a_held_lock_ends_in_a_refusal_rather_than_a_hang(tmp_path):
+    """A scheduled run that never returns is worse than one that fails.
+
+    The alarm is the test. Deleting the deadline from ``_acquire_ledger_lock``
+    does not make this assertion false, it makes it never evaluate -- the run
+    blocks forever and CI reports a job timeout hours later instead of a failing
+    test. A guard that can only be caught by a hang is a guard nobody will
+    notice regressing, so the hang is converted into a failure here.
+    """
+    path = tmp_path / "seen.json"
+
+    def _too_slow(signum, frame):
+        raise AssertionError(
+            "acquiring a held lock did not give up; the wait has no deadline")
+
+    with StreamLedger.locked(path):
+        previous = signal.signal(signal.SIGALRM, _too_slow)
+        signal.setitimer(signal.ITIMER_REAL, 5.0)
+        try:
+            with pytest.raises(LedgerError, match="another run has held"):
+                with StreamLedger.locked(path, wait_s=0.1):
+                    pass
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0.0)
+            signal.signal(signal.SIGALRM, previous)
+
+
 def test_without_a_ledger_the_absence_is_stated(tmp_path):
     """Not silence. A run with no ledger did not check for replay, and a
     verdict that does not say so invites the reader to assume it did."""
@@ -2114,3 +3211,368 @@ def test_the_ledger_catches_what_freshness_cannot(tmp_path):
         "both runs are inside the freshness window, which is the premise")
     assert R_STREAM_REPLAYED in second.codes, (
         "and the ledger is what sees it anyway")
+
+
+# =====================================================================
+# R-06. Identity. `run_id` covered the detector, the bounds, the source, the
+# input, the baseline and the manifest -- and nothing the evidence layer added
+# after it. Every one of those later settings is emitted in provenance BECAUSE
+# it changes how the output should be read, and every one of them sat outside
+# the ID that the documentation tells a SIEM to deduplicate on. So the run that
+# knew whether the telemetry was signed could be discarded as a retry of the
+# run that did not.
+# =====================================================================
+
+
+def _identity_fixture(tmp_path):
+    telemetry = tmp_path / "t.jsonl"
+    telemetry.write_text(json.dumps(
+        {"event_type": "tool_start", "timestamp": 1000.0, "session_id": "a",
+         "tool_name": "read_x", "span_id": "S1"}) + "\n", encoding="utf-8")
+    store = tmp_path / "store.json"
+    store.write_text(json.dumps({"scheme": TRUST_STORE_SCHEMA, "keys": {
+        KEY_ID: {"key": base64.b64encode(PUBLIC).decode("ascii"),
+                 "roles": [ROLE_COLLECTOR]}}}), encoding="utf-8")
+    return telemetry, store
+
+
+def _run_ids(capsys, argv):
+    assert cli_main(argv) == EXIT_OK
+    out = capsys.readouterr().out.strip().splitlines()
+    records = [json.loads(line) for line in out if line.strip()]
+    prov = records[0]["data"]["provenance"]
+    return prov, [r["verdict_id"] for r in records]
+
+
+def test_r06_a_trust_store_changes_the_run_id_it_governs(tmp_path, capsys):
+    """R-06, reproduced exactly as the review reported it.
+
+    Same telemetry, scored once with no trust store and once with one collector
+    key loaded. Before this, both runs produced the same ``analysis_run_id`` and
+    the same ``verdict_id`` while carrying different provenance and emitting
+    different bytes. A SIEM following this project's own deduplication advice
+    would have kept whichever arrived first and dropped the other.
+    """
+    telemetry, store = _identity_fixture(tmp_path)
+
+    bare, bare_verdicts = _run_ids(capsys, ["score", str(telemetry)])
+    trusted, trusted_verdicts = _run_ids(
+        capsys, ["score", str(telemetry), "--trust-store", str(store)])
+
+    assert bare["trust_store"]["key_count"] == 0
+    assert trusted["trust_store"]["key_count"] == 1, "the fixture must differ"
+    assert bare["analysis_run_id"] != trusted["analysis_run_id"], (
+        "two runs whose trust configuration differs are two runs")
+    assert bare_verdicts != trusted_verdicts, (
+        "and the verdict IDs, which are what a SIEM actually deduplicates on, "
+        "must differ with them")
+
+
+def test_r06_the_same_configuration_is_still_the_same_run(tmp_path, capsys):
+    """The property the fix must not cost.
+
+    Determinism is the whole reason these IDs are content digests. A fix that
+    made every run unique would 'close' R-06 by destroying deduplication.
+    """
+    telemetry, store = _identity_fixture(tmp_path)
+    argv = ["score", str(telemetry), "--trust-store", str(store)]
+    first, first_verdicts = _run_ids(capsys, argv)
+    second, second_verdicts = _run_ids(capsys, argv)
+    assert first["analysis_run_id"] == second["analysis_run_id"]
+    assert first_verdicts == second_verdicts
+
+
+def test_r06_the_trust_config_digest_is_readable_in_provenance(tmp_path, capsys):
+    """Folded into the ID *and* emitted, so a reader can tell WHY two IDs
+    differ without re-deriving the digest from the pieces."""
+    telemetry, store = _identity_fixture(tmp_path)
+    bare, _ = _run_ids(capsys, ["score", str(telemetry)])
+    trusted, _ = _run_ids(capsys, ["score", str(telemetry),
+                                   "--trust-store", str(store)])
+    assert bare["trust_config_digest"] != trusted["trust_config_digest"]
+
+    # And it is reproducible from the provenance beside it, which is what makes
+    # it auditable rather than just another opaque field: a reader holding one
+    # verdict can re-derive the digest and see it commits to what it claims to.
+    for prov in (bare, trusted):
+        assert prov["trust_config_digest"] == trust_config_digest(
+            trust_store=prov["trust_store"],
+            policy_attestations=prov["policy_attestations"],
+            freshness=prov["evidence_freshness"],
+            freshness_as_of_pinned=False,
+            ledger={"enabled": prov["stream_ledger"]["enabled"],
+                    "generation": prov["stream_ledger"].get("generation_read"),
+                    "state": prov["stream_ledger"].get("state_digest_read", "")},
+            correlation_key_version=prov["correlation_key_version"],
+            correlation_keyed=prov["correlation_keyed"],
+            baseline_partial_allowed=prov["baseline_partial_allowed"],
+            schema=SESSION_SCHEMA)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("trust_store", {"file_digest": "x", "semantic_digest": "y",
+                     "key_count": 1}),
+    ("policy_attestations", [{"artifact": "manifest", "status": "verified",
+                              "key_id": "k", "file_sha256": "s"}]),
+    ("freshness", {"enabled": True, "max_age_s": 60.0,
+                   "max_future_skew_s": 300.0}),
+    ("ledger", {"enabled": True, "generation": 3, "state": "abc"}),
+    ("correlation_key_version", "hmac-sha256-v1"),
+    ("correlation_keyed", True),
+    ("baseline_partial_allowed", True),
+    ("schema", "cohaera:0.9"),
+])
+def test_r06_every_trust_setting_moves_the_digest(field, value):
+    """Each field is in there because it can change a verdict or how one should
+    be read. A field that cannot move the digest is decorative, and this is what
+    catches one being dropped from the canonical object later."""
+    assert trust_config_digest(**{field: value}) != NO_TRUST_CONFIG
+
+
+def test_r06_attestation_order_is_not_part_of_the_identity():
+    """Two attestations are a set, not a sequence. Sorting them stops the order
+    the CLI happened to build the list in from minting a second identity for
+    one configuration."""
+    a = {"artifact": "manifest", "status": "verified", "key_id": "k",
+         "file_sha256": "1"}
+    b = {"artifact": "baseline", "status": "absent", "key_id": "",
+         "file_sha256": "2"}
+    assert (trust_config_digest(policy_attestations=[a, b])
+            == trust_config_digest(policy_attestations=[b, a]))
+
+
+def test_r06_the_same_policy_bytes_verified_and_unverified_are_two_configs():
+    """The outcome, not just the document. A manifest that verified and the
+    same manifest whose signature did not hold govern the run differently even
+    though the bytes are identical."""
+    verified = {"artifact": "manifest", "status": "verified", "key_id": "k",
+                "file_sha256": "same"}
+    failed = dict(verified, status="invalid")
+    assert (trust_config_digest(policy_attestations=[verified])
+            != trust_config_digest(policy_attestations=[failed]))
+
+
+def test_r06_a_pinned_as_of_is_in_the_identity_and_a_defaulted_one_is_not():
+    """The deliberate deviation, and the reason is in trust_config_digest.
+
+    An instant decides which records are stale, so by the rule this digest
+    encodes it belongs in the identity. But an unpinned ``as_of`` is the wall
+    clock at start-up, and folding a wall clock into a content digest would make
+    every re-score of the same file a different run -- destroying the property
+    the ID exists for. So the pinned instant counts and the defaulted one does
+    not, while WHICH OF THE TWO happened counts either way.
+    """
+    pinned_a = trust_config_digest(
+        freshness={"enabled": True, "max_age_s": 60.0, "as_of": 1000.0},
+        freshness_as_of_pinned=True)
+    pinned_b = trust_config_digest(
+        freshness={"enabled": True, "max_age_s": 60.0, "as_of": 2000.0},
+        freshness_as_of_pinned=True)
+    assert pinned_a != pinned_b, "a pinned instant is part of the identity"
+
+    drifting_a = trust_config_digest(
+        freshness={"enabled": True, "max_age_s": 60.0, "as_of": 1000.0})
+    drifting_b = trust_config_digest(
+        freshness={"enabled": True, "max_age_s": 60.0, "as_of": 2000.0})
+    assert drifting_a == drifting_b, (
+        "an unpinned clock cannot enter, or re-scoring one file would never "
+        "produce one run")
+    assert drifting_a != pinned_a, (
+        "but a run measured from an operator's chosen instant is a different "
+        "kind of run from one measured off the wall clock, and the ID says so")
+
+
+def test_r06_the_correlation_secret_never_enters_the_digest(tmp_path, capsys):
+    """Only the key VERSION and whether a key was supplied. This digest is
+    published in every verdict; hashing a secret into a published field is how
+    a secret stops being one."""
+    telemetry, _store = _identity_fixture(tmp_path)
+
+    def with_secret(value):
+        os.environ["COHAERA_CORRELATION_SECRET"] = value
+        try:
+            return _run_ids(capsys, ["score", str(telemetry)])[0]
+        finally:
+            os.environ.pop("COHAERA_CORRELATION_SECRET", None)
+
+    one = with_secret("aa" * 32)
+    two = with_secret("bb" * 32)
+    assert one["correlation_keyed"] is True
+    assert one["trust_config_digest"] == two["trust_config_digest"], (
+        "two different secrets at the same key version are the same "
+        "configuration as far as a published digest may say")
+
+    unkeyed = _run_ids(capsys, ["score", str(telemetry)])[0]
+    assert unkeyed["trust_config_digest"] != one["trust_config_digest"], (
+        "but WHETHER a key was supplied changes every anonymous session id, "
+        "so it is part of the configuration")
+
+
+def test_r06_the_ledger_state_read_is_what_the_run_was_judged_against(tmp_path):
+    """A ledger's state digest covers extent and head, and deliberately not the
+    run counter or timestamps: those move when a stream is merely seen again,
+    which changes no verdict and would break deduplication."""
+    empty = StreamLedger()
+    assert StreamLedger().state_digest() == empty.state_digest()
+
+    seeded = StreamLedger()
+    seeded.record(SeenVerdict("stream-a", SEEN_NEW), 0, 4, "head-1",
+                  "run-1", None)
+    assert seeded.state_digest() != empty.state_digest()
+
+    again = StreamLedger()
+    again.record(SeenVerdict("stream-a", SEEN_NEW), 0, 4, "head-1",
+                 "run-2", 99.0)
+    assert again.state_digest() == seeded.state_digest(), (
+        "same streams at the same extent and head: the identity of the state "
+        "that judgments are made against has not moved")
+
+
+# =====================================================================
+# R-17. A fallback whose meaning is weaker has to say so.
+# =====================================================================
+
+
+@pytest.mark.parametrize("authority,response,kind,assurance", [
+    # The strong path and the weak path of the same adapter, side by side.
+    ("kubernetes.apply", {"metadata": {"resourceVersion": "88213"}},
+     "resource_version", ASSURANCE_OPERATION),
+    ("kubernetes.apply", {"metadata": {"uid": "u-1"}},
+     "resource_uid", ASSURANCE_OBJECT),
+    ("github.create_pull_request", {"node_id": "PR_kwDO"},
+     "node_id", ASSURANCE_OPERATION),
+    ("github.create_pull_request", {"number": 6},
+     "pull_request_number", ASSURANCE_OBJECT),
+    ("jira.create_issue", {"key": "OPS-1"}, "issue_key", ASSURANCE_OPERATION),
+    ("jira.create_issue", {"id": "10001"}, "issue_id", ASSURANCE_OBJECT),
+    ("postgres.commit", {"commit_lsn": "0/16B3748"},
+     "commit_lsn", ASSURANCE_OPERATION),
+    ("postgres.commit", {"pg_current_wal_lsn": "0/16B3748"},
+     "cluster_wal_position", ASSURANCE_OBJECT),
+    ("smtp.send", {"server_message_id": "<a@h>"},
+     "message_id", ASSURANCE_OPERATION),
+    ("smtp.send", {"Message-ID": "<a@h>"},
+     "client_message_id", ASSURANCE_CLIENT),
+])
+def test_a_weaker_path_gets_its_own_kind_and_says_it_is_weaker(
+        authority, response, kind, assurance):
+    """R-17, reproduced across every adapter that had the fault.
+
+    These pairs used to emit the SAME kind. `metadata.uid` identifies the
+    object for its whole life while `resourceVersion` identifies one mutation
+    of it; a PR number is scoped to a repository while a node id is global; a
+    Jira numeric id is not an issue key; and `pg_current_wal_lsn` is the
+    cluster's write position, which moves because ANYBODY wrote. A consumer
+    given the second under the first's name has no way to tell the difference
+    between a weaker receipt and a forged one.
+    """
+    receipt = adapt(authority, response, BIND)
+    assert receipt["kind"] == kind
+    assert receipt["assurance"] == assurance
+    parsed, codes = EffectReceipt.parse(receipt)
+    assert parsed is not None and codes == ()
+
+
+def test_no_adapter_claims_an_effect_is_confirmed():
+    """None of the levels means the provider was asked. Nothing in this file
+    contacts a provider, and a level called `verified` would be read as though
+    something had."""
+    assert ASSURANCE_OPERATION == "provider_returned_operation"
+    for level in ASSURANCE_LEVELS:
+        assert "verified" not in level and "confirmed" not in level
+
+
+def test_a_nonfinite_number_is_not_an_identifier():
+    """R-17. `float` went through `str` unconditionally, so a response carrying
+    nan became the identifier text "nan" -- a parse failure wearing an
+    identifier, which would have been stored and looked up by a human who found
+    nothing."""
+    for value in (float("nan"), float("inf"), float("-inf")):
+        assert adapt("aws.s3.put_object", {"VersionId": value}, BIND) is None
+
+
+def test_authority_scope_travels_when_the_producer_has_it():
+    """R-17. "stripe" is a company, not an authority. A charge id is unique
+    within one account and everybody has at least two, because test mode is
+    one."""
+    receipt = adapt("stripe.charge", {"id": "ch_1"}, BIND,
+                    scope={"account": "acct_9", "livemode": "true"})
+    assert receipt["scope"] == {"account": "acct_9", "livemode": "true"}
+    parsed, codes = EffectReceipt.parse(receipt)
+    assert parsed is not None and codes == (), (
+        "an optional scope must not make the receipt unparseable")
+
+
+def test_a_producer_without_a_scope_omits_it_rather_than_inventing_one():
+    assert "scope" not in adapt("stripe.charge", {"id": "ch_1"}, BIND)
+    assert "scope" not in adapt("stripe.charge", {"id": "ch_1"}, BIND, scope={})
+
+
+def test_every_adapter_path_declares_a_known_assurance_level():
+    """The registry is edited by hand and a typo in an assurance string would
+    produce a receipt whose worth nothing can compare."""
+    for name, spec in _ADAPTERS.items():
+        for path, kind, assurance in spec["paths"]:
+            assert assurance in ASSURANCE_LEVELS, (
+                f"{name}:{path} declares unknown assurance {assurance!r}")
+            assert kind and kind.replace("_", "").isalnum(), (
+                f"{name}:{path} has a malformed kind {kind!r}")
+
+
+# =====================================================================
+# R-12. The signature budget is a count AND a clock.
+# =====================================================================
+
+
+def test_an_exhausted_signature_budget_abstains_rather_than_passing():
+    """R-12. The failure mode that matters is not slowness, it is what the
+    verdict says after the budget stops the work. A stream whose signatures
+    were never checked must not read as a stream whose signatures held."""
+    records = _records(4)
+    signed = sign_stream(records, "stream-a", SECRET, KEY_ID)
+    limits = Limits(max_signature_verifications=1)
+    v = StreamVerifier(keys=KEYS, limits=limits)
+    for raw in signed:
+        e = Event(raw=raw, limits=limits)
+        v.observe(e.raw, e.integrity, raw.get("session_id", ""))
+    v.finalise()
+    audit = v.for_session("sess-1")
+    assert R_SIGNATURE_BUDGET in audit.codes
+    assert v.signature_budget_exhausted
+    assert not audit.signature_covers_final, (
+        "a stream that ran out of budget partway cannot be complete, and the "
+        "session must not read as though the attestation reached the end")
+
+
+def test_the_clock_bound_exists_because_a_count_is_not_a_time():
+    """The cost of one verification is a property of the host, not of this
+    repository. A count bounds the work per run only if every host runs it at
+    the same speed, and an external review measured roughly three minutes for
+    a cap this one clears in under one."""
+    limits = Limits(max_signature_seconds=0.0)
+    records = _records(3)
+    signed = sign_stream(records, "stream-a", SECRET, KEY_ID)
+    v = StreamVerifier(keys=KEYS, limits=limits)
+    for raw in signed:
+        e = Event(raw=raw, limits=limits)
+        v.observe(e.raw, e.integrity, raw.get("session_id", ""))
+    v.finalise()
+    assert v.signature_budget_exhausted
+    assert v.signatures_verified == 0, (
+        "a zero-second budget must stop before the first verification, not "
+        "after it")
+
+
+def test_the_seconds_spent_are_reported():
+    """An operator tuning the bound needs to know what the run actually cost.
+    A budget nothing measures is a number somebody guessed."""
+    records = _records(3)
+    signed = sign_stream(records, "stream-a", SECRET, KEY_ID)
+    v = StreamVerifier(keys=KEYS)
+    for raw in signed:
+        e = Event(raw=raw, limits=DEFAULT_LIMITS)
+        v.observe(e.raw, e.integrity, raw.get("session_id", ""))
+    v.finalise()
+    assert v.signature_seconds > 0.0
+    assert "signature_seconds" in v.summary(), (
+        "the run's report must carry what the verification actually cost")

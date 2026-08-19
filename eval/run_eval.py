@@ -25,6 +25,9 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+
+import readme_facts
 
 from cohaera import __version__
 from cohaera.checks import MIN_CALLS_FOR_VOCABULARY_JUDGEMENT
@@ -632,6 +635,69 @@ def render_card(results: dict[str, Any], seed: int, summary: dict,
         f"population. Plan against the benign-normalised number and read precision "
         f"from the table above, not from \u00a71.\n")
 
+    # ---- clustering -----------------------------------------------------
+    add("### 6. The intervals when a task, not a session, is the unit")
+    add("")
+    add("R-15. Every interval above is a Wilson interval over SESSIONS, and the")
+    add("corpus generator says in its own docstring that the attempts of one task")
+    add("are near-duplicates. Treating each attempt as an independent trial narrows")
+    add("the interval, and gives a template rendered four times the weight of four")
+    add("distinct tasks. Task-disjoint splitting stops a task's attempts")
+    add("spanning train and test; it does nothing about the attempts inside the test")
+    add("set still being the same task.")
+    add("")
+    ind = unseen_manifest["sample_independence"]
+    add(f"This cell contains **{ind['sessions']} sessions** but only")
+    add(f"**{ind['tasks']} independent tasks** across **{ind['families']} "
+        f"families**.")
+    add("")
+    add("| measure | Wilson over sessions | bootstrap over tasks | macro average "
+        "over tasks |")
+    add("|---|---|---|---|")
+    for label, key in (("target-attributable recall",
+                        "target_attributable_recall"),
+                       ("any-alert recall", "any_alert_recall"),
+                       ("false positive rate", "false_positive_rate")):
+        wilson_rate = unseen_manifest[key]
+        cluster = unseen_manifest["cluster_aware"][key]
+        t_lo, t_hi = cluster["task_bootstrap_ci95"]
+        add(f"| {label} | {wilson_rate['value']:.1%} "
+            f"[{wilson_rate['ci95_low']:.1%}-{wilson_rate['ci95_high']:.1%}] "
+            f"| [{t_lo:.1%}-{t_hi:.1%}] "
+            f"| {cluster['task_macro_average']:.1%} |")
+    add("")
+    add("The bootstrap interval is roughly twice the width of the Wilson one. That")
+    add("factor is the correction, and it is the number to quote when the question")
+    add("is whether a result would survive a different set of tasks rather than")
+    add("whether it is stable on this one.")
+    add("")
+    # Only for measures that are not already saturated. A rate of exactly 0% or
+    # 100% has zero variance under ANY resampling scheme, so a zero-width
+    # family interval there says nothing about the corpus -- reporting it as a
+    # finding would be reading a tautology as evidence.
+    degenerate = [
+        label for label, key in (("target-attributable recall",
+                                  "target_attributable_recall"),
+                                 ("any-alert recall", "any_alert_recall"),
+                                 ("false positive rate", "false_positive_rate"))
+        if 0.0 < unseen_manifest[key]["value"] < 1.0
+        and (unseen_manifest["cluster_aware"][key]["family_bootstrap_ci95"][0]
+             == unseen_manifest["cluster_aware"][key]["family_bootstrap_ci95"][1])
+    ]
+    if degenerate:
+        add("**A finding about the corpus rather than about the detector.** "
+            "Resampling")
+        add(f"the {ind['families']} families cannot move "
+            f"{'these measures' if len(degenerate) > 1 else 'this measure'} "
+            f"({', '.join(degenerate)}).")
+        add("Every family has an identical benign and attack count and produces an")
+        add("identical rate, so a family-level interval has zero width. That is not")
+        add("a strong result -- it is a measurement of how regular the generator is.")
+        add("A real fleet's workloads do not come in equal portions and do not")
+        add("detect equally, and a family holdout on this corpus is therefore")
+        add("testing less than the name suggests.")
+        add("")
+
     # ---- honesty --------------------------------------------------------
     add("---")
     add("")
@@ -651,11 +717,18 @@ def render_card(results: dict[str, Any], seed: int, summary: dict,
         "absurd.** Real")
     add("  prevalence is orders of magnitude lower, and precision falls with it. At a")
     add("  realistic base rate the false positive counts in section 3 dominate")
-    add("  completely. `false_positives_per_1000_sessions` in the JSON is the number")
-    add("  to plan capacity against, not precision.")
+    add("  completely. Plan capacity against")
+    add("  `false_positives_per_1000_benign_sessions`, never against precision and")
+    add("  never against `false_positives_per_1000_sessions` -- this paragraph used")
+    add("  to recommend the second, contradicting section 5 four hundred lines")
+    add("  above it. The all-session figure moves with this corpus's artificial")
+    add("  attack prevalence and is published only so the two can be compared.")
     add(f"- **No adaptive attacker.** Every attack here is one of "
         f"{len(gen.ATTACK_KINDS)} fixed shapes.")
-    add("  EVASION.md catalogues seventeen ways to defeat these checks. Exactly one")
+    # R-20. Derived. This said "seventeen" while the file listed twenty-two, and
+    # a number spelled in words is a number no checker reads.
+    add(f"  EVASION.md catalogues {readme_facts.count_constructed_evasions()} "
+        f"ways to defeat these checks. Exactly one")
     add("  of them, E02, appears in this corpus, and only because a fix for it")
     add("  could not be graded otherwise. An attacker who has read that file scores")
     add("  differently.")
@@ -683,9 +756,29 @@ def render_card(results: dict[str, Any], seed: int, summary: dict,
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--seed", type=int, default=gen.SEED)
-    ap.add_argument("--no-generate", action="store_true",
-                    help="score the committed corpus instead of regenerating it")
+    ap.add_argument("--reuse-generated", "--no-generate", action="store_true",
+                    dest="no_generate",
+                    help="reuse the corpus already in eval/corpus/data instead "
+                         "of regenerating it. NOT the same as scoring a "
+                         "committed corpus: that directory is gitignored and "
+                         "absent from a clean checkout, so this fails with an "
+                         "instruction until a generating run has happened. "
+                         "--no-generate is the old name and still works.")
     args = ap.parse_args(argv)
+
+    if args.no_generate and not any(DATA.glob("*.jsonl")):
+        # R-20. This path advertised itself as "score the committed corpus",
+        # and the corpus is not committed -- eval/corpus/data is gitignored
+        # because it is 41 MB and deterministic from its seed. On a clean
+        # checkout the command died in `read_text` with a FileNotFoundError
+        # naming one file, which reads as a broken repository rather than as a
+        # step that has not been run. CI always generates first, so nothing
+        # ever exercised it.
+        print(f"{DATA} has no corpus to reuse. It is generated rather than "
+              f"committed: run `python eval/run_eval.py` with no arguments "
+              f"once, then --reuse-generated will score what that produced.",
+              file=sys.stderr)
+        return 2
 
     if not args.no_generate:
         # The committed sample is regenerated here too, not only by
@@ -724,7 +817,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  unseen/task_disjoint/manifest   "
           f"recall {headline['recall']['value']:.1%}  "
           f"FPR {headline['false_positive_rate']['value']:.1%}  "
-          f"FP/1000 {headline['false_positives_per_1000_sessions']}")
+          f"FP/1000 benign "
+          f"{headline['false_positives_per_1000_benign_sessions']}")
     print(f"  unseen/task_disjoint/name_only  "
           f"recall {blind['recall']['value']:.1%}  "
           f"FPR {blind['false_positive_rate']['value']:.1%}  "

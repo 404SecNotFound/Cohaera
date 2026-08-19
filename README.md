@@ -5,11 +5,12 @@
 
 <h1 align="center">Cohaera</h1>
 
-<p align="center"><b>The correlation layer for agent telemetry.</b></p>
+<p align="center"><b>Evidence quality for agent telemetry.</b></p>
 
 <p align="center">
   <i>From Latin <b>cohaerere</b>, to hang together.<br/>
-  Does the agent's behaviour hang together?</i>
+  Does the agent's behaviour hang together &mdash; and can you trust<br/>
+  the record that says so?</i>
 </p>
 
 <p align="center">
@@ -66,13 +67,40 @@ fitted on those same twelve near-identical sessions. That is a smoke test wearin
 a lab coat.
 
 So there is a file in this repository called [EVASION.md](EVASION.md) whose
-entire job is to break this one. 21 constructed evasions, 20 of them still
+entire job is to break this one. 22 constructed evasions, 20 of them still
 working, each backed by a test that passes when the evasion succeeds. Read it
 before you trust anything else here — including the entry for the one that has
 been closed, which cost 36 new false positives and says so.
 
 > The first principle is that you must not fool yourself, and you are the
 > easiest person to fool.
+
+### One correction to the story above
+
+The box is real and nobody is reading it. That part holds.
+
+What does not hold is the conclusion this project drew from it for its first
+year: that reading the box is the *missing layer*. It is not missing any more.
+Exabeam's [Agent Behavior Analytics](https://www.exabeam.com/capabilities/agent-behavior-analytics/)
+baselines agent behaviour, tracks first-time actions and role drift, covers MCP
+activity, and correlates agents with the users and entities around them. Sold
+to that audience, "somebody should read the box" is a description of their
+product.
+
+The gap that has *not* closed is one layer down, and it is the more interesting
+one. Whoever reads the box is trusting that the notes are the notes the
+watchman wrote. In agent telemetry the watchman usually runs inside the process
+he is watching.
+
+**So: Cohaera's job is not to be the reader. It is to make the notes worth
+reading — and to say so out loud when they are not.** Signed collector chains,
+exact call binding, provider receipts that can falsify a claimed failure,
+replay and fork memory, and a coverage contract on every check that cannot run.
+Those become inputs to a behavioural engine rather than a competitor to one.
+
+[**POSITIONING.md**](POSITIONING.md) has the layer table, the claim language
+this project holds itself to, and the honest statement of what is not
+validated.
 
 ---
 
@@ -93,6 +121,8 @@ been closed, which cost 36 new false positives and says so.
 - [Roadmap](#roadmap)
 - [Known limitations](#known-limitations)
 - [Known evasions](EVASION.md)
+- [Positioning](POSITIONING.md) — what this is a layer of, what it is not, and the language it holds itself to
+- [Review response](REVIEW-RESPONSE.md) — twenty-one external findings, what happened to each, and the three recommendations that were declined
 - [Threat model](docs/THREAT-MODEL.md) — what this trusts, and what survives an attacker who controls the telemetry
 - [Evidence trust](docs/EVIDENCE-TRUST.md) — the wire formats for collector integrity, effect receipts, approval binding, the trust store and signed policy files, and what they measured
 - [Security policy](SECURITY.md) — reporting, scope, supply chain
@@ -342,9 +372,18 @@ carrying `cohaera.integrity:1`, deleting a record is a detected and localised
 sequence gap, and modifying one is a chain break naming the record that moved.
 Every other finding in the session is stamped with `evidence_status`, so a
 verdict built on a stream somebody could have edited does not arrive looking
-like one that verified. The default value is `unattested`, which is where every
-deployment starts and which means *tampering was not ruled out*, not *tampering
-was ruled out*.
+like one that verified. Five values, and the first two used to be one:
+
+| `evidence_status` | means |
+|---|---|
+| `verified_complete` | a verified signature reaches the last record of every stream |
+| `verified_prefix` | signatures verified, and they stop short — the tail is chained and attested by nobody |
+| `chained_unsigned` | internally consistent, with nothing to check it against |
+| `unattested` | no integrity sidecars at all |
+| `inadmissible` | a gap, a break, a bad signature, a replay |
+
+The default value is `unattested`, which is where every deployment starts and
+which means *tampering was not ruled out*, not *tampering was ruled out*.
 
 **CH07** is the only detection here that catches a lying emitter rather than
 routing around one. A receipt is an identifier minted by the system the action
@@ -933,10 +972,10 @@ prevention claim collapses.
 - [x] Measured TPR and FPR with task-disjoint splits ([eval/](eval/EVALUATION-CARD.md))
 - [ ] CH02 semantic matching, currently lexical and its weakest point
 - [ ] Praxen Worker Remit compiler, remit sections to runtime predicates
-- [x] Sigma content pack, 13 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
+- [x] Sigma content pack, 14 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 702 passing across unit, hostile-input and content conformance
+- [x] Tests, 851 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 26 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger
@@ -953,9 +992,9 @@ prevention claim collapses.
 - [x] Automated VMware Workstation lab build ([lab/](lab/))
 - [ ] Streaming state with watermarks, replacing batch load
 - [x] Evidence-trust design: wire formats, verification and staging for all three P1 items ([docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md))
-- [ ] Independent effect receipts, so a logged success can be checked
-- [ ] Collector-side signing and hash chaining, AEGIS pattern
-- [ ] Approval and policy binding, so a continuation can be called a bypass
+- [x] Independent effect receipts, so a logged success can be checked — `cohaera.receipt:1`, CH07, and `tools/receipt_adapters.py`. A receipt falsifies a claimed FAILURE; it still does not confirm a success, and nothing reconciles the identifier with the provider that minted it
+- [x] Collector-side signing and hash chaining, AEGIS pattern — `cohaera.integrity:1`, CH06, `tools/collector_sign.py`, with key roles, rotation, revocation, freshness and a cross-run ledger
+- [x] Approval and policy binding, so a continuation can be called a bypass — `cohaera.approval:1` and the CH04 advisory/blocking split. An in-band approval is reported as a CLAIM, not an authorisation fact
 - [ ] Validate content against a live SIEM
 - [ ] Build AIE-COHAERA-001 natively and compare against the Cohaera-fed version
 

@@ -92,14 +92,42 @@ DEFECT_ENFORCEMENT_TYPE = "INVALID_POLICY_ENFORCEMENT"
 
 # COH-R02. Peak resident bytes per byte of accepted input, measured across
 # record shapes and rounded up for headroom; see max_resident_bytes.
+#
+# R-11. This constant alone cannot bound the cost, and the reason is not that
+# it is set too low. A byte count cannot see SHAPE. Measured on this host,
+# Python 3.11, peak traced memory through the full load path against raw input
+# bytes, 120 records each carrying 900 elements:
+#
+#     arrays of empty maps      18.2x
+#     arrays of one-key maps    19.4x
+#     arrays of empty lists      2.9x
+#     arrays of small integers   6.2x
+#
+# A factor of six between shapes that are within a few percent of each other on
+# the wire, and an external review measured 51x for the map-heavy case on a
+# different host -- which is the same finding, louder: whatever single number
+# is chosen is wrong for some shape, and raising it until it is safe for the
+# worst one makes it useless for the common one.
+#
+# So the estimate is now the LARGER of the byte estimate and a shape estimate,
+# and the shape is counted during the parse rather than inferred after it.
 RESIDENT_BYTES_PER_INPUT_BYTE = 32
+
+# Measured the same way: total peak divided by objects built. An empty dict is
+# 64 bytes in CPython 3.11 before anything is in it, and each one is retained
+# again in the Event, the sealed session tuple and the identity map. Rounded up
+# from ~197 bytes per one-key object with headroom for those copies.
+RESIDENT_BYTES_PER_CONTAINER = 256
+RESIDENT_BYTES_PER_KEY = 64
+
+REJECT_RECORD_SHAPE = "RECORD_SHAPE_EXCEEDED"
 
 ALL_REJECT_CODES = (
     REJECT_MALFORMED_JSON, REJECT_NOT_AN_OBJECT, REJECT_LINE_TOO_LONG,
     REJECT_NESTING_TOO_DEEP, REJECT_UNDECODABLE, REJECT_TOO_MANY_EVENTS,
     REJECT_TOO_MANY_SESSIONS, REJECT_TOO_MANY_KEYS, REJECT_TOO_MANY_RECORDS,
     REJECT_TOO_MANY_BYTES, REJECT_TOO_MANY_REJECTS, REJECT_RATIO_EXCEEDED,
-    REJECT_MEMORY_BUDGET,
+    REJECT_MEMORY_BUDGET, REJECT_RECORD_SHAPE,
 )
 
 ALL_DEFECT_CODES = (
@@ -134,6 +162,11 @@ _OPTIONAL_COUNT_FIELDS = frozenset({"max_rejects"})
 _OPTIONAL_RATIO_FIELDS = frozenset({"max_reject_ratio"})
 # Integer fields where zero is meaningful rather than a disabled bound.
 _NONNEGATIVE_INT_FIELDS = frozenset({"max_reject_ratio_floor"})
+# Fields measured in seconds rather than in things counted. Finite and >= 0:
+# zero is a real setting (tolerate no skew at all) and a non-finite value would
+# disable the bound rather than widen it, which is the R-13 fault one layer up.
+_NONNEGATIVE_SECONDS_FIELDS = frozenset({"max_future_skew_s",
+                                         "max_signature_seconds"})
 
 
 @dataclass(frozen=True)
@@ -200,6 +233,14 @@ class Limits:
     # code instead of the kernel choosing which process dies.
     max_resident_bytes: int = 2_147_483_648  # 2 GiB of assembled state
 
+    # R-11. Per RECORD, checked during the parse. One 1 MiB line can build
+    # tens of thousands of objects, and the between-lines budget check cannot
+    # see that until the record is already in memory. These are generous for
+    # real telemetry -- the corpus's largest record builds under a hundred
+    # objects -- and cheap to raise for a producer that genuinely needs more.
+    max_containers_per_record: int = 20_000
+    max_keys_per_record: int = 50_000
+
     # ---- identity and correlation ---------------------------------------
     max_span_chars: int = 256
     max_session_key_chars: int = 256
@@ -245,10 +286,35 @@ class Limits:
     # EVIDENCE-TRUST section 2, and it is a bound rather than a heuristic
     # because the buffer it governs is producer-controlled.
     max_reorder_window: int = 64
+    # R-12. TWO bounds, because a count is not a time.
+    #
+    # A trusted key id with an invalid signature costs a full verification --
+    # the answer is not known until the scalar work is done -- and the producer
+    # decides how many arrive. The count has always been charged BEFORE the
+    # verification runs, so the accounting is right; what it cannot do is bound
+    # the wall clock, because the cost of one verification is a property of the
+    # host and not of this file. Measured here at about 0.5 ms per full invalid
+    # verification, so 100,000 is roughly fifty seconds; an external review
+    # measured about three minutes for the same cap on a slower machine.
+    #
+    # The seconds bound is the one that holds across hosts. Both are budgets
+    # rather than errors: exhausting either yields INTEGRITY_SIGNATURE_BUDGET_-
+    # EXHAUSTED and an evidence status that says the attestation was not
+    # established, which is the coverage-contract answer rather than a crash or
+    # a silent pass.
     max_signature_verifications: int = 100_000
+    max_signature_seconds: float = 30.0
     max_approvals_per_session: int = 1_000
     max_collector_keys: int = 1_000
     max_keyfile_bytes: int = 1_048_576
+    # R-13. How far past --evidence-as-of a signature-verified record may be
+    # dated before it is INTEGRITY_EVIDENCE_FROM_FUTURE. Five minutes, which is
+    # the tolerance Kerberos has used for decades for the same reason: it
+    # absorbs ordinary NTP disagreement between two hosts and nothing more.
+    # Zero would make every slightly-fast collector inadmissible; an hour would
+    # let a wrong clock buy an hour of unearned freshness. Only meaningful when
+    # a freshness bound is set, since without one nothing is aged at all.
+    max_future_skew_s: float = 300.0
     # ---- the seen-stream ledger -----------------------------------------
     # The one piece of state Cohaera keeps between runs, so it is also the one
     # that can grow without an operator noticing. A stream id is producer-chosen,
@@ -289,6 +355,14 @@ class Limits:
                 if not math.isfinite(value) or not 0.0 <= float(value) <= 1.0:
                     raise LimitsError(
                         f"{f.name} must be within 0.0..1.0, got {value!r}")
+            elif f.name in _NONNEGATIVE_SECONDS_FIELDS:
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise LimitsError(
+                        f"{f.name} must be a number of seconds, got {value!r}")
+                if not math.isfinite(value) or float(value) < 0.0:
+                    raise LimitsError(
+                        f"{f.name} must be a finite number of seconds >= 0, "
+                        f"got {value!r}")
             else:
                 floor = 0 if f.name in _NONNEGATIVE_INT_FIELDS else 1
                 if isinstance(value, bool) or not isinstance(value, int):

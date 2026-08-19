@@ -33,7 +33,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -215,8 +215,116 @@ class Correlator:
 # ---------------------------------------------------------------------------
 
 
+TRUST_CONFIG_SCHEMA = "cohaera.trust_config:1"
+
+# R-06. The value ``trust_config_digest`` returns when nothing that bears on
+# trust was configured at all: no keys, no attestations, no freshness bound, no
+# ledger, unkeyed correlation. It is a real digest of a real configuration --
+# the empty one -- and not a sentinel, because "no trust configuration" is a
+# configuration and two runs that share it really are the same run.
+def trust_config_digest(
+        *,
+        trust_store: dict[str, Any] | None = None,
+        policy_attestations: Sequence[dict[str, Any]] = (),
+        freshness: dict[str, Any] | None = None,
+        freshness_as_of_pinned: bool = False,
+        ledger: dict[str, Any] | None = None,
+        correlation_key_version: str = "",
+        correlation_keyed: bool = False,
+        baseline_partial_allowed: bool = False,
+        schema: str = "") -> str:
+    """One digest over every setting that can change a verdict or its trust.
+
+    R-06. ``run_id`` used to cover the detector version, the bounds, the source,
+    the input, the baseline and the manifest -- and stop. Everything the
+    evidence layer added afterwards sat in the verdict's provenance, plainly
+    described as output-affecting, and outside the run's identity. So the same
+    telemetry scored once with no trust store and once with a collector key
+    loaded produced the same ``analysis_run_id`` and the same ``verdict_id``
+    while carrying different provenance and different bytes. The documentation
+    tells a SIEM to deduplicate on those IDs. It would have discarded the second
+    run as a retry of the first, and the discarded one is the one that knew
+    whether the telemetry was signed.
+
+    The rule this function encodes: a field that appears in provenance BECAUSE
+    it changes how the output should be read belongs in the identity too, or the
+    reason it does not has to be written down. Two such reasons are written down
+    here.
+
+    ``as_of`` IS THE HARD CASE
+        A freshness bound is measured from an instant, and that instant decides
+        which records are stale, so by the rule above it belongs in the
+        identity. But when it is not pinned it is the wall clock at start-up,
+        and folding a wall clock into a content digest destroys the one property
+        ``run_id`` exists to provide: scoring the same file twice would stop
+        producing the same ID and every re-run would look like a new run to the
+        SIEM being told to deduplicate on it.
+
+        So the pinned instant is folded in and a defaulted one is not. What IS
+        folded in either way is *which of the two happened* -- a run whose
+        freshness was measured from an unrepeatable clock is a different kind of
+        run from one measured from an operator's chosen instant, and the ID says
+        so even though it cannot say when. A run that wants a reproducible
+        identity under a freshness bound pins ``--evidence-as-of``; that is what
+        the flag is for.
+
+    THE CORRELATION SECRET NEVER ENTERS
+        Only ``key_version`` and whether a key was supplied. A digest is not
+        encryption, this one travels in the verdict, and hashing a secret into a
+        published field is how a secret stops being one.
+    """
+    store = trust_store or {}
+    fresh = freshness or {}
+    led = ledger or {}
+    return digest({
+        "schema": TRUST_CONFIG_SCHEMA,
+        # Both digests, for the same reason run_id keeps the manifest's FILE
+        # digest: the semantic one cannot move without the file one moving, and
+        # an edit to a field this version does not parse must still be visible.
+        "trust_store": {
+            "file_digest": store.get("file_digest", ""),
+            "semantic_digest": store.get("semantic_digest", ""),
+            "key_count": store.get("key_count", 0),
+        },
+        # Sorted by artefact so that argument order cannot change the identity.
+        # The verification OUTCOME is in here, not just the document: a policy
+        # file that verified and the same file that failed to are two different
+        # configurations even though the bytes match.
+        "policy_attestations": sorted(
+            ({"artifact": a.get("artifact", ""),
+              "status": a.get("status", ""),
+              "key_id": a.get("key_id", ""),
+              "file_sha256": a.get("file_sha256", "")}
+             for a in policy_attestations),
+            key=lambda a: (a["artifact"], a["file_sha256"])),
+        "freshness": {
+            "enabled": bool(fresh.get("enabled", False)),
+            "max_age_s": fresh.get("max_age_s"),
+            "max_future_skew_s": fresh.get("max_future_skew_s"),
+            "as_of_pinned": bool(freshness_as_of_pinned),
+            "as_of": fresh.get("as_of") if freshness_as_of_pinned else None,
+        },
+        # The ledger state READ, before this run wrote anything to it. It is
+        # what every replay and fork verdict in the run was judged against, so
+        # two runs that read different ledgers are not the same run even when
+        # the telemetry is byte-identical.
+        "ledger": {
+            "enabled": bool(led.get("enabled", False)),
+            "generation": led.get("generation"),
+            "state": led.get("state", ""),
+        },
+        "correlation": {"key_version": correlation_key_version,
+                        "keyed": bool(correlation_keyed)},
+        "baseline_partial_allowed": bool(baseline_partial_allowed),
+        "output_schema": schema,
+    }, 24)
+
+
+NO_TRUST_CONFIG = trust_config_digest()
+
+
 def run_id(*, detector_version: str, config_hash: str, source: str,
-           input_digest: str, baseline_hash: str = "",
+           input_digest: str, trust_config: str, baseline_hash: str = "",
            manifest_hash: str = "") -> str:
     """Identify one scoring run by everything that could change its output.
 
@@ -234,11 +342,21 @@ def run_id(*, detector_version: str, config_hash: str, source: str,
     to a field this version does not parse -- invisible in the run's identity.
     Both digests still travel in the verdict's provenance block, where the gap
     between them is readable (C4-10).
+
+    ``trust_config`` carries everything the evidence layer decides -- keys,
+    policy attestations, freshness, ledger state, correlation key version. See
+    :func:`trust_config_digest` for why each is in there and for the two things
+    deliberately left out.
     """
     return digest({
         "detector_version": detector_version, "config_hash": config_hash,
         "source": source, "input_digest": input_digest,
         "baseline_hash": baseline_hash, "manifest_hash": manifest_hash,
+        # R-06. Required rather than defaulted, and that is the point. A caller
+        # that has no trust configuration passes NO_TRUST_CONFIG and says so; a
+        # caller that has one and forgets it cannot silently mint the identity
+        # of a run that did not happen.
+        "trust_config": trust_config,
     }, 24)
 
 
