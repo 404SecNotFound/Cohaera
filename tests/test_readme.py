@@ -300,3 +300,18 @@ def test_the_classifiers_name_every_python_ci_actually_runs():
     assert cap == f"{highest.split('.')[0]}.{int(highest.split('.')[1]) + 1}", (
         f"the ceiling {cap} does not sit one minor above the highest tested "
         f"version {highest}")
+
+
+def test_the_review_response_accounts_for_every_finding():
+    """A response document that quietly drops a finding is worse than none: it
+    reads as coverage while being a selection. Every ID the review raised has
+    to appear, and each must say what happened rather than only naming it."""
+    text = (REPO / "REVIEW-RESPONSE.md").read_text(encoding="utf-8")
+    for n in range(1, 22):
+        assert f"R-{n:02d}" in text, f"REVIEW-RESPONSE.md does not mention R-{n:02d}"
+    for section in ("Declined, with reasons", "Deferred", "What is still open"):
+        assert section in text, f"missing section: {section}"
+    # The open list is the part most likely to rot into a boast.
+    for admission in ("No external validation", "No independent reviewer",
+                      "never been built"):
+        assert admission in text, f"the open list no longer admits: {admission}"

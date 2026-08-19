@@ -8,6 +8,8 @@
 This file exists because an external review made a strategic point that was
 more useful than any of its bug findings, and the honest response is to write
 the correction down rather than quietly adjust the wording.
+[REVIEW-RESPONSE.md](REVIEW-RESPONSE.md) records what happened to the other
+twenty findings.
 
 ## The claim that stopped being true
 

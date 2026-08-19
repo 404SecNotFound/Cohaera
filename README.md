@@ -122,6 +122,7 @@ validated.
 - [Known limitations](#known-limitations)
 - [Known evasions](EVASION.md)
 - [Positioning](POSITIONING.md) — what this is a layer of, what it is not, and the language it holds itself to
+- [Review response](REVIEW-RESPONSE.md) — twenty-one external findings, what happened to each, and the three recommendations that were declined
 - [Threat model](docs/THREAT-MODEL.md) — what this trusts, and what survives an attacker who controls the telemetry
 - [Evidence trust](docs/EVIDENCE-TRUST.md) — the wire formats for collector integrity, effect receipts, approval binding, the trust store and signed policy files, and what they measured
 - [Security policy](SECURITY.md) — reporting, scope, supply chain
@@ -974,7 +975,7 @@ prevention claim collapses.
 - [x] Sigma content pack, 14 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 831 passing across unit, hostile-input and content conformance
+- [x] Tests, 832 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 26 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger
