@@ -100,8 +100,16 @@ that disagree about what a tool does are distinguishable after the fact.
 
 **Residual risk.** With no manifest, classification is a guess about an
 attacker-supplied string, and the evaluation corpus measures that guess at **0%
-on realistic enterprise tool identifiers**. The manifest is not signed; signing
-needs a key distribution story this project does not have.
+on realistic enterprise tool identifiers**.
+
+The manifest **can** now be signed: `cohaera.policy_signature:1`, a detached
+signature verified against a key holding the `policy` role, supplied with
+`--tool-manifest-sig`. A run that is given one and cannot verify it refuses to
+score rather than continuing quietly. What signing establishes is narrow and
+worth stating: these are the bytes the holder of that key approved. It says
+nothing about whether the declarations in them are correct, and
+`POLICY_SIGNATURE_ABSENT` remains the value nearly every deployment carries —
+which is recorded rather than left to be assumed.
 
 ### B3. The correlation key → session assembly
 
@@ -230,8 +238,10 @@ Cohaera is correct only if these hold. They are the operator's, not the code's.
    the telemetry. Without it, anonymous session keys are unkeyed digests over a
    small identity space, which is enumerable from the SIEM copy. The record says
    which it is via `correlation.keyed`; nothing forces the secret.
-3. **The capability manifest is under change control.** It is configuration that
-   changes verdicts, it is not signed, and both its digests are recorded so a
+3. **The capability manifest is under change control.** It is configuration
+   that changes verdicts. It can be signed (`--tool-manifest-sig`), and a
+   supplied signature that does not hold aborts the run; unsigned is still the
+   default, and both its digests are recorded either way, so an unattested
    change is visible after the fact rather than prevented.
 4. **The benign baseline is actually benign, and is this agent's own.** Cohaera
    cannot verify the first (E03) and measurably does not transfer across

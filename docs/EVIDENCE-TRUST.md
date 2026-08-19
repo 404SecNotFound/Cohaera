@@ -625,6 +625,37 @@ one that pays for the whole mechanism:
    fact. The partial case is reported only on calls that did **not** report
    success, and the cost of a loose binding is carried in CH07's coverage
    contract as `RECEIPT_BOUND_BY_SPAN_ONLY` rather than as a finding per call.
+   **What the identifier is worth, separately from whether it binds** (R-17).
+   Binding says *which call* a receipt is about. It says nothing about what the
+   thing on the other end actually attested to, and the reference adapters in
+   `tools/receipt_adapters.py` used to collapse that distinction: each
+   authority declared ONE `kind`, and several candidate paths underneath it
+   answering different questions. Kubernetes `metadata.resourceVersion` and
+   `metadata.uid` both emitted `resource_version` — the first identifies THIS
+   mutation, the second identifies the object for its whole life, so a receipt
+   carrying the second could be presented for any later write to the same
+   object. A GitHub PR `number` is scoped to one repository and reused across
+   forks; a `node_id` is global; both emitted `node_id`. A Jira numeric `id` is
+   not an issue key, and a consumer looking one up found nothing with no way to
+   tell that from a forgery. `pg_current_wal_lsn` is the *cluster's* write
+   position, which moves because anybody wrote at all.
+
+   Every candidate path now declares its own kind and its own assurance, and
+   the assurance travels in the receipt:
+
+   | Assurance | What it means |
+   |---|---|
+   | `provider_returned_operation` | the authority minted this identifier for THIS operation |
+   | `provider_returned_object` | the authority minted it, and it names the object rather than this write |
+   | `client_claimed` | the caller may have generated it — an SMTP `Message-ID` composed locally is not evidence the caller cannot fabricate |
+
+   None of the three is called `verified` or `confirmed`, and that is
+   deliberate: nothing in this project contacts a provider to ask. A fallback
+   path whose security meaning is weaker has to say so in the output, or it is
+   not a fallback — it is a substitution the consumer cannot see. Receipts may
+   also carry a `scope` naming the account, region, tenant, project or
+   repository the identifier lives in, because "stripe" is a company rather
+   than an authority and a charge id is unique within one account.
 2. **Presence.** A consequential call reporting `success` and carrying no
    receipt is now a *stated* gap rather than an accepted claim
    (`NO_EFFECT_RECEIPT`). Reported through coverage, not as a finding, because
