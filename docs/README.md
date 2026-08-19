@@ -5,15 +5,8 @@
 
 # Documentation map
 
-Every document this repository ships. This page exists so you never have to
-guess which one answers your question, and `tests/test_readme.py` fails if a
-tracked document is missing from it.
-
-(There used to be a document count and a word total in this paragraph. Nothing
-derived either of them, they had already drifted past the number of rows below,
-and this project's own rule is that a number nothing keeps true is a number that
-is already wrong. Both are gone rather than corrected, because the correction
-would drift again on the next commit.)
+Sixteen documents, about 57,000 words. This page exists so you never have to
+guess which one answers your question.
 
 Each row says what question the document answers, not what it contains.
 

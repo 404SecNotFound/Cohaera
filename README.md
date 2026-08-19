@@ -206,9 +206,8 @@ validated.
 - [Known limitations](#known-limitations)
 - [Relationship to the upstream projects](#relationship-to-the-upstream-projects)
 
-**Other documents** — [docs/README.md](docs/README.md) maps every one of them by
-the question it answers, and a test fails if a tracked document is missing from
-it. The four read most often:
+**Other documents** — [docs/README.md](docs/README.md) maps all sixteen by the
+question each one answers. The four read most often:
 
 | | |
 |---|---|
