@@ -550,3 +550,75 @@ def test_the_release_notes_state_a_false_positive_rate():
         "the release notes report no false-positive rate against a benign "
         "denominator")
     assert not release_gate.problems()
+
+
+def test_a_claim_is_read_at_every_occurrence_not_just_the_first(tmp_path):
+    """The tool built to stop C4-11 had C4-11 living inside it.
+
+    ``Claim.stated`` used ``re.search``, which finds the first match and stops.
+    A document may legitimately state the same number twice -- the README
+    states the projected precision on its first screen AND again in the
+    measured-results table, because a reader who starts at either one deserves
+    the figure. Only the first was ever read, and ``--write`` only ever
+    rewrote the first.
+
+    Reproduced before fixing: with the second copy set to ``99.900%`` and the
+    first left correct, ``python tools/readme_facts.py --check`` exited 0 and
+    the whole suite passed. A README claiming precision four hundred times
+    better than the measured value, in the flattering direction, with nothing
+    in the repository objecting.
+    """
+    doc = tmp_path / "DOC.md"
+    pattern = re.compile(r"\| \*\*([\d.]+)%\*\*")
+    claim = readme_facts.Claim("precision", doc, pattern, lambda: "0.238")
+
+    doc.write_text("headline | **0.238%**\n\nresults table | **0.238%**\n",
+                   encoding="utf-8")
+    assert claim.stated_everywhere() == ["0.238", "0.238"]
+
+    doc.write_text("headline | **0.238%**\n\nresults table | **99.900%**\n",
+                   encoding="utf-8")
+    # The first-match reading still sees a correct number, which is exactly
+    # how the wrong one survived.
+    assert claim.stated() == "0.238"
+    # Reading every occurrence is what makes the disagreement visible at all.
+    assert claim.stated_everywhere() == ["0.238", "99.900"]
+
+
+def test_writing_a_claim_repairs_every_occurrence(tmp_path, monkeypatch):
+    """Detecting the drift is half of it; --write has to reach the copy too.
+
+    Rewriting only the first occurrence would leave --check failing forever on
+    a document the tool claims to be able to fix, which is a worse failure than
+    not noticing: it teaches the operator that --write does not work.
+    """
+    doc = tmp_path / "DOC.md"
+    doc.write_text("first | **1%**\nsecond | **9%**\n", encoding="utf-8")
+    claim = readme_facts.Claim(
+        "t", doc, re.compile(r"\| \*\*(\d+)%\*\*"), lambda: 1)
+    monkeypatch.setattr(readme_facts, "CLAIMS", (claim,))
+
+    changed = readme_facts.write()
+
+    assert doc.read_text(encoding="utf-8") == "first | **1%**\nsecond | **1%**\n"
+    assert changed and "2 occurrences" in changed[0], changed
+    assert not readme_facts.problems()
+
+
+def test_no_counted_claim_disagrees_with_itself():
+    """A number stated twice in one document must be the same number twice.
+
+    This is the live guard. The unit tests above prove the mechanism; this one
+    runs against the committed documents, so a future edit that copies a
+    counted sentence to a second place and lets the two drift fails here rather
+    than being published.
+    """
+    disagreeing = []
+    for claim in readme_facts.CLAIMS:
+        values = sorted(set(claim.stated_everywhere()))
+        if len(values) > 1:
+            disagreeing.append(
+                f"{claim.name} ({claim.path.name}) states {values}")
+    assert not disagreeing, (
+        "a counted claim contradicts itself within one document:\n  "
+        + "\n  ".join(disagreeing))

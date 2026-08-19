@@ -336,6 +336,27 @@ class Claim:
         hit = self.pattern.search(self.text() if text is None else text)
         return hit.group(1) if hit else None
 
+    def stated_everywhere(self, text: str | None = None) -> list[str]:
+        """Every stated value, in document order.
+
+        A claim's sentence can legitimately appear more than once. The README
+        states the projected precision on its first screen AND again in the
+        measured-results table, because a reader who starts at either place
+        deserves the number. ``search`` returns only the first, so the second
+        copy was never read and -- worse -- ``write`` never rewrote it.
+
+        That is not hypothetical. With the second copy set to ``99.900%`` and
+        the first left correct, ``--check`` exited 0 and all 857 tests passed:
+        a README publishing a precision four hundred times better than the
+        measured one, in the flattering direction, with nothing objecting. It
+        is C4-11 again -- a number nothing derives is already wrong -- hiding
+        inside the tool built to prevent C4-11.
+
+        Every occurrence is a claim. This returns all of them.
+        """
+        source = self.text() if text is None else text
+        return [m.group(1) for m in self.pattern.finditer(source)]
+
     def actual(self) -> str:
         return str(self.truth())
 
@@ -507,13 +528,19 @@ def problems() -> list[str]:
     """Every way the committed documents currently disagree with the repository."""
     out = []
     for claim in CLAIMS:
-        stated, actual = claim.stated(), claim.actual()
-        if stated is None:
+        stated, actual = claim.stated_everywhere(), claim.actual()
+        if not stated:
             out.append(f"{claim.name}: no sentence matching "
                        f"{claim.pattern.pattern!r} found in {claim.path.name}")
-        elif stated != actual:
-            out.append(f"{claim.name}: {claim.path.name} says {stated}, "
-                       f"repository has {actual}")
+            continue
+        wrong = sorted({s for s in stated if s != actual})
+        if wrong:
+            # Name the occurrence count when there is more than one, because
+            # "says 0.238 and 99.900" reads like a typo until you know the
+            # document states the number twice.
+            where = "" if len(stated) == 1 else f" in {len(stated)} places"
+            out.append(f"{claim.name}: {claim.path.name} says "
+                       f"{', '.join(wrong)}{where}, repository has {actual}")
     for dupe in duplicate_roadmap_entries():
         out.append(f"roadmap: {dupe!r} is listed more than once")
     return out
@@ -524,14 +551,20 @@ def write() -> list[str]:
     changed = []
     for claim in CLAIMS:
         text = claim.text()
-        stated, actual = claim.stated(text), claim.actual()
-        if stated is None or stated == actual:
+        stated, actual = claim.stated_everywhere(text), claim.actual()
+        if not stated or all(s == actual for s in stated):
             continue
-        hit = claim.pattern.search(text)
-        assert hit is not None
-        lo, hi = hit.span(1)
-        claim.path.write_text(text[:lo] + actual + text[hi:], encoding="utf-8")
-        changed.append(f"{claim.name}: {stated} -> {actual}")
+        # Rewrite from the end so that replacing one span cannot shift the
+        # offsets of a span still to come.
+        rewritten = text
+        for hit in reversed(list(claim.pattern.finditer(text))):
+            lo, hi = hit.span(1)
+            rewritten = rewritten[:lo] + actual + rewritten[hi:]
+        claim.path.write_text(rewritten, encoding="utf-8")
+        stale = ", ".join(sorted({s for s in stated if s != actual}))
+        changed.append(f"{claim.name}: {stale} -> {actual}"
+                       + (f" ({len(stated)} occurrences)"
+                          if len(stated) > 1 else ""))
     return changed
 
 
