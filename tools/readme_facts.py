@@ -41,6 +41,8 @@ README = REPO / "README.md"
 EVASION = REPO / "EVASION.md"
 SECURITY = REPO / "SECURITY.md"
 CONTENT_README = REPO / "content" / "README.md"
+DOC_MAP = REPO / "docs" / "README.md"
+EVAL_README = REPO / "eval" / "README.md"
 CHANGELOG = REPO / "CHANGELOG.md"
 SIGMA = REPO / "content" / "sigma"
 CHECKS = REPO / "src" / "cohaera" / "checks.py"
@@ -164,6 +166,61 @@ def count_evasion_tests() -> int:
     """Test functions in tests/test_evasion.py."""
     path = REPO / "tests" / "test_evasion.py"
     return len(_EVASION_TEST.findall(path.read_text(encoding="utf-8")))
+
+
+# ---- counts that were spelled as words, and therefore drifted -------------
+
+# R-20, third occurrence. SECURITY.md said "Seventeen catalogued evasions" and
+# the evaluation card said "seventeen ways" against a real twenty-two. Both
+# survived a fact checker that reads digits, and a test was added to forbid
+# spelled counts -- in three files. It did not cover docs/README.md, README.md
+# or eval/README.md, and all three had drifted by the time anybody looked.
+
+# The one catalogued evasion the corpus contains: E02, as `attack_dilution`.
+# It is here rather than inline so the arithmetic below has a name, and it is a
+# constant rather than a derivation because nothing in the corpus declares
+# which evasion a kind corresponds to. If a second evasion is ever graded, this
+# is the line that has to move, and the claims below will fail until it does.
+EVASIONS_IN_CORPUS = 1
+
+
+def count_evasions_absent_from_corpus() -> int:
+    return count_constructed_evasions() - EVASIONS_IN_CORPUS
+
+
+def _indexed_documents() -> list[Path]:
+    """Every document the documentation map actually links to.
+
+    Counted from the map's own rows rather than from a directory walk. The
+    sentence being checked says "N documents. This page exists so you never
+    have to guess which one answers your question" -- so the number it owes the
+    reader is how many rows the page has, not how many markdown files exist.
+    Deriving it any other way lets the sentence and the table below it disagree
+    while both look right.
+    """
+    text = DOC_MAP.read_text(encoding="utf-8")
+    seen, out = set(), []
+    for target in re.findall(r"^\| \[[^\]]+\]\((?!https?:)([^)#]+)", text, re.M):
+        path = (DOC_MAP.parent / target).resolve()
+        if path not in seen and path.exists():
+            seen.add(path)
+            out.append(path)
+    return out
+
+
+def count_documents() -> int:
+    return len(_indexed_documents())
+
+
+def documentation_words() -> str:
+    """Total words across the indexed documents, to the nearest thousand.
+
+    Rounded because the sentence says "about", and derived because "about" is
+    not a licence to be wrong by a third.
+    """
+    words = sum(len(d.read_text(encoding="utf-8").split())
+                for d in _indexed_documents())
+    return f"{round(words / 1000) * 1000:,}"
 
 
 # ---- numbers the README quotes from the evaluation card -------------------
@@ -487,6 +544,19 @@ CLAIMS = (
     Claim("README contents-table working evasions", README,
           re.compile(r"\d+ ways to defeat this, (\d+) still working"),
           count_working_evasions),
+    # The three sentences the word-spelling test did not cover.
+    Claim("doc map document count", DOC_MAP,
+          re.compile(r"^(\d+) documents, about", re.M), count_documents),
+    Claim("doc map word count", DOC_MAP,
+          re.compile(r"documents, about ([\d,]+) words"), documentation_words),
+    Claim("README doc map document count", README,
+          re.compile(r"maps all (\d+) by the"), count_documents),
+    Claim("eval README evasions absent from corpus", EVAL_README,
+          re.compile(r"the other (\d+) of \d+ still do not"),
+          count_evasions_absent_from_corpus),
+    Claim("eval README constructed evasions", EVAL_README,
+          re.compile(r"the other \d+ of (\d+) still do not"),
+          count_constructed_evasions),
 )
 
 
