@@ -36,7 +36,7 @@ from cohaera.capabilities import (
     CapabilityManifest,
 )
 from cohaera.checks import ALL_CHECKS, SequenceGrammar, run_all
-from cohaera.identity import run_id
+from cohaera.identity import NO_TRUST_CONFIG, run_id
 from cohaera.limits import DEFAULT_LIMITS
 from cohaera.model import Event, Session, to_cim_event
 
@@ -135,7 +135,8 @@ def _reference_record() -> dict:
     provenance = {
         "analysis_run_id": run_id(detector_version="test",
                                   config_hash=DEFAULT_LIMITS.digest(),
-                                  source="conformance", input_digest="d"),
+                                  source="conformance", input_digest="d",
+                                  trust_config=NO_TRUST_CONFIG),
         "detector_version": "test",
         "config_hash": DEFAULT_LIMITS.digest(),
         "baseline_hash": grammar.fingerprint(),

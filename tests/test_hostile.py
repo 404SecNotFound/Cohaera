@@ -69,6 +69,7 @@ from cohaera.evidence import RECEIPT_SCHEMA, TrustStore, TrustStoreError, arg_di
 from cohaera.identity import (
     KIND_ISOLATED_ANON,
     KIND_SCOPED_ANON,
+    NO_TRUST_CONFIG,
     Correlator,
     run_id,
 )
@@ -1298,7 +1299,8 @@ def test_c401_different_input_at_the_same_path_gets_a_different_run_id(tmp_path)
         rep = IngestReport(source=str(p))
         load(p, report=rep, quiet=True)
         return run_id(detector_version="test", config_hash=DEFAULT_LIMITS.digest(),
-                      source=str(p), input_digest=rep.content_digest)
+                      source=str(p), input_digest=rep.content_digest,
+                      trust_config=NO_TRUST_CONFIG)
 
     benign = run_for("I sent nothing at all.")
     hostile = run_for("I wired $40,000 to an external account.")
@@ -1920,7 +1922,7 @@ def test_c410_run_identity_still_moves_on_a_cosmetic_manifest_edit(tmp_path):
     digest travels in provenance for the reader, not in the run ID.
     """
     common = dict(detector_version="test", config_hash="c", source="t",
-                  input_digest="d")
+                  input_digest="d", trust_config=NO_TRUST_CONFIG)
     compact = _manifest_at(tmp_path, "a.json", _M_COMPACT)
     pretty = _manifest_at(tmp_path, "b.json", _M_PRETTY)
     assert compact.semantic_digest == pretty.semantic_digest

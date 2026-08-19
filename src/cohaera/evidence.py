@@ -96,7 +96,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from . import ed25519
-from .identity import canonical
+from .identity import canonical, digest
 from .limits import (
     DEFAULT_LIMITS,
     DEFECT_APPROVAL_TYPE,
@@ -1866,6 +1866,29 @@ class StreamLedger:
             head=head, runs=(previous.runs + 1) if previous else 1,
             last_run_id=run_id, last_seen_at=when,
             key_ids=merged_keys[:self.limits.max_evidence_items])
+
+    def state_digest(self) -> str:
+        """A digest of the ledger AS READ, before this run writes to it. R-06.
+
+        Every replay and fork verdict in a run is judged against this state, so
+        two runs that read different ledgers are not the same run even when the
+        telemetry is byte-identical. It goes into the run's identity through
+        ``identity.trust_config_digest``.
+
+        Deliberately narrow: stream id, extent and head, and nothing else. The
+        run counter, the last run id and the timestamps all move when a stream
+        is merely seen again, and folding those in would make the identity of a
+        run depend on how many times an unrelated stream had been scored
+        before -- which changes no verdict and would break the deduplication
+        the ID exists for.
+        """
+        return digest({"schema": LEDGER_SCHEMA,
+                       "streams": [{"stream_id": k,
+                                    "first_seq": v.first_seq,
+                                    "last_seq": v.last_seq,
+                                    "head": v.head}
+                                   for k, v in sorted(self.streams.items())]},
+                      24)
 
     def stamp(self, run_id: str) -> None:
         """Attribute every stream this run touched to the run that scored it.

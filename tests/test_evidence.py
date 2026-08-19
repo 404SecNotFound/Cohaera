@@ -122,6 +122,7 @@ from cohaera.evidence import (
     ROLE_COLLECTOR,
     ROLE_POLICY,
     SEEN_ADVANCED,
+    SEEN_NEW,
     TRUST_STORE_SCHEMA,
     W_ALL_KEYS_REVOKED,
     W_LEGACY_SCHEMA,
@@ -136,6 +137,7 @@ from cohaera.evidence import (
     PolicySignature,
     PolicySignatureError,
     SeenStream,
+    SeenVerdict,
     StreamLedger,
     StreamVerifier,
     TrustStore,
@@ -150,6 +152,7 @@ from cohaera.evidence import (
     stream_sha256,
     verify_policy_signature,
 )
+from cohaera.identity import NO_TRUST_CONFIG, trust_config_digest
 from cohaera.ingest import assemble, load, read_events
 from cohaera.limits import (
     DEFAULT_LIMITS,
@@ -159,7 +162,7 @@ from cohaera.limits import (
     Limits,
     LimitsError,
 )
-from cohaera.model import Event, Session
+from cohaera.model import SESSION_SCHEMA, Event, Session
 from cohaera.validate import IngestReport
 from tools.collector_sign import key_id_for, keys_document, sign_stream
 from tools.receipt_adapters import (
@@ -3202,3 +3205,218 @@ def test_the_ledger_catches_what_freshness_cannot(tmp_path):
         "both runs are inside the freshness window, which is the premise")
     assert R_STREAM_REPLAYED in second.codes, (
         "and the ledger is what sees it anyway")
+
+
+# =====================================================================
+# R-06. Identity. `run_id` covered the detector, the bounds, the source, the
+# input, the baseline and the manifest -- and nothing the evidence layer added
+# after it. Every one of those later settings is emitted in provenance BECAUSE
+# it changes how the output should be read, and every one of them sat outside
+# the ID that the documentation tells a SIEM to deduplicate on. So the run that
+# knew whether the telemetry was signed could be discarded as a retry of the
+# run that did not.
+# =====================================================================
+
+
+def _identity_fixture(tmp_path):
+    telemetry = tmp_path / "t.jsonl"
+    telemetry.write_text(json.dumps(
+        {"event_type": "tool_start", "timestamp": 1000.0, "session_id": "a",
+         "tool_name": "read_x", "span_id": "S1"}) + "\n", encoding="utf-8")
+    store = tmp_path / "store.json"
+    store.write_text(json.dumps({"scheme": TRUST_STORE_SCHEMA, "keys": {
+        KEY_ID: {"key": base64.b64encode(PUBLIC).decode("ascii"),
+                 "roles": [ROLE_COLLECTOR]}}}), encoding="utf-8")
+    return telemetry, store
+
+
+def _run_ids(capsys, argv):
+    assert cli_main(argv) == EXIT_OK
+    out = capsys.readouterr().out.strip().splitlines()
+    records = [json.loads(line) for line in out if line.strip()]
+    prov = records[0]["data"]["provenance"]
+    return prov, [r["verdict_id"] for r in records]
+
+
+def test_r06_a_trust_store_changes_the_run_id_it_governs(tmp_path, capsys):
+    """R-06, reproduced exactly as the review reported it.
+
+    Same telemetry, scored once with no trust store and once with one collector
+    key loaded. Before this, both runs produced the same ``analysis_run_id`` and
+    the same ``verdict_id`` while carrying different provenance and emitting
+    different bytes. A SIEM following this project's own deduplication advice
+    would have kept whichever arrived first and dropped the other.
+    """
+    telemetry, store = _identity_fixture(tmp_path)
+
+    bare, bare_verdicts = _run_ids(capsys, ["score", str(telemetry)])
+    trusted, trusted_verdicts = _run_ids(
+        capsys, ["score", str(telemetry), "--trust-store", str(store)])
+
+    assert bare["trust_store"]["key_count"] == 0
+    assert trusted["trust_store"]["key_count"] == 1, "the fixture must differ"
+    assert bare["analysis_run_id"] != trusted["analysis_run_id"], (
+        "two runs whose trust configuration differs are two runs")
+    assert bare_verdicts != trusted_verdicts, (
+        "and the verdict IDs, which are what a SIEM actually deduplicates on, "
+        "must differ with them")
+
+
+def test_r06_the_same_configuration_is_still_the_same_run(tmp_path, capsys):
+    """The property the fix must not cost.
+
+    Determinism is the whole reason these IDs are content digests. A fix that
+    made every run unique would 'close' R-06 by destroying deduplication.
+    """
+    telemetry, store = _identity_fixture(tmp_path)
+    argv = ["score", str(telemetry), "--trust-store", str(store)]
+    first, first_verdicts = _run_ids(capsys, argv)
+    second, second_verdicts = _run_ids(capsys, argv)
+    assert first["analysis_run_id"] == second["analysis_run_id"]
+    assert first_verdicts == second_verdicts
+
+
+def test_r06_the_trust_config_digest_is_readable_in_provenance(tmp_path, capsys):
+    """Folded into the ID *and* emitted, so a reader can tell WHY two IDs
+    differ without re-deriving the digest from the pieces."""
+    telemetry, store = _identity_fixture(tmp_path)
+    bare, _ = _run_ids(capsys, ["score", str(telemetry)])
+    trusted, _ = _run_ids(capsys, ["score", str(telemetry),
+                                   "--trust-store", str(store)])
+    assert bare["trust_config_digest"] != trusted["trust_config_digest"]
+
+    # And it is reproducible from the provenance beside it, which is what makes
+    # it auditable rather than just another opaque field: a reader holding one
+    # verdict can re-derive the digest and see it commits to what it claims to.
+    for prov in (bare, trusted):
+        assert prov["trust_config_digest"] == trust_config_digest(
+            trust_store=prov["trust_store"],
+            policy_attestations=prov["policy_attestations"],
+            freshness=prov["evidence_freshness"],
+            freshness_as_of_pinned=False,
+            ledger={"enabled": prov["stream_ledger"]["enabled"],
+                    "generation": prov["stream_ledger"].get("generation_read"),
+                    "state": prov["stream_ledger"].get("state_digest_read", "")},
+            correlation_key_version=prov["correlation_key_version"],
+            correlation_keyed=prov["correlation_keyed"],
+            baseline_partial_allowed=prov["baseline_partial_allowed"],
+            schema=SESSION_SCHEMA)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("trust_store", {"file_digest": "x", "semantic_digest": "y",
+                     "key_count": 1}),
+    ("policy_attestations", [{"artifact": "manifest", "status": "verified",
+                              "key_id": "k", "file_sha256": "s"}]),
+    ("freshness", {"enabled": True, "max_age_s": 60.0,
+                   "max_future_skew_s": 300.0}),
+    ("ledger", {"enabled": True, "generation": 3, "state": "abc"}),
+    ("correlation_key_version", "hmac-sha256-v1"),
+    ("correlation_keyed", True),
+    ("baseline_partial_allowed", True),
+    ("schema", "cohaera:0.9"),
+])
+def test_r06_every_trust_setting_moves_the_digest(field, value):
+    """Each field is in there because it can change a verdict or how one should
+    be read. A field that cannot move the digest is decorative, and this is what
+    catches one being dropped from the canonical object later."""
+    assert trust_config_digest(**{field: value}) != NO_TRUST_CONFIG
+
+
+def test_r06_attestation_order_is_not_part_of_the_identity():
+    """Two attestations are a set, not a sequence. Sorting them stops the order
+    the CLI happened to build the list in from minting a second identity for
+    one configuration."""
+    a = {"artifact": "manifest", "status": "verified", "key_id": "k",
+         "file_sha256": "1"}
+    b = {"artifact": "baseline", "status": "absent", "key_id": "",
+         "file_sha256": "2"}
+    assert (trust_config_digest(policy_attestations=[a, b])
+            == trust_config_digest(policy_attestations=[b, a]))
+
+
+def test_r06_the_same_policy_bytes_verified_and_unverified_are_two_configs():
+    """The outcome, not just the document. A manifest that verified and the
+    same manifest whose signature did not hold govern the run differently even
+    though the bytes are identical."""
+    verified = {"artifact": "manifest", "status": "verified", "key_id": "k",
+                "file_sha256": "same"}
+    failed = dict(verified, status="invalid")
+    assert (trust_config_digest(policy_attestations=[verified])
+            != trust_config_digest(policy_attestations=[failed]))
+
+
+def test_r06_a_pinned_as_of_is_in_the_identity_and_a_defaulted_one_is_not():
+    """The deliberate deviation, and the reason is in trust_config_digest.
+
+    An instant decides which records are stale, so by the rule this digest
+    encodes it belongs in the identity. But an unpinned ``as_of`` is the wall
+    clock at start-up, and folding a wall clock into a content digest would make
+    every re-score of the same file a different run -- destroying the property
+    the ID exists for. So the pinned instant counts and the defaulted one does
+    not, while WHICH OF THE TWO happened counts either way.
+    """
+    pinned_a = trust_config_digest(
+        freshness={"enabled": True, "max_age_s": 60.0, "as_of": 1000.0},
+        freshness_as_of_pinned=True)
+    pinned_b = trust_config_digest(
+        freshness={"enabled": True, "max_age_s": 60.0, "as_of": 2000.0},
+        freshness_as_of_pinned=True)
+    assert pinned_a != pinned_b, "a pinned instant is part of the identity"
+
+    drifting_a = trust_config_digest(
+        freshness={"enabled": True, "max_age_s": 60.0, "as_of": 1000.0})
+    drifting_b = trust_config_digest(
+        freshness={"enabled": True, "max_age_s": 60.0, "as_of": 2000.0})
+    assert drifting_a == drifting_b, (
+        "an unpinned clock cannot enter, or re-scoring one file would never "
+        "produce one run")
+    assert drifting_a != pinned_a, (
+        "but a run measured from an operator's chosen instant is a different "
+        "kind of run from one measured off the wall clock, and the ID says so")
+
+
+def test_r06_the_correlation_secret_never_enters_the_digest(tmp_path, capsys):
+    """Only the key VERSION and whether a key was supplied. This digest is
+    published in every verdict; hashing a secret into a published field is how
+    a secret stops being one."""
+    telemetry, _store = _identity_fixture(tmp_path)
+
+    def with_secret(value):
+        os.environ["COHAERA_CORRELATION_SECRET"] = value
+        try:
+            return _run_ids(capsys, ["score", str(telemetry)])[0]
+        finally:
+            os.environ.pop("COHAERA_CORRELATION_SECRET", None)
+
+    one = with_secret("aa" * 32)
+    two = with_secret("bb" * 32)
+    assert one["correlation_keyed"] is True
+    assert one["trust_config_digest"] == two["trust_config_digest"], (
+        "two different secrets at the same key version are the same "
+        "configuration as far as a published digest may say")
+
+    unkeyed = _run_ids(capsys, ["score", str(telemetry)])[0]
+    assert unkeyed["trust_config_digest"] != one["trust_config_digest"], (
+        "but WHETHER a key was supplied changes every anonymous session id, "
+        "so it is part of the configuration")
+
+
+def test_r06_the_ledger_state_read_is_what_the_run_was_judged_against(tmp_path):
+    """A ledger's state digest covers extent and head, and deliberately not the
+    run counter or timestamps: those move when a stream is merely seen again,
+    which changes no verdict and would break deduplication."""
+    empty = StreamLedger()
+    assert StreamLedger().state_digest() == empty.state_digest()
+
+    seeded = StreamLedger()
+    seeded.record(SeenVerdict("stream-a", SEEN_NEW), 0, 4, "head-1",
+                  "run-1", None)
+    assert seeded.state_digest() != empty.state_digest()
+
+    again = StreamLedger()
+    again.record(SeenVerdict("stream-a", SEEN_NEW), 0, 4, "head-1",
+                 "run-2", 99.0)
+    assert again.state_digest() == seeded.state_digest(), (
+        "same streams at the same extent and head: the identity of the state "
+        "that judgments are made against has not moved")

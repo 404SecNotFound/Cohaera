@@ -60,10 +60,10 @@ from .evidence import (
     stream_sha256,
     verify_policy_signature,
 )
-from .identity import Correlator, run_id
+from .identity import Correlator, run_id, trust_config_digest
 from .ingest import load
 from .limits import DEFAULT_LIMITS, Limits, LimitsError
-from .model import json_safe, to_cim_event
+from .model import SESSION_SCHEMA, json_safe, to_cim_event
 from .validate import IngestReport, sanitise_display
 
 EXIT_OK = 0
@@ -462,6 +462,25 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
          f"{sum(len(s.events) for s in sessions)} events in {len(sessions)} sessions, "
          f"{report.rejected} record(s) quarantined\n")
 
+    # R-06. Assembled BEFORE the ledger is written to and before the provenance
+    # block below, because it must describe the configuration this run was
+    # scored under rather than the state it left behind.
+    ledger_identity = ({"enabled": True, "generation": ledger.generation,
+                        "state": ledger.state_digest()} if ledger is not None
+                       else {"enabled": False})
+    trust_config = trust_config_digest(
+        trust_store=keys.as_dict(limits.max_evidence_items),
+        policy_attestations=[a.as_dict() for a in attestations],
+        freshness=freshness.as_dict(),
+        # See trust_config_digest: a pinned instant is part of the identity and
+        # a defaulted wall clock cannot be, but which of the two happened is.
+        freshness_as_of_pinned=args.evidence_as_of is not None,
+        ledger=ledger_identity,
+        correlation_key_version=correlator.key_version,
+        correlation_keyed=correlator.keyed,
+        baseline_partial_allowed=bool(args.allow_partial_baseline),
+        schema=SESSION_SCHEMA,
+    )
     run = run_id(
         detector_version=__version__,
         config_hash=limits.digest(),
@@ -470,6 +489,7 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
         input_digest=report.content_digest,
         baseline_hash=baseline_hash,
         manifest_hash=manifest.file_digest,
+        trust_config=trust_config,
     )
     if ledger is not None:
         # Stamped here because analysis_run_id is a digest of everything read
@@ -481,6 +501,9 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
         "analysis_run_id": run,
         "detector_version": __version__,
         "config_hash": limits.digest(),
+        # R-06. Emitted as well as folded into analysis_run_id, so that two runs
+        # whose IDs differ can be told WHY they differ without re-deriving it.
+        "trust_config_digest": trust_config,
         "baseline_hash": baseline_hash,
         # C5-07. What the baseline was actually built from, so a verdict can be
         # audited against the reference it was measured against rather than
@@ -498,7 +521,11 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
         "evidence_freshness": freshness.as_dict(),
         "stream_ledger": (
             {"enabled": True, "path": str(args.seen_streams),
-             "streams_known": len(ledger.streams)} if ledger
+             "streams_known": len(ledger.streams),
+             # The generation and state READ, which is what the replay and fork
+             # verdicts in this run were judged against (R-06).
+             "generation_read": ledger_identity["generation"],
+             "state_digest_read": ledger_identity["state"]} if ledger
             else {"enabled": False}),
         # Stream identity and extent, so that two runs which scored the same
         # collector stream twice are distinguishable after the fact. Cohaera

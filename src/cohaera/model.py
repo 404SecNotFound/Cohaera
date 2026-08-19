@@ -1281,8 +1281,14 @@ class Finding:
         return d
 
 
+# The output contract's version, named once. R-20: it was a default argument
+# spelled as a literal in one place and as a string in the parser field map in
+# another, which is how the two drift apart without anything failing.
+SESSION_SCHEMA = "cohaera:0.2"
+
+
 def to_cim_event(session: Session, findings: list[Finding],
-                 schema: str = "cohaera:0.2",
+                 schema: str = SESSION_SCHEMA,
                  coverage: dict[str, Any] | None = None,
                  provenance: dict[str, Any] | None = None,
                  sequence: int | None = None) -> dict[str, Any]:
