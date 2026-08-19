@@ -10,7 +10,7 @@ re-runs it with `--check` and fails on any difference.
 
 Detector `0.3.0`, signing key `ed25519:ed6a47a39da869b5`, freshness pinned to `1785720000.0`.
 
-## The five states of one workflow
+## The six states of one workflow
 
 Same agent, same ticket-handling workflow. What differs between rows
 is the thing being demonstrated.
@@ -35,6 +35,48 @@ genuine, they are just not new, or not the same history.
 | first | — |
 | replay | `INTEGRITY_STREAM_REPLAYED` |
 | fork | `INTEGRITY_CHAIN_BROKEN`, `INTEGRITY_STREAM_FORKED`, `STREAM_LEDGER_NOT_ADVANCED` |
+
+## What it declines to answer, and why
+
+Three prerequisites the detector needs and that a first deployment
+does not have. Each pair is the same telemetry scored twice — once
+without the prerequisite and once with it — so the difference between
+the two rows is attributable to that one thing.
+
+| Prerequisite | Configuration | Coverage | Session grouping | Session key | Evidence | Fired |
+|---|---|---|---|---|---|---|
+| Capability manifest | `absent` | 0.129 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | — |
+| Capability manifest | `supplied` | 0.843 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | `CH03_untrusted_to_completed_action` |
+| Collector signature | `chained` | 0.633 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `chained_unsigned` | — |
+| Collector signature | `signed` | 0.7 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | — |
+| Correlation key | `unkeyed` | 0.3 | 0.3 (`scoped_anonymous`) | `sha256-unkeyed-v1` | `verified_complete` | — |
+| Correlation key | `keyed` | 0.3 | 0.3 (`scoped_anonymous`) | `hmac-sha256-v1` | `verified_complete` | — |
+
+And per check, which is where it is actually legible. Only the checks
+whose contract MOVED are listed: a check that reads the same either
+way did not depend on the prerequisite.
+
+| Prerequisite | Check | Without | With |
+|---|---|---|---|
+| Capability manifest | `CH02_concealment_gap` | `degraded` 0.0 | `evaluated` 1.0 |
+| Capability manifest | `CH03_untrusted_to_consequential` | `degraded` 0.0 | `evaluated` 1.0 |
+| Capability manifest | `CH04_guardrail_overrun` | `degraded` 0.0 | `evaluated` 1.0 |
+| Capability manifest | `CH05_unpaired_calls` | `degraded` 0.0 | `evaluated` 1.0 |
+| Capability manifest | `CH07_effect_contradiction` | `degraded` 0.0 | `evaluated` 1.0 |
+| Collector signature | `CH06_evidence_integrity` | `degraded` 0.432 | `degraded` 0.9 |
+
+The `absent`, `chained` and `unkeyed` rows are the **shipping default**,
+not a misconfiguration. A check reported `degraded` at confidence 0.0
+has not run and says so; it is not a check that ran and found nothing.
+
+The correlation-key pair moves **no** check contract, and that is its
+point. Setting `$COHAERA_CORRELATION_SECRET` changes the session key
+from an unkeyed digest to an HMAC, so the identity behind it cannot be
+enumerated out of the SIEM copy. It does not raise the 0.3: nothing
+raises that but a producer emitting a `session_id`. What the missing
+`session_id` costs is in the coverage column — the same workflow scores
+0.7 with one (the `signed` row) and 0.3 without, because correlation
+confidence multiplies through every check that reasons across events.
 
 ## What this does not show
 

@@ -1,4 +1,363 @@
 {
+  "contract": [
+    {
+      "contract": "06-no-manifest",
+      "inputs": [
+        "06-no-manifest.jsonl"
+      ],
+      "passes": [
+        {
+          "correlation_key_version": "sha256-unkeyed-v1",
+          "correlation_keyed": false,
+          "exit_code": 0,
+          "integrity_codes": [],
+          "note": "No --tool-manifest. The default.",
+          "pass": "absent",
+          "verdicts": [
+            {
+              "checks": {
+                "CH01_sequence_order": {
+                  "confidence": 0.0,
+                  "status": "not_evaluated"
+                },
+                "CH02_concealment_gap": {
+                  "confidence": 0.0,
+                  "status": "degraded"
+                },
+                "CH03_untrusted_to_consequential": {
+                  "confidence": 0.0,
+                  "status": "degraded"
+                },
+                "CH04_guardrail_overrun": {
+                  "confidence": 0.0,
+                  "status": "degraded"
+                },
+                "CH05_unpaired_calls": {
+                  "confidence": 0.0,
+                  "status": "degraded"
+                },
+                "CH06_evidence_integrity": {
+                  "confidence": 0.9,
+                  "status": "degraded"
+                },
+                "CH07_effect_contradiction": {
+                  "confidence": 0.0,
+                  "status": "degraded"
+                }
+              },
+              "correlation": {
+                "confidence": 1.0,
+                "kind": "session_id"
+              },
+              "coverage_completeness": 0.129,
+              "evidence_status": "verified_complete",
+              "finding_count": 0,
+              "max_severity": "info",
+              "schema": "cohaera:0.3",
+              "session_id": "lab-06-no-manifest",
+              "triggered_rules": [],
+              "verdict_id": "549ff3de75a2510c3dc2f2b4f8231dee"
+            }
+          ]
+        },
+        {
+          "correlation_key_version": "sha256-unkeyed-v1",
+          "correlation_keyed": false,
+          "exit_code": 0,
+          "integrity_codes": [],
+          "note": "--tool-manifest declares issue_refund a write.",
+          "pass": "supplied",
+          "verdicts": [
+            {
+              "checks": {
+                "CH01_sequence_order": {
+                  "confidence": 0.0,
+                  "status": "not_evaluated"
+                },
+                "CH02_concealment_gap": {
+                  "confidence": 1.0,
+                  "status": "evaluated"
+                },
+                "CH03_untrusted_to_consequential": {
+                  "confidence": 1.0,
+                  "status": "evaluated"
+                },
+                "CH04_guardrail_overrun": {
+                  "confidence": 1.0,
+                  "status": "evaluated"
+                },
+                "CH05_unpaired_calls": {
+                  "confidence": 1.0,
+                  "status": "evaluated"
+                },
+                "CH06_evidence_integrity": {
+                  "confidence": 0.9,
+                  "status": "degraded"
+                },
+                "CH07_effect_contradiction": {
+                  "confidence": 1.0,
+                  "status": "evaluated"
+                }
+              },
+              "correlation": {
+                "confidence": 1.0,
+                "kind": "session_id"
+              },
+              "coverage_completeness": 0.843,
+              "evidence_status": "verified_complete",
+              "finding_count": 1,
+              "max_severity": "high",
+              "schema": "cohaera:0.3",
+              "session_id": "lab-06-no-manifest",
+              "triggered_rules": [
+                "CH03_untrusted_to_completed_action"
+              ],
+              "verdict_id": "e06ec209861c3dd7351da7a50bf17c1c"
+            }
+          ]
+        }
+      ],
+      "question": "What can CH02, CH03 and CH04 say about a tool nothing declares?",
+      "title": "Capability manifest"
+    },
+    {
+      "contract": "07-chained-unsigned",
+      "inputs": [
+        "07-chained-unsigned.jsonl",
+        "07-chained-unsigned-signed.jsonl"
+      ],
+      "passes": [
+        {
+          "correlation_key_version": "sha256-unkeyed-v1",
+          "correlation_keyed": false,
+          "exit_code": 0,
+          "integrity_codes": [],
+          "note": "Hash chain, no signature. The first-adoption state.",
+          "pass": "chained",
+          "verdicts": [
+            {
+              "checks": {
+                "CH01_sequence_order": {
+                  "confidence": 0.0,
+                  "status": "not_evaluated"
+                },
+                "CH02_concealment_gap": {
+                  "confidence": 1.0,
+                  "status": "evaluated"
+                },
+                "CH03_untrusted_to_consequential": {
+                  "confidence": 0.0,
+                  "status": "not_evaluated"
+                },
+                "CH04_guardrail_overrun": {
+                  "confidence": 1.0,
+                  "status": "evaluated"
+                },
+                "CH05_unpaired_calls": {
+                  "confidence": 1.0,
+                  "status": "evaluated"
+                },
+                "CH06_evidence_integrity": {
+                  "confidence": 0.432,
+                  "status": "degraded"
+                },
+                "CH07_effect_contradiction": {
+                  "confidence": 1.0,
+                  "status": "evaluated"
+                }
+              },
+              "correlation": {
+                "confidence": 1.0,
+                "kind": "session_id"
+              },
+              "coverage_completeness": 0.633,
+              "evidence_status": "chained_unsigned",
+              "finding_count": 0,
+              "max_severity": "info",
+              "schema": "cohaera:0.3",
+              "session_id": "lab-07-chained-unsigned",
+              "triggered_rules": [],
+              "verdict_id": "a37460d87d616dfab61d995e9365ff77"
+            }
+          ]
+        },
+        {
+          "correlation_key_version": "sha256-unkeyed-v1",
+          "correlation_keyed": false,
+          "exit_code": 0,
+          "integrity_codes": [],
+          "note": "The same records, signed by the same collector.",
+          "pass": "signed",
+          "verdicts": [
+            {
+              "checks": {
+                "CH01_sequence_order": {
+                  "confidence": 0.0,
+                  "status": "not_evaluated"
+                },
+                "CH02_concealment_gap": {
+                  "confidence": 1.0,
+                  "status": "evaluated"
+                },
+                "CH03_untrusted_to_consequential": {
+                  "confidence": 0.0,
+                  "status": "not_evaluated"
+                },
+                "CH04_guardrail_overrun": {
+                  "confidence": 1.0,
+                  "status": "evaluated"
+                },
+                "CH05_unpaired_calls": {
+                  "confidence": 1.0,
+                  "status": "evaluated"
+                },
+                "CH06_evidence_integrity": {
+                  "confidence": 0.9,
+                  "status": "degraded"
+                },
+                "CH07_effect_contradiction": {
+                  "confidence": 1.0,
+                  "status": "evaluated"
+                }
+              },
+              "correlation": {
+                "confidence": 1.0,
+                "kind": "session_id"
+              },
+              "coverage_completeness": 0.7,
+              "evidence_status": "verified_complete",
+              "finding_count": 0,
+              "max_severity": "info",
+              "schema": "cohaera:0.3",
+              "session_id": "lab-07-chained-unsigned",
+              "triggered_rules": [],
+              "verdict_id": "b1c7572eaeb30a7d1b852a1031bf475c"
+            }
+          ]
+        }
+      ],
+      "question": "What does a hash chain establish when no key is supplied with it?",
+      "title": "Collector signature"
+    },
+    {
+      "contract": "08-anonymous",
+      "inputs": [
+        "08-anonymous.jsonl"
+      ],
+      "passes": [
+        {
+          "correlation_key_version": "sha256-unkeyed-v1",
+          "correlation_keyed": false,
+          "exit_code": 0,
+          "integrity_codes": [],
+          "note": "No $COHAERA_CORRELATION_SECRET. The default.",
+          "pass": "unkeyed",
+          "verdicts": [
+            {
+              "checks": {
+                "CH01_sequence_order": {
+                  "confidence": 0.0,
+                  "status": "not_evaluated"
+                },
+                "CH02_concealment_gap": {
+                  "confidence": 0.3,
+                  "status": "degraded"
+                },
+                "CH03_untrusted_to_consequential": {
+                  "confidence": 0.0,
+                  "status": "not_evaluated"
+                },
+                "CH04_guardrail_overrun": {
+                  "confidence": 0.3,
+                  "status": "degraded"
+                },
+                "CH05_unpaired_calls": {
+                  "confidence": 0.3,
+                  "status": "degraded"
+                },
+                "CH06_evidence_integrity": {
+                  "confidence": 0.9,
+                  "status": "degraded"
+                },
+                "CH07_effect_contradiction": {
+                  "confidence": 0.3,
+                  "status": "degraded"
+                }
+              },
+              "correlation": {
+                "confidence": 0.3,
+                "kind": "scoped_anonymous"
+              },
+              "coverage_completeness": 0.3,
+              "evidence_status": "verified_complete",
+              "finding_count": 0,
+              "max_severity": "info",
+              "schema": "cohaera:0.3",
+              "session_id": "anon-26ba7747d11429f5d31aa116d4244639-w5952366",
+              "triggered_rules": [],
+              "verdict_id": "36685c0cb9b5c38865046b11366b7db2"
+            }
+          ]
+        },
+        {
+          "correlation_key_version": "hmac-sha256-v1",
+          "correlation_keyed": true,
+          "exit_code": 0,
+          "integrity_codes": [],
+          "note": "$COHAERA_CORRELATION_SECRET set to the committed lab value.",
+          "pass": "keyed",
+          "verdicts": [
+            {
+              "checks": {
+                "CH01_sequence_order": {
+                  "confidence": 0.0,
+                  "status": "not_evaluated"
+                },
+                "CH02_concealment_gap": {
+                  "confidence": 0.3,
+                  "status": "degraded"
+                },
+                "CH03_untrusted_to_consequential": {
+                  "confidence": 0.0,
+                  "status": "not_evaluated"
+                },
+                "CH04_guardrail_overrun": {
+                  "confidence": 0.3,
+                  "status": "degraded"
+                },
+                "CH05_unpaired_calls": {
+                  "confidence": 0.3,
+                  "status": "degraded"
+                },
+                "CH06_evidence_integrity": {
+                  "confidence": 0.9,
+                  "status": "degraded"
+                },
+                "CH07_effect_contradiction": {
+                  "confidence": 0.3,
+                  "status": "degraded"
+                }
+              },
+              "correlation": {
+                "confidence": 0.3,
+                "kind": "scoped_anonymous"
+              },
+              "coverage_completeness": 0.3,
+              "evidence_status": "verified_complete",
+              "finding_count": 0,
+              "max_severity": "info",
+              "schema": "cohaera:0.3",
+              "session_id": "anon-319a0ad30aaff85c3aa858811d1b0066-w5952366",
+              "triggered_rules": [],
+              "verdict_id": "0338abb714a3471d7ee0e3748b488559"
+            }
+          ]
+        }
+      ],
+      "question": "What is a session worth when the producer did not say where it began?",
+      "title": "Correlation key"
+    }
+  ],
   "detector_version": "0.3.0",
   "evidence_as_of": 1785720000.0,
   "evidence_max_age_s": 86400.0,
@@ -10,6 +369,10 @@
     "04-contradiction.jsonl": "22655d21bc5c6a4510db1b3733510b743193b6ba4c5e89849e21d1cdaafcfc04",
     "04b-unbound-receipt.jsonl": "dec1f64e8518c579dcf9bf5e511394d7c30ddfef04b8156fd20f07bf0b9df999",
     "05-partial-attestation.jsonl": "fb58b1fdbe4f3ece9e2a0d5141dde3fba6278e4bba5a4570d2d1c40058b24eb5",
+    "06-no-manifest.jsonl": "39cb86a75ca10a98ff38688cfb8ee584409e2402b15f2b2fdc4eccdd0ac880eb",
+    "07-chained-unsigned-signed.jsonl": "7fd8c7d4030a8cd017fbcbb260b56dac653ea00e4886b86492d7b56e059c2607",
+    "07-chained-unsigned.jsonl": "e4106a6bbbfa2fb4b06b0066e20f361c2a2e72af3df8bafaccc585db96d81081",
+    "08-anonymous.jsonl": "91f2daea176d5dbf28a8d1a06b6f7d6c8b97ee862842c7418e5d35d4dd451d10",
     "capability-manifest.json": "81fda187703e23ff92f7b825ab3500217b91154a9f902cfcdc1b4d05b39b17a0",
     "trust-store.json": "c00f42cffaaf765e58aa3ae8c107845c564a99b6d6d061a9473cee5532d0e0f7"
   },
@@ -20,6 +383,40 @@
       "pass": "first",
       "verdicts": [
         {
+          "checks": {
+            "CH01_sequence_order": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            },
+            "CH02_concealment_gap": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH03_untrusted_to_consequential": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            },
+            "CH04_guardrail_overrun": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH05_unpaired_calls": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH06_evidence_integrity": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH07_effect_contradiction": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            }
+          },
+          "correlation": {
+            "confidence": 1.0,
+            "kind": "session_id"
+          },
           "coverage_completeness": 0.714,
           "evidence_status": "verified_complete",
           "finding_count": 0,
@@ -39,6 +436,40 @@
       "pass": "replay",
       "verdicts": [
         {
+          "checks": {
+            "CH01_sequence_order": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            },
+            "CH02_concealment_gap": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH03_untrusted_to_consequential": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            },
+            "CH04_guardrail_overrun": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH05_unpaired_calls": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH06_evidence_integrity": {
+              "confidence": 0.0,
+              "status": "degraded"
+            },
+            "CH07_effect_contradiction": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            }
+          },
+          "correlation": {
+            "confidence": 1.0,
+            "kind": "session_id"
+          },
           "coverage_completeness": 0.571,
           "evidence_status": "inadmissible",
           "finding_count": 1,
@@ -62,6 +493,40 @@
       "pass": "fork",
       "verdicts": [
         {
+          "checks": {
+            "CH01_sequence_order": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            },
+            "CH02_concealment_gap": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH03_untrusted_to_consequential": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            },
+            "CH04_guardrail_overrun": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH05_unpaired_calls": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH06_evidence_integrity": {
+              "confidence": 0.0,
+              "status": "degraded"
+            },
+            "CH07_effect_contradiction": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            }
+          },
+          "correlation": {
+            "confidence": 1.0,
+            "kind": "session_id"
+          },
           "coverage_completeness": 0.571,
           "evidence_status": "inadmissible",
           "finding_count": 2,
@@ -89,6 +554,40 @@
       "title": "Normal",
       "verdicts": [
         {
+          "checks": {
+            "CH01_sequence_order": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            },
+            "CH02_concealment_gap": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH03_untrusted_to_consequential": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            },
+            "CH04_guardrail_overrun": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH05_unpaired_calls": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH06_evidence_integrity": {
+              "confidence": 0.9,
+              "status": "degraded"
+            },
+            "CH07_effect_contradiction": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            }
+          },
+          "correlation": {
+            "confidence": 1.0,
+            "kind": "session_id"
+          },
           "coverage_completeness": 0.7,
           "evidence_status": "verified_complete",
           "finding_count": 0,
@@ -110,6 +609,40 @@
       "title": "Behaviour change",
       "verdicts": [
         {
+          "checks": {
+            "CH01_sequence_order": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            },
+            "CH02_concealment_gap": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH03_untrusted_to_consequential": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH04_guardrail_overrun": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH05_unpaired_calls": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH06_evidence_integrity": {
+              "confidence": 0.9,
+              "status": "degraded"
+            },
+            "CH07_effect_contradiction": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            }
+          },
+          "correlation": {
+            "confidence": 1.0,
+            "kind": "session_id"
+          },
           "coverage_completeness": 0.843,
           "evidence_status": "verified_complete",
           "finding_count": 1,
@@ -136,6 +669,40 @@
       "title": "Evidence failure",
       "verdicts": [
         {
+          "checks": {
+            "CH01_sequence_order": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            },
+            "CH02_concealment_gap": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH03_untrusted_to_consequential": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            },
+            "CH04_guardrail_overrun": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH05_unpaired_calls": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH06_evidence_integrity": {
+              "confidence": 0.0,
+              "status": "degraded"
+            },
+            "CH07_effect_contradiction": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            }
+          },
+          "correlation": {
+            "confidence": 1.0,
+            "kind": "session_id"
+          },
           "coverage_completeness": 0.571,
           "evidence_status": "inadmissible",
           "finding_count": 1,
@@ -159,6 +726,40 @@
       "title": "Outcome contradiction",
       "verdicts": [
         {
+          "checks": {
+            "CH01_sequence_order": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            },
+            "CH02_concealment_gap": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH03_untrusted_to_consequential": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            },
+            "CH04_guardrail_overrun": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH05_unpaired_calls": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH06_evidence_integrity": {
+              "confidence": 0.9,
+              "status": "degraded"
+            },
+            "CH07_effect_contradiction": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            }
+          },
+          "correlation": {
+            "confidence": 1.0,
+            "kind": "session_id"
+          },
           "coverage_completeness": 0.7,
           "evidence_status": "verified_complete",
           "finding_count": 1,
@@ -182,6 +783,40 @@
       "title": "Unbound receipt",
       "verdicts": [
         {
+          "checks": {
+            "CH01_sequence_order": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            },
+            "CH02_concealment_gap": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH03_untrusted_to_consequential": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            },
+            "CH04_guardrail_overrun": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH05_unpaired_calls": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH06_evidence_integrity": {
+              "confidence": 0.9,
+              "status": "degraded"
+            },
+            "CH07_effect_contradiction": {
+              "confidence": 0.5,
+              "status": "degraded"
+            }
+          },
+          "correlation": {
+            "confidence": 1.0,
+            "kind": "session_id"
+          },
           "coverage_completeness": 0.629,
           "evidence_status": "verified_complete",
           "finding_count": 1,
@@ -205,6 +840,40 @@
       "title": "Partial attestation",
       "verdicts": [
         {
+          "checks": {
+            "CH01_sequence_order": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            },
+            "CH02_concealment_gap": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH03_untrusted_to_consequential": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            },
+            "CH04_guardrail_overrun": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH05_unpaired_calls": {
+              "confidence": 1.0,
+              "status": "evaluated"
+            },
+            "CH06_evidence_integrity": {
+              "confidence": 0.833,
+              "status": "degraded"
+            },
+            "CH07_effect_contradiction": {
+              "confidence": 0.0,
+              "status": "not_evaluated"
+            }
+          },
+          "correlation": {
+            "confidence": 1.0,
+            "kind": "session_id"
+          },
           "coverage_completeness": 0.548,
           "evidence_status": "verified_prefix",
           "finding_count": 0,
