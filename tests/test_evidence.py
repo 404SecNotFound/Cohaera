@@ -166,6 +166,11 @@ from cohaera.model import SESSION_SCHEMA, Event, Session
 from cohaera.validate import IngestReport
 from tools.collector_sign import key_id_for, keys_document, sign_stream
 from tools.receipt_adapters import (
+    _ADAPTERS,
+    ASSURANCE_CLIENT,
+    ASSURANCE_LEVELS,
+    ASSURANCE_OBJECT,
+    ASSURANCE_OPERATION,
     ReceiptAdapterError,
     adapt,
     binding_for,
@@ -3420,3 +3425,94 @@ def test_r06_the_ledger_state_read_is_what_the_run_was_judged_against(tmp_path):
     assert again.state_digest() == seeded.state_digest(), (
         "same streams at the same extent and head: the identity of the state "
         "that judgments are made against has not moved")
+
+
+# =====================================================================
+# R-17. A fallback whose meaning is weaker has to say so.
+# =====================================================================
+
+
+@pytest.mark.parametrize("authority,response,kind,assurance", [
+    # The strong path and the weak path of the same adapter, side by side.
+    ("kubernetes.apply", {"metadata": {"resourceVersion": "88213"}},
+     "resource_version", ASSURANCE_OPERATION),
+    ("kubernetes.apply", {"metadata": {"uid": "u-1"}},
+     "resource_uid", ASSURANCE_OBJECT),
+    ("github.create_pull_request", {"node_id": "PR_kwDO"},
+     "node_id", ASSURANCE_OPERATION),
+    ("github.create_pull_request", {"number": 6},
+     "pull_request_number", ASSURANCE_OBJECT),
+    ("jira.create_issue", {"key": "OPS-1"}, "issue_key", ASSURANCE_OPERATION),
+    ("jira.create_issue", {"id": "10001"}, "issue_id", ASSURANCE_OBJECT),
+    ("postgres.commit", {"commit_lsn": "0/16B3748"},
+     "commit_lsn", ASSURANCE_OPERATION),
+    ("postgres.commit", {"pg_current_wal_lsn": "0/16B3748"},
+     "cluster_wal_position", ASSURANCE_OBJECT),
+    ("smtp.send", {"server_message_id": "<a@h>"},
+     "message_id", ASSURANCE_OPERATION),
+    ("smtp.send", {"Message-ID": "<a@h>"},
+     "client_message_id", ASSURANCE_CLIENT),
+])
+def test_a_weaker_path_gets_its_own_kind_and_says_it_is_weaker(
+        authority, response, kind, assurance):
+    """R-17, reproduced across every adapter that had the fault.
+
+    These pairs used to emit the SAME kind. `metadata.uid` identifies the
+    object for its whole life while `resourceVersion` identifies one mutation
+    of it; a PR number is scoped to a repository while a node id is global; a
+    Jira numeric id is not an issue key; and `pg_current_wal_lsn` is the
+    cluster's write position, which moves because ANYBODY wrote. A consumer
+    given the second under the first's name has no way to tell the difference
+    between a weaker receipt and a forged one.
+    """
+    receipt = adapt(authority, response, BIND)
+    assert receipt["kind"] == kind
+    assert receipt["assurance"] == assurance
+    parsed, codes = EffectReceipt.parse(receipt)
+    assert parsed is not None and codes == ()
+
+
+def test_no_adapter_claims_an_effect_is_confirmed():
+    """None of the levels means the provider was asked. Nothing in this file
+    contacts a provider, and a level called `verified` would be read as though
+    something had."""
+    assert ASSURANCE_OPERATION == "provider_returned_operation"
+    for level in ASSURANCE_LEVELS:
+        assert "verified" not in level and "confirmed" not in level
+
+
+def test_a_nonfinite_number_is_not_an_identifier():
+    """R-17. `float` went through `str` unconditionally, so a response carrying
+    nan became the identifier text "nan" -- a parse failure wearing an
+    identifier, which would have been stored and looked up by a human who found
+    nothing."""
+    for value in (float("nan"), float("inf"), float("-inf")):
+        assert adapt("aws.s3.put_object", {"VersionId": value}, BIND) is None
+
+
+def test_authority_scope_travels_when_the_producer_has_it():
+    """R-17. "stripe" is a company, not an authority. A charge id is unique
+    within one account and everybody has at least two, because test mode is
+    one."""
+    receipt = adapt("stripe.charge", {"id": "ch_1"}, BIND,
+                    scope={"account": "acct_9", "livemode": "true"})
+    assert receipt["scope"] == {"account": "acct_9", "livemode": "true"}
+    parsed, codes = EffectReceipt.parse(receipt)
+    assert parsed is not None and codes == (), (
+        "an optional scope must not make the receipt unparseable")
+
+
+def test_a_producer_without_a_scope_omits_it_rather_than_inventing_one():
+    assert "scope" not in adapt("stripe.charge", {"id": "ch_1"}, BIND)
+    assert "scope" not in adapt("stripe.charge", {"id": "ch_1"}, BIND, scope={})
+
+
+def test_every_adapter_path_declares_a_known_assurance_level():
+    """The registry is edited by hand and a typo in an assurance string would
+    produce a receipt whose worth nothing can compare."""
+    for name, spec in _ADAPTERS.items():
+        for path, kind, assurance in spec["paths"]:
+            assert assurance in ASSURANCE_LEVELS, (
+                f"{name}:{path} declares unknown assurance {assurance!r}")
+            assert kind and kind.replace("_", "").isalnum(), (
+                f"{name}:{path} has a malformed kind {kind!r}")
