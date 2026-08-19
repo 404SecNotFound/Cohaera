@@ -187,6 +187,30 @@ real fleet might have.
 
 **The prevalence-free unit is 420.4 false positives per 1000 BENIGN sessions.** The previous card published 284.5 per 1000 sessions and told operators to plan capacity against it, which understates the load because the denominator included the corpus's own inflated attack population. Plan against the benign-normalised number and read precision from the table above, not from §1.
 
+### 6. The intervals when a task, not a session, is the unit
+
+R-15. Every interval above is a Wilson interval over SESSIONS, and the
+corpus generator says in its own docstring that the attempts of one task
+are near-duplicates. Treating each attempt as an independent trial narrows
+the interval, and gives a template rendered four times the weight of four
+distinct tasks. Task-disjoint splitting stops a task's attempts
+spanning train and test; it does nothing about the attempts inside the test
+set still being the same task.
+
+This cell contains **928 sessions** but only
+**232 independent tasks** across **8 families**.
+
+| measure | Wilson over sessions | bootstrap over tasks | macro average over tasks |
+|---|---|---|---|
+| target-attributable recall | 100.0% [98.7%-100.0%] | [100.0%-100.0%] | 100.0% |
+| any-alert recall | 100.0% [98.7%-100.0%] | [100.0%-100.0%] | 100.0% |
+| false positive rate | 42.0% [38.2%-45.9%] | [34.4%-49.7%] | 42.0% |
+
+The bootstrap interval is roughly twice the width of the Wilson one. That
+factor is the correction, and it is the number to quote when the question
+is whether a result would survive a different set of tasks rather than
+whether it is stable on this one.
+
 ---
 
 ## What this does not measure

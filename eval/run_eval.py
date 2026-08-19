@@ -632,6 +632,69 @@ def render_card(results: dict[str, Any], seed: int, summary: dict,
         f"population. Plan against the benign-normalised number and read precision "
         f"from the table above, not from \u00a71.\n")
 
+    # ---- clustering -----------------------------------------------------
+    add("### 6. The intervals when a task, not a session, is the unit")
+    add("")
+    add("R-15. Every interval above is a Wilson interval over SESSIONS, and the")
+    add("corpus generator says in its own docstring that the attempts of one task")
+    add("are near-duplicates. Treating each attempt as an independent trial narrows")
+    add("the interval, and gives a template rendered four times the weight of four")
+    add("distinct tasks. Task-disjoint splitting stops a task's attempts")
+    add("spanning train and test; it does nothing about the attempts inside the test")
+    add("set still being the same task.")
+    add("")
+    ind = unseen_manifest["sample_independence"]
+    add(f"This cell contains **{ind['sessions']} sessions** but only")
+    add(f"**{ind['tasks']} independent tasks** across **{ind['families']} "
+        f"families**.")
+    add("")
+    add("| measure | Wilson over sessions | bootstrap over tasks | macro average "
+        "over tasks |")
+    add("|---|---|---|---|")
+    for label, key in (("target-attributable recall",
+                        "target_attributable_recall"),
+                       ("any-alert recall", "any_alert_recall"),
+                       ("false positive rate", "false_positive_rate")):
+        wilson_rate = unseen_manifest[key]
+        cluster = unseen_manifest["cluster_aware"][key]
+        t_lo, t_hi = cluster["task_bootstrap_ci95"]
+        add(f"| {label} | {wilson_rate['value']:.1%} "
+            f"[{wilson_rate['ci95_low']:.1%}-{wilson_rate['ci95_high']:.1%}] "
+            f"| [{t_lo:.1%}-{t_hi:.1%}] "
+            f"| {cluster['task_macro_average']:.1%} |")
+    add("")
+    add("The bootstrap interval is roughly twice the width of the Wilson one. That")
+    add("factor is the correction, and it is the number to quote when the question")
+    add("is whether a result would survive a different set of tasks rather than")
+    add("whether it is stable on this one.")
+    add("")
+    # Only for measures that are not already saturated. A rate of exactly 0% or
+    # 100% has zero variance under ANY resampling scheme, so a zero-width
+    # family interval there says nothing about the corpus -- reporting it as a
+    # finding would be reading a tautology as evidence.
+    degenerate = [
+        label for label, key in (("target-attributable recall",
+                                  "target_attributable_recall"),
+                                 ("any-alert recall", "any_alert_recall"),
+                                 ("false positive rate", "false_positive_rate"))
+        if 0.0 < unseen_manifest[key]["value"] < 1.0
+        and (unseen_manifest["cluster_aware"][key]["family_bootstrap_ci95"][0]
+             == unseen_manifest["cluster_aware"][key]["family_bootstrap_ci95"][1])
+    ]
+    if degenerate:
+        add("**A finding about the corpus rather than about the detector.** "
+            "Resampling")
+        add(f"the {ind['families']} families cannot move "
+            f"{'these measures' if len(degenerate) > 1 else 'this measure'} "
+            f"({', '.join(degenerate)}).")
+        add("Every family has an identical benign and attack count and produces an")
+        add("identical rate, so a family-level interval has zero width. That is not")
+        add("a strong result -- it is a measurement of how regular the generator is.")
+        add("A real fleet's workloads do not come in equal portions and do not")
+        add("detect equally, and a family holdout on this corpus is therefore")
+        add("testing less than the name suggests.")
+        add("")
+
     # ---- honesty --------------------------------------------------------
     add("---")
     add("")

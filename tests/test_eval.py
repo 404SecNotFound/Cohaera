@@ -67,6 +67,7 @@ from eval.harness import (
     REGIME_FAMILY_HOLDOUT,
     REGIME_RANDOM,
     REGIME_TASK_DISJOINT,
+    CorpusIntegrityError,
     Labelled,
     LeakageError,
     SessionCache,
@@ -75,6 +76,7 @@ from eval.harness import (
     assert_disjoint,
     fit_grammar,
     leakage_experiment,
+    load_corpus,
     run_condition,
     split,
 )
@@ -82,6 +84,8 @@ from eval.metrics import (
     Outcome,
     base_rate_projection,
     check_attribution,
+    cluster_bootstrap,
+    macro_average,
     summarise,
     wilson,
 )
@@ -1230,3 +1234,161 @@ def test_a_correct_rotation_produces_no_finding_including_at_the_handover():
     assert straddling >= 1, (
         "no session straddles the rotation instant, so the boundary case this "
         "kind exists for is not in the corpus")
+
+
+# ---------------------------------------------------------------------------
+# R-16. The corpus must be a bijection, because every metric divides by it.
+# ---------------------------------------------------------------------------
+
+_LABEL = {"session_id": "s1", "family": "f", "task_id": "t", "kind": "benign",
+          "is_attack": False, "target_check": "", "attempt": 0}
+_EVENT = {"session_id": "s1", "event_type": "session_start",
+          "timestamp": 1000.0, "data": {}}
+
+
+def _corpus(tmp_path, labels: list[dict], events: list[dict]) -> Path:
+    (tmp_path / "c.labels.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in labels), encoding="utf-8")
+    (tmp_path / "c.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in events), encoding="utf-8")
+    return tmp_path
+
+
+def test_a_clean_corpus_still_loads(tmp_path):
+    rows = load_corpus(_corpus(tmp_path, [_LABEL], [_EVENT]), "c")
+    assert [r.session_id for r in rows] == ["s1"]
+
+
+def test_a_duplicate_label_is_refused_rather_than_overwriting(tmp_path):
+    """The scored truth was whichever copy the generator wrote last, and
+    nothing anywhere said a choice had been made."""
+    other = dict(_LABEL, is_attack=True, target_check="CH02_concealment_gap")
+    with pytest.raises(CorpusIntegrityError, match="duplicate"):
+        load_corpus(_corpus(tmp_path, [_LABEL, other], [_EVENT]), "c")
+
+
+def test_a_label_with_no_telemetry_is_refused(tmp_path):
+    """This is the dangerous one. A session that failed to render leaves its
+    label out of the denominator, so recall goes UP -- the corpus quietly
+    stops asking the question the detector was going to fail."""
+    orphan = dict(_LABEL, session_id="s2")
+    with pytest.raises(CorpusIntegrityError, match="no telemetry"):
+        load_corpus(_corpus(tmp_path, [_LABEL, orphan], [_EVENT]), "c")
+
+
+def test_telemetry_with_no_label_names_what_is_missing(tmp_path):
+    """It used to raise KeyError, which is loud and says nothing about how
+    many are unlabelled or which."""
+    stray = dict(_EVENT, session_id="s3")
+    with pytest.raises(CorpusIntegrityError, match=r"no label.*s3"):
+        load_corpus(_corpus(tmp_path, [_LABEL], [_EVENT, stray]), "c")
+
+
+def test_the_committed_corpus_is_a_bijection():
+    """And the real one, which is the only instance that matters."""
+    data = Path(__file__).resolve().parent.parent / "eval" / "corpus" / "data"
+    if not data.is_dir():
+        pytest.skip("corpus not generated in this checkout")
+    conditions = sorted({p.name.split(".")[0] for p in data.glob("*.jsonl")})
+    assert conditions, "no corpus conditions found"
+    for condition in conditions:
+        load_corpus(data, condition)
+
+
+# ---------------------------------------------------------------------------
+# R-15. The independent unit is a task, not a session.
+# ---------------------------------------------------------------------------
+
+def _clustered_outcome(sid: str, task: str, family: str, *, attack: bool,
+             flagged: bool) -> Outcome:
+    return Outcome(
+        session_id=sid, family=family, task_id=task, kind="k",
+        is_attack=attack, target_check="CH02_concealment_gap" if attack else "",
+        flagged=flagged,
+        fired_checks=frozenset({"CH02_concealment_gap"}) if flagged
+        else frozenset(),
+        completeness=1.0, target_evaluable=True)
+
+
+def test_the_bootstrap_is_deterministic():
+    """A published interval that moves between runs is not a measurement, and
+    the whole card is regenerated and diffed in CI."""
+    clusters = [(i % 3, 4) for i in range(30)]
+    assert cluster_bootstrap(clusters) == cluster_bootstrap(clusters)
+
+
+def test_clustered_data_gets_a_wider_interval_than_wilson_would_give():
+    """R-15, reproduced.
+
+    Twenty tasks, four near-identical attempts each. Every attempt of a task
+    agrees with its siblings, which is exactly what the generator says it
+    builds. Wilson sees 80 independent trials; there are 20. The interval has
+    to widen, or the card is claiming a precision the sample cannot support.
+    """
+    outcomes = []
+    for task in range(20):
+        # Half the tasks are detected, all four attempts alike.
+        hit = task % 2 == 0
+        for attempt in range(4):
+            outcomes.append(_clustered_outcome(f"s{task}-{attempt}", f"t{task}", "f",
+                                     attack=True, flagged=hit))
+    wilson_lo, wilson_hi = wilson(40, 80)
+    boot_lo, boot_hi = cluster_bootstrap(
+        [(4 if t % 2 == 0 else 0, 4) for t in range(20)])
+    assert (boot_hi - boot_lo) > (wilson_hi - wilson_lo) * 1.5, (
+        f"clustered bootstrap [{boot_lo:.3f}-{boot_hi:.3f}] is not meaningfully "
+        f"wider than Wilson [{wilson_lo:.3f}-{wilson_hi:.3f}], so the "
+        f"correction is not doing anything")
+
+
+def test_one_cluster_reports_no_interval_rather_than_a_point():
+    """With nothing to resample, an interval would be an invention."""
+    assert cluster_bootstrap([(2, 4)]) == (0.0, 1.0)
+
+
+def test_the_macro_average_gives_every_task_one_vote():
+    """A micro average is dominated by whichever task the generator rendered
+    most often. Nine attempts of a detected task and one of a missed one is
+    90% by session and 50% by task."""
+    outcomes = [_clustered_outcome(f"a{i}", "big", "f", attack=True, flagged=True)
+                for i in range(9)]
+    outcomes.append(_clustered_outcome("b0", "small", "f", attack=True, flagged=False))
+    micro = sum(1 for o in outcomes if o.flagged) / len(outcomes)
+    macro = macro_average(outcomes, "task_id", lambda o: o.flagged)
+    assert micro == pytest.approx(0.9)
+    assert macro == pytest.approx(0.5)
+
+
+def test_the_card_publishes_what_the_sample_independently_contains():
+    """The gap between sessions and tasks IS the correction factor, so it is
+    published beside the session count rather than left to be derived."""
+    card = json.loads(
+        (Path(__file__).resolve().parent.parent
+         / "eval" / "evaluation-card.json").read_text(encoding="utf-8"))
+
+    def find(node):
+        if isinstance(node, dict):
+            if "sample_independence" in node:
+                return node["sample_independence"]
+            for value in node.values():
+                got = find(value)
+                if got:
+                    return got
+        if isinstance(node, list):
+            for value in node:
+                got = find(value)
+                if got:
+                    return got
+        return None
+
+    independence_block = find(card)
+    assert independence_block, "no sample_independence in the card"
+    assert independence_block["tasks"] < independence_block["sessions"], (
+        "if tasks equalled sessions there would be no clustering to correct")
+
+
+def test_the_card_says_the_intervals_are_wider_than_wilson():
+    card = (Path(__file__).resolve().parent.parent
+            / "eval" / "EVALUATION-CARD.md").read_text(encoding="utf-8")
+    assert "bootstrap over tasks" in card
+    assert "independent tasks" in card

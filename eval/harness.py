@@ -112,14 +112,40 @@ class Labelled:
     attempt: int = 0
 
 
+class CorpusIntegrityError(ValueError):
+    """The labels and the telemetry do not describe the same set of sessions."""
+
+
 def load_corpus(data_dir: Path, condition: str) -> list[Labelled]:
-    """Read one condition's telemetry and labels back into memory."""
-    labels = {}
+    """Read one condition's telemetry and labels back into memory.
+
+    R-16. This used to build a dictionary keyed on session id and take whatever
+    it found. Three ways for a corpus to be wrong therefore produced a number
+    rather than an error:
+
+      * a DUPLICATE label silently replaced the earlier row, so the scored
+        truth was whichever copy the generator happened to write last;
+      * a label with no telemetry was ignored, so a session that failed to
+        render left a hole in the denominator and the recall went up;
+      * telemetry with no label raised ``KeyError`` -- which is at least loud,
+        but says nothing about how many are missing or which.
+
+    None of these is hypothetical for a generator with eight families, four
+    attack shapes and several prose variants per task. The corpus IS the
+    ground truth in this project; a defect in it does not fail a test, it
+    changes a published metric. So the sets are compared for equality and the
+    report names the sessions rather than the count.
+    """
+    labels: dict[str, dict] = {}
+    duplicates: list[str] = []
     for line in (data_dir / f"{condition}.labels.jsonl").read_text(
             encoding="utf-8").splitlines():
         if line.strip():
             row = json.loads(line)
-            labels[row["session_id"]] = row
+            sid = row["session_id"]
+            if sid in labels:
+                duplicates.append(sid)
+            labels[sid] = row
 
     by_session: dict[str, list[dict]] = defaultdict(list)
     for line in (data_dir / f"{condition}.jsonl").read_text(
@@ -127,6 +153,30 @@ def load_corpus(data_dir: Path, condition: str) -> list[Labelled]:
         if line.strip():
             rec = json.loads(line)
             by_session[rec["session_id"]].append(rec)
+
+    problems = []
+    if duplicates:
+        problems.append(
+            f"{len(duplicates)} duplicate label(s), which silently overwrite: "
+            f"{sorted(set(duplicates))[:5]}")
+    orphan_labels = sorted(set(labels) - set(by_session))
+    if orphan_labels:
+        problems.append(
+            f"{len(orphan_labels)} label(s) with no telemetry, which leave a "
+            f"hole in the denominator: {orphan_labels[:5]}")
+    unlabelled = sorted(set(by_session) - set(labels))
+    if unlabelled:
+        problems.append(
+            f"{len(unlabelled)} session(s) with no label, which cannot be "
+            f"scored against anything: {unlabelled[:5]}")
+    empty = sorted(sid for sid, events in by_session.items() if not events)
+    if empty:
+        problems.append(f"{len(empty)} empty session(s): {empty[:5]}")
+    if problems:
+        raise CorpusIntegrityError(
+            f"{condition}: the corpus is not a bijection between labels and "
+            f"telemetry, and every published metric divides by one of these "
+            f"sets.\n  " + "\n  ".join(problems))
 
     out = []
     for sid, events in by_session.items():
