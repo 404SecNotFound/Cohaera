@@ -438,6 +438,34 @@ CLAIMS = (
     Claim("README plain-benign session count", README,
           re.compile(r"\*plain\* benign sessions \| \*\*\d+ / (\d+)\*\*"),
           card_plain_benign_total),
+    # The pitch section quotes the same four numbers in prose, for somebody
+    # reading them aloud. Prose is exactly where the C4-11 drift happened, so
+    # the spoken version is derived like everything else. The patterns are
+    # blockquote, so the line-joining classes have to admit the '>' marker as
+    # well as whitespace. The patterns are
+    # deliberately unlike the table ones above: ``stated`` takes the first
+    # match in the file, so a phrasing that collided would shadow the claim it
+    # was meant to duplicate and quietly stop checking it.
+    Claim("README pitch false positives per 1,000 benign", README,
+          re.compile(r"([\d.]+) false positives per 1,000 benign[\s>]+sessions"),
+          card_headline_fp_per_1000_benign),
+    Claim("README pitch precision at a low base rate", README,
+          re.compile(r"([\d.]+)% precision at a 0\.1% attack base rate"),
+          card_precision_at_low_base_rate),
+    Claim("README pitch constructed evasions", README,
+          re.compile(r"(\d+) evasions[\s>]+constructed, \d+ still working"),
+          count_constructed_evasions),
+    Claim("README pitch working evasions", README,
+          re.compile(r"\d+ evasions[\s>]+constructed, (\d+) still working"),
+          count_working_evasions),
+    # And the "Other documents" table, which carried the same pair with nothing
+    # deriving them -- the condition this whole file exists to make impossible.
+    Claim("README contents-table constructed evasions", README,
+          re.compile(r"(\d+) ways to defeat this, \d+ still working"),
+          count_constructed_evasions),
+    Claim("README contents-table working evasions", README,
+          re.compile(r"\d+ ways to defeat this, (\d+) still working"),
+          count_working_evasions),
 )
 
 
