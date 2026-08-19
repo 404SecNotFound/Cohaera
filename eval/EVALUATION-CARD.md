@@ -31,12 +31,12 @@ tools are called, and whether any out-of-band capability declaration exists.
 
 | vocabulary | capability source | attributable recall | any-alert recall | false positive rate | precision | self-reported coverage |
 |---|---|---|---|---|---|---|
-| unseen | manifest | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 42.0% [38%-46%] (264/628) | 53.2% [49%-57%] (300/564) | 0.76 |
-| unseen | producer_flag | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 42.0% [38%-46%] (264/628) | 53.2% [49%-57%] (300/564) | 0.62 |
+| unseen | manifest | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 42.0% [38%-46%] (264/628) | 53.2% [49%-57%] (300/564) | 0.65 |
+| unseen | producer_flag | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 42.0% [38%-46%] (264/628) | 53.2% [49%-57%] (300/564) | 0.54 |
 | unseen | name_only | 34.7% [30%-40%] (104/300) | 53.3% [48%-59%] (160/300) | 15.3% [13%-18%] (96/628) | 62.5% [56%-68%] (160/256) | 0.13 |
-| lexical | manifest | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 42.0% [38%-46%] (264/628) | 53.2% [49%-57%] (300/564) | 0.76 |
-| lexical | producer_flag | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 42.0% [38%-46%] (264/628) | 53.2% [49%-57%] (300/564) | 0.62 |
-| lexical | name_only | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 45.9% [42%-50%] (288/628) | 51.0% [47%-55%] (300/588) | 0.62 |
+| lexical | manifest | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 42.0% [38%-46%] (264/628) | 53.2% [49%-57%] (300/564) | 0.65 |
+| lexical | producer_flag | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 42.0% [38%-46%] (264/628) | 53.2% [49%-57%] (300/564) | 0.54 |
+| lexical | name_only | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 45.9% [42%-50%] (288/628) | 51.0% [47%-55%] (300/588) | 0.53 |
 
 **Two recall columns, because they are two different claims.** *Attributable* recall counts an attack as detected only when the check the corpus holds RESPONSIBLE for that behaviour fired. *Any-alert* recall counts it when anything fired. Where they differ, the gap is attacks caught by a check that was never asked about them -- real collateral detection, and not evidence that the responsible check works. Reporting only the second is how a check that declined every one of its own labelled examples came to be published at full recall; see §2.
 
@@ -46,7 +46,7 @@ tools are called, and whether any out-of-band capability declaration exists.
 
 Read the false-positive column carefully, because it moves the wrong way for the right reason. Under `unseen`/`name_only` the false positive rate *drops* to 15.3% and precision *rises* to 62.5%, a +9.3% swing that a card reporting precision alone would have published as an improvement. It is not one. Every check that needs to know whether a call was consequential -- CH02, CH03, CH04 -- cannot fire at all, because every tool classifies as `unknown`. The detector got quieter by going blind.
 
-The thing that makes that visible is Cohaera's own coverage figure, which falls from 0.62 to 0.13 in the same cell. Coverage reporting was built for exactly this and this is the first measurement that shows it earning its place: **the precision number is misleading and the coverage number next to it says so.**
+The thing that makes that visible is Cohaera's own coverage figure, which falls from 0.53 to 0.13 in the same cell. Coverage reporting was built for exactly this and this is the first measurement that shows it earning its place: **the precision number is misleading and the coverage number next to it says so.**
 
 ### 2. What a random split would have bought
 
@@ -149,6 +149,8 @@ Most of the corpus is chained but **not signed**, and CH06 reports `degraded` ra
 **One kind was considered and declined: a replayed stream.** A captured stream re-fed months later passes every check in the module, and the only thing that separates it from a legitimately delayed batch is the age of a timestamp — the telemetry is otherwise byte-identical. Labelling one of two identical inputs `attack` would measure the label rather than a detector, which is the same reason `attack_forged_success` is absent. The freshness bound is real and is tested in `tests/test_evidence.py`; what it costs on a delayed batch is a property of the bound the operator sets, not of this corpus.
 
 The same goes for the seen-stream ledger, and it explains a number in this card that moves the wrong way. Cross-run replay needs TWO runs against shared state; this harness scores one run, so the ledger cannot be measured here at all and is tested directly instead. What it does do here is lower `mean_coverage_completeness`, because CH06 now reports `NO_STREAM_LEDGER` on every session — the eval runs without one. **Coverage fell because a control was added and is not in force**, which is the behaviour the contract is for: an absent check that says nothing would have left the number flat and the blind spot invisible.
+
+`mean_coverage_completeness` moved down a second time, and that one was a defect rather than a new control. CH04's contract used to add `policy_semantics` and `approval_binding` to its required surfaces only when the session ALREADY contained policy events, so the single state that cost CH04 nothing was the state where no guardrail evidence existed at all: a consequential call, no policy event, no approval reported `evaluated` at confidence 1.0 with nothing missing. Most of this corpus is in that state, because most benign sessions never trip a control — and so is every public trace corpus and every deployment without a policy engine wired to its telemetry. CH04 now reports `NO_POLICY_EVIDENCE` and declines. **No finding moved**, in either direction: CH04 could not fire on a session with no policy event before the change either. What changed is that it says so. The one way back to `evaluated` on a quiet session is a `policies` section in the capability manifest — an operator declaring that these controls exist, which turns silence into a control that did not trip rather than a control that is not there. The corpus manifests declare none, which is why every cell moves.
 
 **`attack_dilution` is EVASION.md E02, and it is the one pair of rows in this section that records a change rather than a limitation.** A diluted attack is the family's ordinary work looped three times with one out-of-family export at the end; the violation rate falls to 0.15 and CH01's rate trigger, on its own, caught **0 of 40**. With the count trigger it catches **40 of 40**, and it also fires on **36 of 64** `benign_hard_long_rare_action` sessions, which are the same shape with a legitimate trailing action. That is 40:36 in favour on the marginal alerts -- 53% precision on the alerts the change adds, against 53% corpus-wide. The trade is real in both directions and both directions are above.
 

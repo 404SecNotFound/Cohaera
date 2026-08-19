@@ -1948,6 +1948,15 @@ R_NO_MANIFEST = "NO_CAPABILITY_MANIFEST"
 R_WEAK_CORRELATION = "CORRELATION_KEY_NOT_PRODUCER_SUPPLIED"
 R_INVALID_CLOCK = "EVENT_CLOCK_INVALID"
 R_NO_POLICY_SEMANTICS = "POLICY_SEMANTICS_UNDECLARED"
+# EXTERNAL-01. The absence one step further back than POLICY_SEMANTICS_UNDECLARED.
+# That code means a control fired and nothing said whether it blocks; this one
+# means nothing in the session says a control exists at all -- no policy event,
+# and no 'policies' section in the operator's manifest. The two are a different
+# operator remedy and a different verdict, which is why they are separate codes:
+# the first needs a field added to an event that is already arriving, the second
+# needs a policy engine wired to the telemetry, or at minimum a declaration that
+# one is there.
+R_NO_POLICY_EVIDENCE = "NO_POLICY_EVIDENCE"
 R_AMBIGUOUS_DISCLOSURE = "DISCLOSURE_AMBIGUOUS_SHARED_TOKENS"
 # COH-R11. Two records share a tick and carry no collector sequence, so their
 # order is not a fact this telemetry contains. Charged to whichever check
@@ -2429,16 +2438,103 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
                          "clean. See COH-R09."]))
 
     # ---- CH04 -----------------------------------------------------------
-    required = [SURFACE_TOOL_CLASS, SURFACE_EVENT_CLOCK, SURFACE_CORRELATION_KEY]
-    if has_policy:
-        required = [*required, SURFACE_POLICY_SEMANTICS, SURFACE_APPROVAL]
+    # EXTERNAL-01 -- the first defect found by pointing this detector at
+    # somebody else's traces rather than at the corpus it ships with. The
+    # internal corpus always emits policy events, so it could not have found
+    # this one. The required list is UNCONDITIONAL, and the `if has_policy`
+    # guard that used to build it was the coverage contract inverted.
+    #
+    # CH04 asks whether a control fired and whether consequential work carried
+    # on past it. Answering that at all needs two things: that controls exist,
+    # and whether they are advisory or blocking. Gating the requirement on
+    # `has_policy` made those two surfaces free in exactly the state where
+    # neither is established -- a session with no policy events and no
+    # approvals required nothing beyond tool class, clock and correlation, so
+    # it reported `evaluated` at confidence 1.0 with an empty `missing` list.
+    # Full confidence precisely where there was nothing to be confident about,
+    # and it is not a rare corner: it is every public trace corpus and every
+    # deployment that has not wired up a policy engine. CH06 and CH07 have
+    # always declined in the equivalent state and named the surface they were
+    # short of; CH04 alone reported a clean bill of health for being blind.
+    #
+    # A surface a check needs is a surface it needs whether or not the session
+    # happens to supply it. That is what makes the contract auditable: the
+    # required list is the check's standing bill of materials, and only
+    # `missing` is allowed to vary with the data.
+    required = [SURFACE_TOOL_CLASS, SURFACE_EVENT_CLOCK, SURFACE_CORRELATION_KEY,
+                SURFACE_POLICY_SEMANTICS, SURFACE_APPROVAL]
     conf = corr_conf * class_conf * clock_conf
     reasons = common_reasons + class_reasons()
     remedies = []
     missing = []
     assumptions = ["A policy event is a log line. Whether it was enforced is "
                    "not stated by this telemetry."]
-    if has_policy:
+    # No firing in this session. Two different worlds produce that, and the old
+    # code collapsed them into the flattering one:
+    #
+    #   1. the agent is governed and nothing tripped -- CH04 looked and found
+    #      nothing, which is a result;
+    #   2. the agent has no policy instrumentation at all -- CH04 could not
+    #      look, which is not.
+    #
+    # Nothing in the event stream separates them, because both are an absence.
+    # The only thing that can is the operator's manifest: a `policies` section
+    # is an out-of-band declaration that these controls exist and what they do
+    # when they fire, and it outranks the event for the same reason it does in
+    # _resolved_enforcement -- the operator chose the file, the agent wrote the
+    # event. With one, silence is world 1 and CH04 reports a result. Without
+    # one, silence is uninterpretable and CH04 says so.
+    declared_policies = len(session.manifest.policies)
+    if not has_policy:
+        if not declared_policies:
+            contracts.append(CheckContract(
+                check=CH04_FAMILY, status=STATUS_NOT_EVALUATED, confidence=0.0,
+                required_surfaces=required,
+                present_surfaces=[SURFACE_TOOL_CLASS, SURFACE_EVENT_CLOCK,
+                                  SURFACE_CORRELATION_KEY],
+                missing_surfaces=([SURFACE_POLICY_SEMANTICS]
+                                  + ([] if session.approvals
+                                     else [SURFACE_APPROVAL])),
+                reasons=[R_NO_POLICY_EVIDENCE],
+                remedies=[
+                    "Emit policy decisions as cost_threshold_exceeded or "
+                    "depth_exceeded events, so CH04 can see that a control "
+                    "fired at all.",
+                    "Declare the controls in the capability manifest's "
+                    "'policies' section. That is what tells Cohaera the "
+                    "difference between a guardrail that did not trip and a "
+                    "deployment with no guardrails in it -- and it is the "
+                    "operator's statement rather than the agent's."],
+                assumptions=[
+                    "No policy event and no declared control is not a quiet "
+                    "session, it is an unmonitored one. Cohaera cannot tell a "
+                    "governed agent that stayed inside its limits from an "
+                    "agent with no limits, and reports neither."]))
+        else:
+            # World 1, and the approval surface is vacuous rather than absent:
+            # no control fired, so there was no continuation for an approval to
+            # authorise. Charging for the missing approvals here would be the
+            # mirror of the bug above -- penalising a session for not carrying
+            # evidence about an event that never happened. Compare
+            # ScannerCoverage.share: 1.0 when there is nothing to scan.
+            #
+            # No reason code for this one. Reason codes in this file name what
+            # Cohaera did not get; "the declared control did not fire" is a
+            # result, and the place for a statement about what a result rests
+            # on is the assumptions list.
+            assumptions.append(
+                f"{declared_policies} control(s) are declared in the "
+                "capability manifest and none of them fired in this session, "
+                "so CH04 looked and found nothing. The manifest establishes "
+                "that the controls exist; it does not establish that this "
+                "producer emits an event when one trips.")
+            contracts.append(CheckContract(
+                check=CH04_FAMILY,
+                status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
+                confidence=conf, required_surfaces=required,
+                present_surfaces=required, missing_surfaces=[],
+                reasons=reasons, remedies=remedies, assumptions=assumptions))
+    else:
         semantics = _policy_semantics(session)
         if semantics["undeclared"]:
             # Nothing declares whether this policy event is advisory or
@@ -2503,13 +2599,13 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
                 "Equal timestamps are not an ordering. A call sharing the "
                 "control's tick is neither a continuation nor a precursor; "
                 "see COH-R11.")
-    contracts.append(CheckContract(
-        check=CH04_FAMILY,
-        status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
-        confidence=conf, required_surfaces=required,
-        present_surfaces=[s for s in required if s not in missing],
-        missing_surfaces=missing, reasons=reasons,
-        remedies=remedies, assumptions=assumptions))
+        contracts.append(CheckContract(
+            check=CH04_FAMILY,
+            status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
+            confidence=conf, required_surfaces=required,
+            present_surfaces=[s for s in required if s not in missing],
+            missing_surfaces=missing, reasons=reasons,
+            remedies=remedies, assumptions=assumptions))
 
     # ---- CH06 -----------------------------------------------------------
     audit = session.integrity or SessionIntegrity()
