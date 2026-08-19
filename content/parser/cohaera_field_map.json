@@ -4,9 +4,9 @@
     "log_source": "cohaera-session-verdict",
     "format": "json",
     "transport": "Webhook, OTel log export, or file collection of JSONL",
-    "schema_version": "cohaera:0.2",
+    "schema_version": "cohaera:0.3",
     "note": "One record per agent SESSION, not per event. Emits 'type' and 'schema' at top level specifically because observra#108 records that the Exabeam sender emits 'event_type' where the published ABA parser expects 'type', and never emits 'schema'.",
-    "status": "UNTESTED against a live Exabeam or LogRhythm parser. Validate before deploying. The Sigma pack IS tested: all nine rules pass Sigma CLI 3.1.0 validation, convert to Splunk SPL, and every field named below is asserted to exist in a real emitted record by tests/test_content.py.",
+    "status": "UNTESTED against a live Exabeam or LogRhythm parser. Validate before deploying. The Sigma pack IS tested: every rule passes Sigma CLI validation, converts to Splunk SPL, and every field named below is asserted to exist in a real emitted record by tests/test_content.py.",
     "breaking_changes_in_0_2": [
       "CH03_untrusted_to_consequential SPLIT into CH03_untrusted_to_completed_action and CH03_untrusted_to_attempted_action. Content matching the old ID matches nothing. data.triggered_families still carries the old family name.",
       "CH04_guardrail_overrun SPLIT into CH04_guardrail_bypass_completed and CH04_post_guardrail_attempt, at different severities.",

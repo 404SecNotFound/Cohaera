@@ -15,7 +15,7 @@ that a SIEM can actually write rules against.
 It does not replace behavioural analytics. It feeds it.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .capabilities import Capability, CapabilityManifest, ManifestError
 from .checks import SequenceGrammar, coverage, run_all

@@ -21,6 +21,35 @@ reports recall is a marketing document.
 Pre-alpha. The evaluation card is regenerated on every change and CI fails on
 any diff, so the numbers below are derived rather than claimed.
 
+### Breaking — the output contract moved to `cohaera:0.3`
+
+An external review of the merged branch raised twenty-one findings. Closing the
+evidence-layer ones changed what a verdict *says*, not only whether it fires,
+so the schema version moves with them. A parser or rule built against
+`cohaera:0.2` will not break loudly — it will read absent fields and report
+empty — which is precisely why the version has to move.
+
+- **`evidence_status` no longer emits `verified`.** It emits
+  `verified_complete` when a signature verified through the final accepted
+  record, and `verified_prefix` when it did not. A signature covers the chain
+  head at its own sequence, so a collector signing every hundredth record left
+  everything after the last signing position attested by nobody — and the old
+  vocabulary reported that session exactly like a fully signed one, at
+  confidence 1.0 (R-05). Content matching the literal `verified` now matches
+  nothing, deliberately.
+- **A receipt or an approval must bind completely to be trusted.** Span, tool
+  *and* argument digest. A receipt naming only a span was in the trusted set,
+  so an unbound identifier could support a critical CH07 contradiction — a
+  finding framed as evidence-backed, resting on evidence that identified no
+  call. Span-only is now context, never authority, and CH07 reports it as
+  `CH07_effect_receipt_partially_bound` (R-01, R-10).
+- **`analysis_run_id` and `verdict_id` change for the same input** when the
+  trust configuration differs, because provenance now carries a
+  `trust_config_digest` that the run identity commits to (R-06).
+- **`stream_ledger` provenance gained `generation_read` and
+  `state_digest_read`** — the ledger state this run's replay and fork verdicts
+  were actually judged against.
+
 ### Added
 
 - **Evidence trust (P1).** Three sidecar schemas the collector can emit and

@@ -1284,7 +1284,16 @@ class Finding:
 # The output contract's version, named once. R-20: it was a default argument
 # spelled as a literal in one place and as a string in the parser field map in
 # another, which is how the two drift apart without anything failing.
-SESSION_SCHEMA = "cohaera:0.2"
+#
+# 0.3 rather than 0.2 because the contract MOVED, and a parser that trusts the
+# version string has to be told. `evidence_status` no longer emits "verified":
+# it emits "verified_complete" or "verified_prefix", because one signature over
+# a chain head anchors the prefix up to that head and says nothing about an
+# unsigned tail (R-05). Provenance gained `trust_config_digest`, and
+# `stream_ledger` gained the generation and state digest the run was actually
+# judged against (R-06). A SIEM rule matching on the old vocabulary silently
+# stops matching, and a version that did not move would have hidden that.
+SESSION_SCHEMA = "cohaera:0.3"
 
 
 def to_cim_event(session: Session, findings: list[Finding],

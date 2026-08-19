@@ -18,12 +18,18 @@ checked against the thing it names.
 
 from __future__ import annotations
 
+import json
+import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import readme_facts
+
+import cohaera
+import cohaera.model
 
 
 def test_readme_counted_claims_are_true():
@@ -153,3 +159,40 @@ def test_security_reporting_never_points_at_a_public_issue():
     assert "security/advisories/new" in config
     security = (REPO / "SECURITY.md").read_text(encoding="utf-8")
     assert "private vulnerability reporting" in security.lower()
+
+
+# ---------------------------------------------------------------------------
+# R-20. One version, spelled in five files.
+# ---------------------------------------------------------------------------
+
+def test_the_package_version_is_the_same_number_everywhere():
+    """R-20. ``pyproject.toml``, ``__init__.py`` and ``CITATION.cff`` each carry
+    the version as a literal, and nothing compared them. A release that bumps
+    two of the three ships a wheel whose metadata, whose runtime and whose
+    citation disagree, and every one of them looks authoritative on its own.
+    """
+    pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    citation = (REPO / "CITATION.cff").read_text(encoding="utf-8")
+    declared = re.search(r'^version = "([^"]+)"', pyproject, re.M)
+    cited = re.search(r"^version: (.+)$", citation, re.M)
+    assert declared and cited, "both files must state a version at all"
+    assert declared.group(1) == cohaera.__version__ == cited.group(1).strip(), (
+        f"pyproject says {declared.group(1)}, the package says "
+        f"{cohaera.__version__}, CITATION.cff says {cited.group(1).strip()}")
+
+
+def test_the_parser_field_map_declares_the_schema_the_detector_emits():
+    """R-20. The SIEM parser is built against ``schema_version``. When the
+    output contract moves and that string does not, the parser is documented
+    for a record shape the detector no longer emits -- and it fails silently,
+    because a parser reading absent fields reports empty rather than wrong.
+    """
+
+
+    field_map = json.loads(
+        (REPO / "content/parser/cohaera_field_map.json").read_text(
+            encoding="utf-8"))
+    declared = field_map["_metadata"]["schema_version"]
+    assert declared == cohaera.model.SESSION_SCHEMA, (
+        f"the field map documents {declared} and the detector emits "
+        f"{cohaera.model.SESSION_SCHEMA}")

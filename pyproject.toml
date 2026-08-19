@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cohaera"
-version = "0.2.0"
+version = "0.3.0"
 description = "The correlation layer for agent telemetry. Turns observra's per-event stream into correlation-grade events a SIEM can fire rules on."
 readme = "README.md"
 requires-python = ">=3.10"

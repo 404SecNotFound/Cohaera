@@ -11164,7 +11164,7 @@
     "seed": 20260807
   },
   "corpus_digest": "a3d9aa5099f7e8d3",
-  "detector_version": "0.2.0",
+  "detector_version": "0.3.0",
   "leakage_experiment": {
     "clean": {
       "any_alert_recall": {
