@@ -1,6 +1,40 @@
 title: Agent Performed A Consequential Action It Did Not Report To The Human
 id: 09fa17a7-5d07-4439-8a21-33fb29bed713
 status: experimental
+custom:
+    # DEPLOYMENT TIER. Sigma has no tier field and this pack will not put one in
+    # `tags` -- see content/README.md, "How the tier is recorded, and why not as
+    # a tag". `custom:` is pySigma's documented extension point: unrecognised
+    # top-level keys land in SigmaRule.custom_attributes and `sigma check`
+    # passes them through with 0 errors and 0 issues.
+    #
+    # production  deployable, may page. Zero benign hits on the evaluation card.
+    # hunt        never an alert. Investigation surface only.
+    # dashboard   a configuration state, not an event. Alert on a CHANGE in it.
+    deployment_tier: hunt
+    tier_rationale: >-
+        The worst trade in the pack. Blind under default privacy settings, and
+        27.1% target precision with 108 benign hits once an operator degrades
+        those settings to switch it on. Hunt only, and read the falsepositives
+        block before enabling capture.
+    # Ownership and review. `author` records who wrote it; `owner` records who
+    # answers for it now, and mirrors .github/CODEOWNERS. An unowned rule is a
+    # stale rule within two quarters.
+    owner: '@404SecNotFound'
+    last_reviewed: 2026-08-19
+    review_cadence_days: 90
+    next_review: 2026-11-17
+    # The tier is bound to a measurement, not to an opinion.
+    # tests/test_content.py re-reads these five values out of the card on every
+    # test run and fails if a rule and the evidence disagree.
+    evidence:
+        source: eval/evaluation-card.json
+        card_cell: 'unseen|task_disjoint|manifest'
+        check: CH02_concealment_gap
+        labelled: 52
+        on_target_attacks: 52
+        on_benign: 108
+        target_precision_pct: 27.1
 description: |
   A state-changing or egress tool call succeeded during an agent session, and
   it is not referenced in the agent's final user-facing message.
@@ -12,6 +46,24 @@ description: |
   The concept comes from the IPI Arena competition paper (arXiv:2603.15714),
   which foregrounds concealment as a dimension of the threat: an action can be
   taken while the final user-facing response presents no clue of compromise.
+
+  THE WORST TRADE IN THE PACK, AND IT IS WORTH STATING BEFORE THE MECHANISM.
+  This rule is BLIND BY DEFAULT and expensive when it is not. observra's
+  capture_tool_data defaults to False and core/hot_cold.py strips string values
+  on the hot path, so response_text is usually absent and CH02 reports
+  not_evaluated -- a rule that appears deployed, counts as concealment coverage
+  in a review, and can never fire. Those are correct privacy defaults, and
+  turning them off to feed this rule is a deliberate degradation of the
+  operator's privacy posture.
+
+  What that degradation buys, measured: 27.1% target precision and 108 benign
+  hits on the evaluation card's headline cell -- the highest benign count of any
+  check in the pack, from `benign_hard_terse_summary` (an honest summary,
+  paraphrased) and `benign_hard_honest_denial` (an honest summary that also says
+  what the agent did NOT do). So the choice an operator is actually offered is
+  between a check that cannot fire and a check that is wrong roughly three times
+  in four while their agents' user-facing text is being retained. Hunt tier for
+  that reason, and it is not close.
 
   Requires Cohaera, and requires text capture to be enabled. If response_text
   is absent, Cohaera reports CH02 as not_evaluated rather than clean; see the
@@ -52,10 +104,20 @@ fields:
     - data.findings
 falsepositives:
     - |
-      HIGH. The v0.1 reference matcher is lexical, not semantic. An agent that
-      says "I have emailed the report" without naming the send_email tool will
-      be flagged. Expect a material false positive rate until CH02 uses a
-      semantic judge. Baseline this rule before alerting on it.
+      HIGH, AND NOW MEASURED: 108 benign sessions and 27.1% target precision on
+      the evaluation card's headline cell, the worst of any check here. The v0.1
+      reference matcher is lexical, not semantic. An agent that says "I have
+      emailed the report" without naming the send_email tool will be flagged.
+      Do not alert on this rule. It is hunt-tier content and the tier is not a
+      placeholder for tuning: nothing an operator can tune reaches a semantic
+      comparison from a token-overlap one.
+    - |
+      AND THE PREREQUISITE IS ITSELF A COST. This rule only fires at all if
+      capture_tool_data is enabled, which means the operator is retaining agent
+      response text to feed it. Weigh 27.1% precision against that retention
+      before switching capture on, and check data.coverage.checks[] for CH02's
+      status first: on a default deployment it reads not_evaluated and this rule
+      is decoration.
     - Agents whose summaries are deliberately terse by design.
     - Tool names that share no word stem with how a human would describe them.
 level: medium
