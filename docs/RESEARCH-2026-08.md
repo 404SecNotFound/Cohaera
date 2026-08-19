@@ -40,6 +40,13 @@ dropped or asserted.
 | **`indexed`** | Title, identifier and URL from a search index; **the content was not read** | Cite the existence, not the finding; re-fetch before quoting a number |
 | **`reported`** | Corroborated across several independent secondary sources, primary unreachable | Describe the direction, not the magnitude |
 | **`not_evaluated`** | Could not be reached at all | Listed at the end, with what would settle it |
+| **`refuted`** | A verification pass tried to disprove it and succeeded | Recorded, not deleted — see below |
+
+A second pass ran afterwards over the ten load-bearing claims, with each
+verifier instructed to **refute rather than confirm** and to default to refuted
+when evidence was thin. It killed four and corrected two more. The corrections
+are folded in below rather than appended, because a survey that files its own
+errata separately is a survey nobody reads twice.
 
 A number that appears in this document without a tier is a defect. Nothing here
 is derived by `tools/readme_facts.py`, because none of it is a fact about this
@@ -59,7 +66,7 @@ deserves to be believed."* That is no longer defensible.
 | [Agent Action Capsule](https://github.com/action-state-group/agent-action-capsule), IETF SCITT-track draft | `verified` | Content-addressed record ids, parent-chaining, COSE_Sign1 signatures, `effect.status:"confirmed"` requiring a digest over the observed response, `disposition.human_disposed` true only when a human actually acted, and an `effect_attestation` registry separating `gate_executed` from `runtime_claimed` with a `provenance` registry ranking `gate > runtime > collector` |
 | [halo-record](https://github.com/bkuan001/halo-record) | `verified` | Apache-2.0, hash-chained tamper-evident runtime records for AI agents, single author. Carries a verification `status: "unverified"`, explicitly "distinct from an absent block — made no determination" |
 | [SEP-3140](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/3140) | `verified` | JWS-signed MCP capability manifest bound to a publisher identity, with a signature-covered trust block carrying effect, egress, data-sensitivity and reversibility. Open since 27 July 2026, unsponsored since 29 July |
-| "Auditable Agents", arXiv:2604.05485 | `indexed` | Reported to name **evidence integrity** as one of five dimensions of agent auditability |
+| "Auditable Agents", arXiv:2604.05485 | `indexed` | Names **evidence integrity** as one of five dimensions of agent auditability. arXiv was unreachable; confirmed instead from three author-controlled documents on GitHub, which is weaker than the paper and stronger than a search snippet |
 | "From Agent Traces to Trust", arXiv:2606.04990 | `indexed` | A survey reported to formalise execution provenance and evidence tracing |
 
 The provenance ranking in the Agent Action Capsule is the uncomfortable one. It
@@ -74,14 +81,21 @@ it survives scrutiny.
 ### The repository claimed no deployment had adopted a tool-effect taxonomy
 
 Wrong. MCP's `readOnlyHint`, `destructiveHint`, `idempotentHint` and
-`openWorldHint` are in the **stable** schema and widely deployed
-(`verified` — read from the schema in the spec repository). What has no
-adoption is a *trustworthy* one: the schema itself warns that clients should
-never make tool-use decisions based on annotations received from untrusted
-servers.
+`openWorldHint` are in the **normative stable schema** (`2025-11-25`), and
+therefore in every conformant SDK (`verified` — read from the schema in the
+spec repository, which also confirms there is no signature or attestation field
+anywhere on `ToolAnnotations` or on `Tool`). The normative text is that clients
+"MUST consider tool annotations to be untrusted unless they come from trusted
+servers".
 
-Restated as **"the deployed taxonomy is explicitly untrusted and unsigned"**,
-the premise is both true and stronger than it was.
+Restated as **"the declared taxonomy is normative, unsigned, and untrusted by
+default"**, the premise is both true and stronger than it was.
+
+Note what this claim is *not*. Nobody measured how many servers actually
+populate those hints, so "widely deployed" was dropped from an earlier draft of
+this document during verification. The schema makes the taxonomy mandatory to
+support; it does not make it mandatory to use honestly, which is the whole
+point.
 
 ### The semantic-normalisation claim is a lost fight
 
@@ -104,9 +118,9 @@ vocabulary in security, and it has been for decades.
 
 | Prior art | Tier | What it establishes |
 |---|---|---|
-| MITRE OVAL results schema | `reported` | A `not evaluated` result value, distinct from both true/false and from not-applicable, for roughly twenty years. **The same term, for the same reason.** |
-| XCCDF / NISTIR 7275 | `reported` | `notchecked`, `unknown`, `notapplicable`, `error` — and the rule that results with such a status are **not to be scored**. A standards-body encoding of "must never report clean" |
-| AWS Security Hub | `reported` | `Compliance.Status` of `NOT_AVAILABLE` and `WARNING`, plus `Compliance.StatusReasons[].ReasonCode` — a machine-readable "could not evaluate, because X" shipping in a mainstream product |
+| OVAL results schema | `verified` | A **three-way** refusal to assert, for roughly twenty years: `not evaluated` ("a choice was made not to evaluate… the actual result is not known since if evaluation had occurred the result could have been either true or false"), `unknown` (the characteristics cannot be found), and `not applicable`. Read from `OVALProject/Language`, schema v5.11.2 |
+| XCCDF 1.2 | `refuted as first stated` | It defines `notchecked` and `unknown`, but the scoring-exclusion set is `{notapplicable, notchecked, informational, notselected}` — **`unknown` is not in it.** The original claim here said XCCDF excludes unevaluated results from scoring; half of that is wrong and it was the load-bearing half. Recorded rather than removed, because the error is instructive |
+| AWS Security Hub | `verified` | `Compliance.Status` is `PASSED \| WARNING \| FAILED \| NOT_AVAILABLE`, with `StatusReasons[].ReasonCode`. A machine-readable "could not evaluate, because X" shipping in a mainstream product — **and a cautionary one**: `NOT_AVAILABLE` covers a service outage, an API error *and* a not-applicable result, collapsing "could not evaluate" into "does not apply". That is the distinction OVAL keeps and this project keeps. `ReasonCode` is also typed as a free string, so its machine-readability rests on a documented table rather than on the schema |
 | Nagios plugin API | `reported` | Exit code 3 = `UNKNOWN`, distinct from OK, since the 1990s |
 | SARIF v2.1.0 | `reported` | `result.kind` including `notApplicable`, plus `toolExecutionNotifications` for conditions that prevented analysis |
 | OpenVEX / CSAF VEX | `reported` | `under_investigation` as a first-class status with machine-readable justifications |
@@ -229,14 +243,20 @@ survey window, several trace-level benchmarks shipped with a real **benign**
 denominator — which is the part that matters, because a false-positive rate
 needs one.
 
-| Corpus | Tier | Why it is usable |
+| Corpus | Tier | What is actually there |
 |---|---|---|
-| StepShield | `indexed` | Code-agent trajectories with step-level annotations, a large benign arm, a permissive data licence and a published inter-annotator agreement statistic |
-| ATBench | `indexed` | Roughly a thousand human-audited trajectories split near-evenly safe and unsafe, carrying user request, agent response, tool calls and environment feedback |
+| StepShield | `verified` | The repository ships **2,514** benign trajectory files, agreeing across its changelog, data card and directory listing. An earlier draft of this document said 6,657, which is a figure describing a test set that exists in the paper and not in the repository |
+| ATBench | `refuted as first stated` | The GitHub repository publishes **no trajectory data at all** — it is a seven-file pointer repository including a one-byte placeholder, with no licence file. The dataset is distributed through a host this environment cannot reach, so no ATBench record has been inspected. Its published split and human-audit claims are the project's, unverified |
 
-`eval/external/` contains adapters and a runner for these. The exact counts and
-licences are recorded there, verified from the repositories rather than from
-this survey.
+`eval/external/` contains adapters and a runner for both. The counts and licences
+there are read from the repositories rather than from this survey, and the
+ATBench adapter is written against a documented format that nobody here has seen
+data for — it fails loudly rather than silently when the data is absent.
+
+The lesson is worth more than the correction. Both figures came from a research
+pass that read search results rather than repositories, and both were wrong in
+the flattering direction — a larger benign denominator and an available dataset.
+Neither survived ten minutes of someone trying to disprove them.
 
 **The scope limit deserves its own sentence, because the README used to fold it
 into a general caveat.** Only CH01, CH02 and CH05 can be validated against
@@ -308,6 +328,13 @@ answer.
   publish output schemas and no evidence was found either way. This is the
   single claim on which the "in-band carriage is new" argument rests, and it is
   unconfirmed.
+- **Partly refuted: OCSF is not the empty room it looked like.** OCSF's
+  Detection Finding carries `verdict_id = 7`, "Insufficient Data" — an
+  undeterminable outcome, in-band, in a widely adopted schema. What it does not
+  carry is anything equivalent on the Analytic object, so a finding can say the
+  *verdict* was undeterminable while nothing says which *analytic* could not
+  run. That is a narrower gap than "OCSF has no such construct", and the
+  narrower version is the one to argue.
 - **`not_evaluated: OUT_OF_SCOPE`.** Whether the benchmark corpora above share a
   task pool across their safe and unsafe arms. If they do not, task-disjoint
   splitting on them is confounded by construction and the protocol will not
