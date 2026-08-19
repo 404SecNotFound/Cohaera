@@ -26,6 +26,7 @@ Each row says what question the document answers, not what it contains.
 | [THREAT-MODEL](THREAT-MODEL.md) | What does it trust, and what survives an attacker who controls the telemetry? |
 | [SECURITY](../SECURITY.md) | How do I report something, what is in scope, and what does the supply chain look like? |
 | [REVIEW-RESPONSE](../REVIEW-RESPONSE.md) | Two external reviews raised 43 findings. What happened to every one, and which recommendations were declined and why? |
+| [EXTERNAL-VALIDATION](EXTERNAL-VALIDATION.md) | The evaluation is all synthetic and self-authored. What can be checked against someone else's data? Three of seven checks — and three cannot be, by any public corpus that exists. |
 
 ## If you are integrating it
 
