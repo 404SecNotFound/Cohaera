@@ -59,6 +59,51 @@ are the evidence-integrity ones; the behavioural ones are noisy and
 
 ---
 
+## The pitch
+
+Two versions, for when somebody asks what this is and you have a lift ride to
+answer in. Every number below is derived from the evaluation card by
+`tools/readme_facts.py` and fails CI if it drifts, which is itself the argument.
+
+**Fifteen seconds.**
+
+> Agent telemetry is becoming a security data source, and almost nobody is
+> asking whether it can be trusted. Cohaera grades the evidence before anything
+> correlates on it — verified, partially verified, or inadmissible. And when a
+> check cannot run, it says *not evaluated* with a reason code instead of
+> reporting clean. Silence is not safety.
+
+**Forty-five seconds, for a detection team.**
+
+> Every agent framework now emits logs, and SIEMs are starting to ingest them.
+> But those logs are written by the thing being monitored: an agent can truncate
+> its own transcript, replay a stale approval, or claim a tool call it never
+> made. Cohaera is an evidence-quality layer that sits in front of correlation.
+> It verifies signature chains, binds tool arguments to what actually executed,
+> and normalises agent and MCP evidence into correlation-ready features.
+>
+> The part that matters most is the coverage contract. A check that lacks the
+> evidence to run is *forbidden* from returning clean — it returns
+> `not_evaluated` with a machine-readable reason. That is the failure mode this
+> was built against: a green dashboard that means "we did not look."
+>
+> And it grades itself by the same rule. The repository ships an evaluation card,
+> regenerated on every commit with CI failing on any diff, and it leads with the
+> number most detection projects bury — 420.4 false positives per 1,000 benign
+> sessions, and 0.238% precision at a 0.1% attack base rate. 22 evasions
+> constructed, 20 still working, every one of them a permanent test. It is
+> pre-alpha, the corpus is synthetic and its author wrote the detector too, and
+> nobody outside this repository has validated any of it. All of which is on the
+> first screen rather than discovered later.
+
+**The honest framing, if you only keep one line.** The measurement discipline is
+the artefact here, not the detector. A detection release that reports only
+recall is a marketing document. Everything above is an argument about what a
+security research output should look like, made by building one that has to live
+with it.
+
+---
+
 ## The night watchman
 
 Imagine a night watchman. Very diligent. Every time something happens in the
@@ -143,6 +188,7 @@ validated.
 
 ## Contents
 
+- [The pitch](#the-pitch)
 - [The night watchman](#the-night-watchman)
 - [The problem in one page](#the-problem-in-one-page)
 - [Solution architecture](#solution-architecture)
