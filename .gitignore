@@ -12,6 +12,14 @@ tests/fixtures/*.jsonl
 telemetry.jsonl
 .DS_Store
 
+# Agent worktrees. Tooling that runs work in parallel checks each task out into
+# its own worktree under here, and a worktree is a nested git repository: `git
+# add -A` stages it as a gitlink, which clones cannot resolve and which quietly
+# records one machine's scratch directory as repository content. Seen in
+# practice -- a bulk `git add -A` during a trial merge staged seven of them.
+# Nothing under .claude/ is a build input or an artefact anyone should receive.
+.claude/
+
 # lab build artefacts: user-data contains the password hash and SSH key
 lab/generated/
 lab/*.local.psd1
