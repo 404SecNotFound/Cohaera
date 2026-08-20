@@ -23,7 +23,7 @@ Each row says what question the document answers, not what it contains.
 
 | Document | The question it answers |
 |---|---|
-| [EVASION](../EVASION.md) | How do I defeat this? 22 constructed evasions, 20 still working, each with an executable test that passes while the evasion does. |
+| [EVASION](../EVASION.md) | How do I defeat this? 28 constructed evasions, 26 still working, each with an executable test that passes while the evasion does. |
 | [THREAT-MODEL](THREAT-MODEL.md) | What does it trust, and what survives an attacker who controls the telemetry? |
 | [SECURITY](../SECURITY.md) | How do I report something, what is in scope, and what does the supply chain look like? |
 | [REVIEW-RESPONSE](../REVIEW-RESPONSE.md) | Two external reviews raised 43 findings. What happened to every one, and which recommendations were declined and why? |

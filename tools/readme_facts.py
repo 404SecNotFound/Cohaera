@@ -549,6 +549,22 @@ CLAIMS = (
           re.compile(r"^(\d+) documents, about", re.M), count_documents),
     Claim("doc map word count", DOC_MAP,
           re.compile(r"documents, about ([\d,]+) words"), documentation_words),
+    # R-20, sixth instance, and this one went wrong on main in the time it took
+    # to merge a pull request. The map's EVASION row said "22 constructed
+    # evasions, 20 still working" while the branch adding E24 through E29 was in
+    # flight; the moment it landed the sentence was out by six and nothing
+    # objected, because the claims covering that pair live in README.md and
+    # SECURITY.md and nobody had added them here.
+    #
+    # The lesson is not "add this claim". It is that a counted sentence copied
+    # into a new document arrives unchecked by default, and the copy is exactly
+    # where drift hides.
+    Claim("doc map constructed evasions", DOC_MAP,
+          re.compile(r"(\d+) constructed evasions, \d+ still working"),
+          count_constructed_evasions),
+    Claim("doc map working evasions", DOC_MAP,
+          re.compile(r"\d+ constructed evasions, (\d+) still working"),
+          count_working_evasions),
     Claim("README doc map document count", README,
           re.compile(r"maps all (\d+) by the"), count_documents),
     Claim("eval README evasions absent from corpus", EVAL_README,
