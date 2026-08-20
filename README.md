@@ -1203,7 +1203,12 @@ hide is a defect.
   bypass it can name and an advisory continuation it stays quiet about. Declaring
   it *on the event* is believing the thing being watched, which suppresses a
   finding and is catalogued as [EVASION.md](EVASION.md) E20; the manifest
-  overrides it for exactly that reason.
+  overrides it for exactly that reason. **And with no policy telemetry at all,
+  CH04 does not run** — it reports `NO_POLICY_EVIDENCE` and declines, because a
+  session with no firing is either a governed agent that stayed inside its
+  limits or an agent with no limits, and the event stream cannot tell those
+  apart. The manifest's `policies` section can, which is the second reason to
+  fill it in.
 - **The correlation key comes from the observed system.** Fragment `session_id`
   on call boundaries and every check goes quiet at once. Cohaera can only be
   honest about which key it used, not fix the key.
