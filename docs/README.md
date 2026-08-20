@@ -5,7 +5,7 @@
 
 # Documentation map
 
-21 documents, about 75,000 words. This page exists so you never have to
+22 documents, about 79,000 words. This page exists so you never have to
 guess which one answers your question.
 
 Each row says what question the document answers, not what it contains.
@@ -17,6 +17,7 @@ Each row says what question the document answers, not what it contains.
 | [README](../README.md) | What is this, what does it measure, and how do I run it? |
 | [POSITIONING](../POSITIONING.md) | What layer is this, what is it *not*, and what language does the project refuse to use about its own results? |
 | [evaluation card](../eval/EVALUATION-CARD.md) | How well does it actually work, and on what? Generated, never hand-written. |
+| [EXABEAM-STACK](EXABEAM-STACK.md) | Where does this sit against Exabeam's agent-monitoring products and the open-source projects it sponsors — and what is verified from GitHub versus taken on report? |
 
 ## If you are assessing whether to trust it
 
