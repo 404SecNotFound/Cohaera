@@ -26,6 +26,8 @@ Each row says what question the document answers, not what it contains.
 | [THREAT-MODEL](THREAT-MODEL.md) | What does it trust, and what survives an attacker who controls the telemetry? |
 | [SECURITY](../SECURITY.md) | How do I report something, what is in scope, and what does the supply chain look like? |
 | [REVIEW-RESPONSE](../REVIEW-RESPONSE.md) | Two external reviews raised 43 findings. What happened to every one, and which recommendations were declined and why? |
+| [REVIEWS-2026-08](REVIEWS-2026-08.md) | Three reviews read the *project* rather than the code — product, threat research, detection engineering. What did they each find, where did they converge without conferring, and what happened to every finding? |
+| [RESEARCH-2026-08](RESEARCH-2026-08.md) | What did the field do while this was being built? Twelve months surveyed: which of this project's claims were falsified, which prior art it should have been citing, and what it could not verify. |
 
 ## If you are integrating it
 
