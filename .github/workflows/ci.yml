@@ -102,7 +102,14 @@ jobs:
           # first question is always "which ruff", and it should not take a
           # re-run to answer it.
           ruff --version
-          ruff check src tests
+          # src tests eval tools -- the same four that CONTRIBUTING names as
+          # the gate. It used to be `src tests`, so `eval/` and `tools/` were
+          # documented as linted and were not: readme_facts.py, the release
+          # gate and the whole evaluation harness sat outside the only lint
+          # that runs. A gate a document promises and CI does not run is the
+          # same defect class as a number nothing derives, and it is now
+          # asserted by tests/test_verify.py rather than trusted.
+          ruff check src tests eval tools
       - name: Type check
         run: |
           # COH-R15. The review raised this as unverified because mypy was not

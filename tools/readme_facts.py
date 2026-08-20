@@ -45,6 +45,7 @@ DOC_MAP = REPO / "docs" / "README.md"
 EVAL_README = REPO / "eval" / "README.md"
 THREAT_MODEL = REPO / "docs" / "THREAT-MODEL.md"
 CHANGELOG = REPO / "CHANGELOG.md"
+CONTRIBUTING = REPO / "CONTRIBUTING.md"
 SIGMA = REPO / "content" / "sigma"
 CHECKS = REPO / "src" / "cohaera" / "checks.py"
 
@@ -419,6 +420,40 @@ class Claim:
         return str(self.truth())
 
 
+
+
+def _verify_gates() -> tuple:
+    """The gate table from tools/verify.py, imported rather than counted.
+
+    CONTRIBUTING states how many gates the local verifier replays and how many
+    of them pytest does not run. Both were typed as words in the draft, which
+    the spelled-count test caught on the first run -- the ninth instance of
+    this defect class, and the first one caught by a test rather than a human.
+    """
+    sys.path.insert(0, str(REPO / "tools"))
+    # Deferred deliberately. tools/ is not a package, so this import needs the
+    # sys.path line above to have run first; hoisting it would mean mutating
+    # sys.path at module scope, which every other importer of this file would
+    # then inherit.
+    from verify import GATES  # noqa: PLC0415
+    return GATES
+
+
+def count_verify_gates() -> str:
+    return str(len(_verify_gates()))
+
+
+def count_gates_pytest_does_not_run() -> str:
+    """Gates that do not invoke pytest.
+
+    This is the number that makes the argument: if it were small, running the
+    suite really would be most of the build and the verifier would be
+    decoration.
+    """
+    def uses_pytest(gate) -> bool:
+        return "pytest" in " ".join(gate.command) + (gate.shell or "")
+    return str(sum(not uses_pytest(g) for g in _verify_gates()))
+
 CLAIMS = (
     Claim("README tests passing", README,
           re.compile(r"Tests, (\d+) passing across unit"), count_tests),
@@ -584,6 +619,17 @@ CLAIMS = (
     Claim("threat model catalogued evasions", THREAT_MODEL,
           re.compile(r"Exactly \d+ of[\s>]*(\d+) catalogued"),
           count_constructed_evasions),
+
+    # The local verifier's own counts, imported from its gate table.
+    Claim("CONTRIBUTING verify gates", CONTRIBUTING,
+          re.compile(r"\*\*every gate CI runs\*\* . (\d+) of them"),
+          count_verify_gates),
+    Claim("CONTRIBUTING gates pytest misses", CONTRIBUTING,
+          re.compile(r"(\d+) of the \d+ gates are things"),
+          count_gates_pytest_does_not_run),
+    Claim("CONTRIBUTING verify gates restated", CONTRIBUTING,
+          re.compile(r"\d+ of the (\d+) gates are things"),
+          count_verify_gates),
 )
 
 
