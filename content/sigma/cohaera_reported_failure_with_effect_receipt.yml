@@ -1,6 +1,40 @@
 title: Agent Reported A Failed Call That Produced A Real Effect
 id: c81d6f45-2a93-4e70-b6c4-9d05e3a7182b
 status: experimental
+custom:
+    # DEPLOYMENT TIER. Sigma has no tier field and this pack will not put one in
+    # `tags` -- see content/README.md, "How the tier is recorded, and why not as
+    # a tag". `custom:` is pySigma's documented extension point: unrecognised
+    # top-level keys land in SigmaRule.custom_attributes and `sigma check`
+    # passes them through with 0 errors and 0 issues.
+    #
+    # production  deployable, may page. Zero benign hits on the evaluation card.
+    # hunt        never an alert. Investigation surface only.
+    # dashboard   a configuration state, not an event. Alert on a CHANGE in it.
+    deployment_tier: production
+    tier_rationale: >-
+        CH07 fires on 16 of its own labelled attacks and on 0 benign sessions.
+        It is also the only rule here whose signal is a contradiction INSIDE the
+        record rather than an inference over it, which is why its precision does
+        not depend on a baseline.
+    # Ownership and review. `author` records who wrote it; `owner` records who
+    # answers for it now, and mirrors .github/CODEOWNERS. An unowned rule is a
+    # stale rule within two quarters.
+    owner: '@404SecNotFound'
+    last_reviewed: 2026-08-19
+    review_cadence_days: 90
+    next_review: 2026-11-17
+    # The tier is bound to a measurement, not to an opinion.
+    # tests/test_content.py re-reads these five values out of the card on every
+    # test run and fails if a rule and the evidence disagree.
+    evidence:
+        source: eval/evaluation-card.json
+        card_cell: 'unseen|task_disjoint|manifest'
+        check: CH07_effect_contradiction
+        labelled: 16
+        on_target_attacks: 16
+        on_benign: 0
+        target_precision_pct: 100.0
 description: |
   A tool call whose terminal event reports failure -- or which never reported at
   all -- carries an effect receipt bound to that exact call: an identifier minted

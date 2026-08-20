@@ -1,6 +1,41 @@
 title: Agent Telemetry Failed Collector Integrity Verification
 id: 3e9a1c7d-8b64-4f02-a5d1-7c2e40b9f8a3
 status: experimental
+custom:
+    # DEPLOYMENT TIER. Sigma has no tier field and this pack will not put one in
+    # `tags` -- see content/README.md, "How the tier is recorded, and why not as
+    # a tag". `custom:` is pySigma's documented extension point: unrecognised
+    # top-level keys land in SigmaRule.custom_attributes and `sigma check`
+    # passes them through with 0 errors and 0 issues.
+    #
+    # production  deployable, may page. Zero benign hits on the evaluation card.
+    # hunt        never an alert. Investigation surface only.
+    # dashboard   a configuration state, not an event. Alert on a CHANGE in it.
+    deployment_tier: production
+    tier_rationale: >-
+        CH06 fires on 56 of its own labelled attacks and on 0 benign sessions,
+        including 24 out-of-order-delivery sessions and 72 straddling a
+        collector key rotation -- the two benign shapes that would have made it
+        unusable. Conditional on a capability manifest; see the name_only caveat
+        in content/README.md.
+    # Ownership and review. `author` records who wrote it; `owner` records who
+    # answers for it now, and mirrors .github/CODEOWNERS. An unowned rule is a
+    # stale rule within two quarters.
+    owner: '@404SecNotFound'
+    last_reviewed: 2026-08-19
+    review_cadence_days: 90
+    next_review: 2026-11-17
+    # The tier is bound to a measurement, not to an opinion.
+    # tests/test_content.py re-reads these five values out of the card on every
+    # test run and fails if a rule and the evidence disagree.
+    evidence:
+        source: eval/evaluation-card.json
+        card_cell: 'unseen|task_disjoint|manifest'
+        check: CH06_evidence_integrity
+        labelled: 56
+        on_target_attacks: 56
+        on_benign: 0
+        target_precision_pct: 100.0
 description: |
   Records in this agent session did not verify against what the collector
   attested to: a gap in the collector's sequence, a record that does not match
