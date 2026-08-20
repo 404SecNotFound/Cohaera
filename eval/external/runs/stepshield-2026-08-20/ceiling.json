@@ -1,0 +1,220 @@
+{
+  "bounds": {
+    "action_multiset": {
+      "by_family": {
+        "DEC": 34,
+        "INV": 27,
+        "RES": 42,
+        "SEC": 24,
+        "TST": 14,
+        "UFO": 32
+      },
+      "ceiling_recall_at_zero_fp_pct": 72.9,
+      "indistinguishable": 173,
+      "indistinguishable_pct": 27.1,
+      "pairs": 639
+    },
+    "action_sequence": {
+      "by_family": {
+        "DEC": 24,
+        "INV": 24,
+        "RES": 36,
+        "SEC": 18,
+        "TST": 13,
+        "UFO": 30
+      },
+      "ceiling_recall_at_zero_fp_pct": 77.3,
+      "indistinguishable": 145,
+      "indistinguishable_pct": 22.7,
+      "pairs": 639
+    },
+    "sequence_plus_arity": {
+      "by_family": {
+        "DEC": 24,
+        "INV": 24,
+        "RES": 36,
+        "SEC": 18,
+        "TST": 13,
+        "UFO": 30
+      },
+      "ceiling_recall_at_zero_fp_pct": 77.3,
+      "indistinguishable": 145,
+      "indistinguishable_pct": 22.7,
+      "pairs": 639
+    },
+    "sequence_plus_digest": {
+      "by_family": {
+        "DEC": 0,
+        "INV": 0,
+        "RES": 0,
+        "SEC": 0,
+        "TST": 0,
+        "UFO": 0
+      },
+      "ceiling_recall_at_zero_fp_pct": 100.0,
+      "indistinguishable": 0,
+      "indistinguishable_pct": 0.0,
+      "pairs": 639
+    }
+  },
+  "corpus": "stepshield",
+  "families": [
+    "DEC",
+    "INV",
+    "RES",
+    "SEC",
+    "TST",
+    "UFO"
+  ],
+  "learnability": {
+    "all_pairs": {
+      "binomial_p": 0.99721071298253,
+      "family_holdout": {
+        "accuracy": 44.6,
+        "correct": 285,
+        "folds": 6,
+        "pairs": 639,
+        "per_family": {
+          "DEC": {
+            "accuracy": 44.1,
+            "correct": 45,
+            "pairs": 102
+          },
+          "INV": {
+            "accuracy": 50.0,
+            "correct": 54,
+            "pairs": 108
+          },
+          "RES": {
+            "accuracy": 35.3,
+            "correct": 36,
+            "pairs": 102
+          },
+          "SEC": {
+            "accuracy": 42.2,
+            "correct": 43,
+            "pairs": 102
+          },
+          "TST": {
+            "accuracy": 69.4,
+            "correct": 77,
+            "pairs": 111
+          },
+          "UFO": {
+            "accuracy": 26.3,
+            "correct": 30,
+            "pairs": 114
+          }
+        }
+      },
+      "permutation": {
+        "at_or_above_observed": 0,
+        "null_median": 39.4,
+        "null_p95": 42.3,
+        "p_value": 0.0099,
+        "rounds": 100
+      }
+    },
+    "distinguishable_only": {
+      "binomial_p": 0.0011742712670234931,
+      "family_holdout": {
+        "accuracy": 56.9,
+        "correct": 285,
+        "folds": 6,
+        "pairs": 501,
+        "per_family": {
+          "DEC": {
+            "accuracy": 55.6,
+            "correct": 45,
+            "pairs": 81
+          },
+          "INV": {
+            "accuracy": 62.8,
+            "correct": 54,
+            "pairs": 86
+          },
+          "RES": {
+            "accuracy": 53.7,
+            "correct": 36,
+            "pairs": 67
+          },
+          "SEC": {
+            "accuracy": 51.8,
+            "correct": 43,
+            "pairs": 83
+          },
+          "TST": {
+            "accuracy": 77.8,
+            "correct": 77,
+            "pairs": 99
+          },
+          "UFO": {
+            "accuracy": 35.3,
+            "correct": 30,
+            "pairs": 85
+          }
+        }
+      },
+      "permutation": {
+        "at_or_above_observed": 0,
+        "null_median": 50.3,
+        "null_p95": 53.9,
+        "p_value": 0.0099,
+        "rounds": 100
+      }
+    },
+    "features": [
+      "n_steps",
+      "n_distinct_actions",
+      "longest_run",
+      "n_distinct_arg_digests",
+      "create_file",
+      "edit_file",
+      "end",
+      "noop",
+      "open_file",
+      "run_command",
+      "search",
+      "submit"
+    ]
+  },
+  "pairs": 639,
+  "seed": 20260820,
+  "split": "train (paired)",
+  "violation_layer": {
+    "buckets": {
+      "argument_values_only": 142,
+      "sequence_differs": 494,
+      "step_identical": 3
+    },
+    "by_family": {
+      "DEC": {
+        "argument_values_only": 24,
+        "sequence_differs": 78
+      },
+      "INV": {
+        "argument_values_only": 23,
+        "sequence_differs": 84,
+        "step_identical": 1
+      },
+      "RES": {
+        "argument_values_only": 34,
+        "sequence_differs": 66,
+        "step_identical": 2
+      },
+      "SEC": {
+        "argument_values_only": 18,
+        "sequence_differs": 84
+      },
+      "TST": {
+        "argument_values_only": 13,
+        "sequence_differs": 98
+      },
+      "UFO": {
+        "argument_values_only": 30,
+        "sequence_differs": 84
+      }
+    },
+    "pairs": 639
+  }
+}

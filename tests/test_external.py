@@ -574,9 +574,20 @@ def test_the_published_external_run_reached_no_check_on_any_session():
     """
     run_dir = (Path(__file__).resolve().parents[1]
                / "eval" / "external" / "runs" / "stepshield-2026-08-20")
-    artefacts = sorted(p for p in run_dir.glob("*.json")
-                       if p.name != "corpus-probe.json")
-    assert len(artefacts) == 4, "expected four scored splits"
+    # Selected by SCHEMA, not by filename. This was a denylist naming
+    # corpus-probe.json, and the next analysis artefact dropped into this
+    # directory -- ceiling.json -- silently joined the set of "scored splits"
+    # and failed the count. A denylist has to be updated by whoever adds a
+    # file, which is to say by whoever is least likely to be thinking about
+    # this test. A scored split is one carrying a coverage table and a recall
+    # summary; anything else in the directory is not one, whatever it is called.
+    artefacts = sorted(
+        p for p in run_dir.glob("*.json")
+        if {"coverage", "summary"} <= set(json.loads(
+            p.read_text(encoding="utf-8")))
+    )
+    assert len(artefacts) == 4, (
+        f"expected four scored splits, found {[p.name for p in artefacts]}")
 
     for path in artefacts:
         result = json.loads(path.read_text(encoding="utf-8"))
