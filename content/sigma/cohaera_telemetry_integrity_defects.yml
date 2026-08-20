@@ -1,6 +1,36 @@
 title: Agent Telemetry Records Carry Malformed Or Untyped Security Fields
 id: b1e90cfe-b88d-5633-ba1d-33958a6a1190
 status: experimental
+custom:
+    # DEPLOYMENT TIER. Sigma has no tier field and this pack will not put one in
+    # `tags` -- see content/README.md, "How the tier is recorded, and why not as
+    # a tag". `custom:` is pySigma's documented extension point: unrecognised
+    # top-level keys land in SigmaRule.custom_attributes and `sigma check`
+    # passes them through with 0 errors and 0 issues.
+    #
+    # production  deployable, may page. Zero benign hits on the evaluation card.
+    # hunt        never an alert. Investigation surface only.
+    # dashboard   a configuration state, not an event. Alert on a CHANGE in it.
+    deployment_tier: dashboard
+    tier_rationale: >-
+        Same shape as the coverage rule: a newly-onboarded adapter emits a
+        steady trickle of defects that means nothing. The alertable event is a
+        defect rate that CHANGES for an agent that was previously clean, or one
+        that correlates with that agent's consequential tools.
+    # Ownership and review. `author` records who wrote it; `owner` records who
+    # answers for it now, and mirrors .github/CODEOWNERS. An unowned rule is a
+    # stale rule within two quarters.
+    owner: '@404SecNotFound'
+    last_reviewed: 2026-08-19
+    review_cadence_days: 90
+    next_review: 2026-11-17
+    # This rule selects no CHxx check, so the evaluation card does not score it
+    # and no measured benign rate exists for it. A rule with no measurement
+    # cannot be `production` in this pack, and tests/test_content.py enforces
+    # that.
+    evidence:
+        source: eval/evaluation-card.json
+        check: null
 description: |
   Cohaera accepted records for this session in which one or more
   security-relevant fields were not of the type the schema declares, and treated

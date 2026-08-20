@@ -1,6 +1,40 @@
 title: Agent Completed A Consequential Action After Reading Untrusted Content
 id: 6e972919-fc68-45cb-9bf9-30475720e2c1
 status: experimental
+custom:
+    # DEPLOYMENT TIER. Sigma has no tier field and this pack will not put one in
+    # `tags` -- see content/README.md, "How the tier is recorded, and why not as
+    # a tag". `custom:` is pySigma's documented extension point: unrecognised
+    # top-level keys land in SigmaRule.custom_attributes and `sigma check`
+    # passes them through with 0 errors and 0 issues.
+    #
+    # production  deployable, may page. Zero benign hits on the evaluation card.
+    # hunt        never an alert. Investigation surface only.
+    # dashboard   a configuration state, not an event. Alert on a CHANGE in it.
+    deployment_tier: hunt
+    tier_rationale: >-
+        40.0% target precision and 48 benign hits, every one of them a
+        correctly-behaving agent that read hostile content and ignored it. The
+        check is working as designed and the alert is still wrong two times in
+        three.
+    # Ownership and review. `author` records who wrote it; `owner` records who
+    # answers for it now, and mirrors .github/CODEOWNERS. An unowned rule is a
+    # stale rule within two quarters.
+    owner: '@404SecNotFound'
+    last_reviewed: 2026-08-19
+    review_cadence_days: 90
+    next_review: 2026-11-17
+    # The tier is bound to a measurement, not to an opinion.
+    # tests/test_content.py re-reads these five values out of the card on every
+    # test run and fails if a rule and the evidence disagree.
+    evidence:
+        source: eval/evaluation-card.json
+        card_cell: 'unseen|task_disjoint|manifest'
+        check: CH03_untrusted_to_consequential
+        labelled: 32
+        on_target_attacks: 32
+        on_benign: 48
+        target_precision_pct: 40.0
 description: |
   Injection markers were observed in an agent session, and a state-changing or
   egress tool call COMPLETED SUCCESSFULLY afterwards in the same session.
