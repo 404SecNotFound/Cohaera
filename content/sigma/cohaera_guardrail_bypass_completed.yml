@@ -1,6 +1,40 @@
 title: Agent Guardrail Fired And A Consequential Action Completed Afterwards
 id: aa4b5aa2-7fa0-4d59-aed2-db47bfb71196
 status: experimental
+custom:
+    # DEPLOYMENT TIER. Sigma has no tier field and this pack will not put one in
+    # `tags` -- see content/README.md, "How the tier is recorded, and why not as
+    # a tag". `custom:` is pySigma's documented extension point: unrecognised
+    # top-level keys land in SigmaRule.custom_attributes and `sigma check`
+    # passes them through with 0 errors and 0 issues.
+    #
+    # production  deployable, may page. Zero benign hits on the evaluation card.
+    # hunt        never an alert. Investigation surface only.
+    # dashboard   a configuration state, not an event. Alert on a CHANGE in it.
+    deployment_tier: production
+    tier_rationale: >-
+        CH04 fires on 72 of its own labelled attacks and on 0 benign sessions in
+        the headline cell, including the 48 advisory-threshold, 28
+        approved-continuation and 28 re-approved-retry confounders built to trip
+        it. This one carries the level, so it is the one that pages.
+    # Ownership and review. `author` records who wrote it; `owner` records who
+    # answers for it now, and mirrors .github/CODEOWNERS. An unowned rule is a
+    # stale rule within two quarters.
+    owner: '@404SecNotFound'
+    last_reviewed: 2026-08-19
+    review_cadence_days: 90
+    next_review: 2026-11-17
+    # The tier is bound to a measurement, not to an opinion.
+    # tests/test_content.py re-reads these five values out of the card on every
+    # test run and fails if a rule and the evidence disagree.
+    evidence:
+        source: eval/evaluation-card.json
+        card_cell: 'unseen|task_disjoint|manifest'
+        check: CH04_guardrail_overrun
+        labelled: 72
+        on_target_attacks: 72
+        on_benign: 0
+        target_precision_pct: 100.0
 description: |
   A policy control (cost threshold, delegation depth) fired during an agent
   session, and the session went on to COMPLETE state-changing or egress tool

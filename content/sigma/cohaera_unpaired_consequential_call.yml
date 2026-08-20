@@ -1,7 +1,61 @@
 title: Agent Consequential Tool Call Started With No Terminal Event
 id: d173d4c0-f82d-48e3-a7ef-7b3d4a70b38b
 status: experimental
+custom:
+    # DEPLOYMENT TIER. Sigma has no tier field and this pack will not put one in
+    # `tags` -- see content/README.md, "How the tier is recorded, and why not as
+    # a tag". `custom:` is pySigma's documented extension point: unrecognised
+    # top-level keys land in SigmaRule.custom_attributes and `sigma check`
+    # passes them through with 0 errors and 0 issues.
+    #
+    # production  deployable, may page. Zero benign hits on the evaluation card.
+    # hunt        never an alert. Investigation surface only.
+    # dashboard   a configuration state, not an event. Alert on a CHANGE in it.
+    deployment_tier: hunt
+    tier_rationale: >-
+        QUARANTINED. 0.0% target precision, 48 benign hits, and 0 labelled
+        attacks in the whole corpus -- it has never once demonstrated the
+        behaviour it exists to detect. Do not enable it as an alert. See the
+        warning at the top of the description.
+    # Ownership and review. `author` records who wrote it; `owner` records who
+    # answers for it now, and mirrors .github/CODEOWNERS. An unowned rule is a
+    # stale rule within two quarters.
+    owner: '@404SecNotFound'
+    last_reviewed: 2026-08-19
+    review_cadence_days: 90
+    next_review: 2026-11-17
+    # The tier is bound to a measurement, not to an opinion.
+    # tests/test_content.py re-reads these five values out of the card on every
+    # test run and fails if a rule and the evidence disagree.
+    evidence:
+        source: eval/evaluation-card.json
+        card_cell: 'unseen|task_disjoint|manifest'
+        check: CH05_unpaired_calls
+        labelled: 0
+        on_target_attacks: 0
+        on_benign: 48
+        target_precision_pct: 0.0
 description: |
+  QUARANTINED. DO NOT ENABLE THIS AS AN ALERT. READ THIS PARAGRAPH FIRST.
+
+  This rule has never demonstrated the behaviour it exists to detect. On the
+  evaluation card's headline cell CH05 fires on 48 benign sessions and on 0 of
+  its own labelled attacks, and target precision is 0.0%. The reason is not that
+  it missed them: the corpus contains NO attack CH05 is responsible for, so the
+  denominator is zero and "0 of 0" is not a pass, it is a measurement that never
+  happened. Every attack it has ever fired on belonged to a different check.
+
+  In detection-as-code terms that makes it an untested detection, and it is
+  shipped here only because the engine emits the check and a check with no
+  content is a detection nobody receives. It stays in the pack, in the hunt
+  tier, so that the gap is visible rather than absent. The thing that would move
+  it is not tuning; it is an attack fixture in eval/corpus that CH05 is the
+  target check for -- `attack_omitted_call` is the closest shape and it is
+  CH06's, because the deletion is caught by the collector's sequence rather than
+  by the call pairing.
+
+  What it says when it fires, for the hunt that will read it:
+
   A state-changing or egress tool call has an incomplete lifecycle: a
   tool_start with no terminal event, OR a terminal event with no start, OR a
   terminal event whose span does not match any open call.
@@ -46,6 +100,13 @@ fields:
     - data.event_count
     - data.findings
 falsepositives:
+    - |
+      TOTAL, ON THE ONLY EVIDENCE THAT EXISTS. Every session this check has ever
+      fired on that was NOT an attack of some other check's was benign: 48 of
+      them, all `benign_hard_timeout_unpaired` -- a call that timed out and
+      emitted no terminal event. Target precision 0.0% on 0 labelled attacks.
+      There is no tuning that fixes a check with no true positives to tune
+      towards, which is why this ships quarantined rather than tuned.
     - Agent process killed or restarted mid-session. Correlate with host
       telemetry before treating it as a collection fault.
     - Telemetry backlog under load, which is expected behaviour for a
