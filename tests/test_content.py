@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import datetime
 import json
 import re
 import sys
@@ -35,7 +36,12 @@ from cohaera.capabilities import (
     Capability,
     CapabilityManifest,
 )
-from cohaera.checks import ALL_CHECKS, SequenceGrammar, run_all
+from cohaera.checks import (
+    ALL_CHECKS,
+    CHECK_FAMILIES,
+    SequenceGrammar,
+    run_all,
+)
 from cohaera.identity import NO_TRUST_CONFIG, run_id
 from cohaera.limits import DEFAULT_LIMITS
 from cohaera.model import Event, Session, to_cim_event
@@ -47,6 +53,9 @@ yaml = pytest.importorskip("yaml", reason="PyYAML is a dev dependency")
 REPO = Path(__file__).resolve().parent.parent
 SIGMA_DIR = REPO / "content" / "sigma"
 MANIFEST = REPO / "content" / "manifest" / "example_capability_manifest.json"
+CONTENT_README = REPO / "content" / "README.md"
+CARD = REPO / "eval" / "evaluation-card.json"
+CODEOWNERS = REPO / ".github" / "CODEOWNERS"
 BASE = 1_785_700_000.0
 
 VALID_LEVELS = {"informational", "low", "medium", "high", "critical"}
@@ -306,6 +315,290 @@ def test_every_emitted_check_id_has_a_rule():
                     selected.update(value if isinstance(value, list) else [value])
     assert set(ALL_CHECKS) == selected, (
         f"checks with no Sigma rule: {sorted(set(ALL_CHECKS) - selected)}")
+
+
+# ---------------------------------------------------------------------------
+# Deployment tiers, and the thing that makes them worth anything: they are
+# bound to a measurement rather than to the author's confidence
+# ---------------------------------------------------------------------------
+#
+# Every rule in this pack matches on a Cohaera verdict, so "is this rule good
+# enough to page somebody" is not a judgement anyone has to make by reading it.
+# eval/evaluation-card.json already records, per check, how often it fired on
+# the attacks it is responsible for and how often it fired on benign sessions.
+# The tier in each rule's ``custom:`` block is a claim about those numbers, and
+# these tests re-read the numbers on every run.
+#
+# The rule that carries the weight is
+# ``test_a_production_rule_needs_a_check_the_card_scores_at_zero_benign``. Every
+# other assertion here checks that a rule says what it means; that one checks
+# that what it means is true.
+
+TIERS = ("production", "hunt", "dashboard")
+
+# A hunt rule is investigation surface. Sigma has no "do not page" field, so the
+# level is the thing every downstream router reads, and a hunt rule at high or
+# critical will be routed to a queue somebody is paid to answer.
+LEVELS_THAT_PAGE = {"high", "critical"}
+
+# The cell the evaluation card publishes in section 4. Named here rather than
+# taken from whichever cell looks best: `name_only` and `random_LEAKY` both
+# exist to be worse, and reading a tier out of the flattering ablation is the
+# failure this whole file is against.
+HEADLINE_CELL = "unseen|task_disjoint|manifest"
+
+# The corpus these tiers were decided against. A regenerated corpus is a new
+# measurement and the tiers have to be re-confirmed rather than inherited, so
+# this is asserted rather than merely recorded. If it fails, re-read section 4
+# of the evaluation card and re-derive every rule's `custom.evidence` block --
+# do not just paste the new digest in.
+CARD_CORPUS_DIGEST = "a3d9aa5099f7e8d3"
+
+# The five values each rule copies out of the card, and the card's own key for
+# each. `source` and `card_cell` are provenance; these are the claim.
+EVIDENCE_KEYS = ("labelled", "on_target_attacks", "on_benign",
+                 "target_precision_pct")
+
+
+def card_checks() -> dict[str, dict]:
+    card = json.loads(CARD.read_text(encoding="utf-8"))
+    return card["cells"][HEADLINE_CELL]["check_attribution"]
+
+
+def selected_checks(rule: dict) -> set[str]:
+    out: set[str] = set()
+    for block in rule["detection"].values():
+        if not isinstance(block, dict):
+            continue
+        for key, value in block.items():
+            if key.startswith("data.triggered_rules"):
+                out.update(value if isinstance(value, list) else [value])
+    return out
+
+
+def declared_family(rule: dict) -> str | None:
+    """The card's check name for whatever this rule selects on.
+
+    Derived from the rule's own detection through ``CHECK_FAMILIES`` rather than
+    from the string in ``custom.evidence.check``, so the rule cannot claim one
+    check's evidence while matching another's.
+    """
+    families = {CHECK_FAMILIES[c] for c in selected_checks(rule)
+                if c in CHECK_FAMILIES}
+    assert len(families) <= 1, f"rule spans several check families: {families}"
+    return families.pop() if families else None
+
+
+def test_the_card_the_tiers_were_read_from_is_the_card_on_disk():
+    """A tier is a statement about a measurement. If the measurement has been
+    regenerated, every tier in the pack is unverified until somebody re-reads
+    it."""
+    card = json.loads(CARD.read_text(encoding="utf-8"))
+    assert card["corpus_digest"] == CARD_CORPUS_DIGEST, (
+        "the evaluation corpus has changed since the deployment tiers were set. "
+        "Re-read section 4 of eval/EVALUATION-CARD.md and re-derive every "
+        "custom.evidence block in content/sigma/ before updating this digest.")
+    assert HEADLINE_CELL in card["cells"]
+
+
+@pytest.mark.parametrize("path", sigma_files(), ids=lambda p: p.stem)
+def test_every_rule_declares_a_deployment_tier(path):
+    """Sigma has no tier field, so an untiered rule is a rule whose deployer has
+    to guess -- and the pack's own numbers say the guess is wrong for four of
+    the seven checks."""
+    rule = load_rule(path)
+    custom = rule.get("custom")
+    assert isinstance(custom, dict), f"{path.name} has no custom: block"
+    assert custom.get("deployment_tier") in TIERS, (
+        f"{path.name} declares tier {custom.get('deployment_tier')!r}; "
+        f"the tiers are {TIERS}")
+    assert str(custom.get("tier_rationale", "")).strip(), (
+        f"{path.name} states a tier and does not say why")
+
+
+@pytest.mark.parametrize("path", sigma_files(), ids=lambda p: p.stem)
+def test_every_rule_has_an_owner_and_a_review_date(path):
+    """``author`` records who wrote it. That is not the same question as who
+    answers for it now, and an unowned rule is a stale rule within two
+    quarters."""
+    custom = load_rule(path)["custom"]
+    owner = str(custom.get("owner", ""))
+    assert owner.startswith("@"), f"{path.name} has no owner handle"
+    assert owner in CODEOWNERS.read_text(encoding="utf-8"), (
+        f"{path.name} is owned by {owner}, who is not in .github/CODEOWNERS")
+
+    cadence = custom.get("review_cadence_days")
+    assert isinstance(cadence, int) and 0 < cadence <= 180, (
+        f"{path.name} declares a review cadence of {cadence!r}; detection "
+        f"content that is not re-read within two quarters is not maintained")
+    last, nxt = custom.get("last_reviewed"), custom.get("next_review")
+    assert isinstance(last, datetime.date) and isinstance(nxt, datetime.date)
+    assert nxt == last + datetime.timedelta(days=cadence), (
+        f"{path.name}: next_review {nxt} is not last_reviewed {last} plus "
+        f"{cadence} days")
+
+
+@pytest.mark.parametrize("path", sigma_files(), ids=lambda p: p.stem)
+def test_no_hunt_tier_rule_can_page(path):
+    """The tier says never alert. The level is what a router actually reads, so
+    the two must not disagree."""
+    rule = load_rule(path)
+    if rule["custom"]["deployment_tier"] != "hunt":
+        pytest.skip("not hunt tier")
+    assert rule["level"] not in LEVELS_THAT_PAGE, (
+        f"{path.name} is hunt tier at level {rule['level']}. A hunt rule is an "
+        f"investigation surface; anything routed on level will page on it.")
+
+
+@pytest.mark.parametrize("path", sigma_files(), ids=lambda p: p.stem)
+def test_the_check_a_rule_claims_evidence_for_is_the_one_it_selects_on(path):
+    """A rule quoting another check's numbers would launder a 27.1% detection
+    into a 100% one without changing a line of its detection."""
+    rule = load_rule(path)
+    stated = rule["custom"]["evidence"].get("check")
+    assert stated == declared_family(rule), (
+        f"{path.name} claims evidence for {stated!r} but its detection selects "
+        f"on {sorted(selected_checks(rule))}, which the engine attributes to "
+        f"{declared_family(rule)!r}")
+
+
+@pytest.mark.parametrize("path", sigma_files(), ids=lambda p: p.stem)
+def test_a_production_rule_needs_a_check_the_card_scores_at_zero_benign(path):
+    """THE ONE THAT MATTERS. A rule may not be marked production unless the
+    evaluation card records zero benign hits for the check it fires on.
+
+    This is the C4-11 doctrine applied to a tier instead of a count: a claim in
+    a committed file that nothing recomputes is a claim that is already drifting.
+    "Deployable" is exactly such a claim, it is the most consequential one this
+    pack makes, and until now the only thing behind it was that the author
+    believed it.
+
+    Note what it does NOT assert. Nothing here says a hunt rule must have benign
+    hits -- a check can be quiet and still not be worth paging on. The
+    implication runs one way, because that is the direction that costs an
+    analyst their night.
+    """
+    rule = load_rule(path)
+    if rule["custom"]["deployment_tier"] != "production":
+        pytest.skip("not production tier")
+
+    family = declared_family(rule)
+    assert family is not None, (
+        f"{path.name} is production and selects no CHxx check, so the "
+        f"evaluation card does not score it. A rule with no measurement cannot "
+        f"be production in this pack.")
+    measured = card_checks()[family]
+    assert measured["on_benign"] == 0, (
+        f"{path.name} is marked production, but {HEADLINE_CELL} records "
+        f"{measured['on_benign']} benign hits for {family} "
+        f"({measured['target_precision_pct']}% target precision). Move it to "
+        f"hunt or change the detector; do not change the tier alone.")
+
+
+@pytest.mark.parametrize("path", sigma_files(), ids=lambda p: p.stem)
+def test_every_evidence_number_in_a_rule_matches_the_card(path):
+    """The numbers a deploying engineer reads in the rule are the numbers the
+    card measured, or the test fails. Hand-copied figures are how the README's
+    results table went two corpus revisions stale."""
+    rule = load_rule(path)
+    evidence = rule["custom"]["evidence"]
+    family = evidence.get("check")
+    if family is None:
+        assert declared_family(rule) is None, (
+            f"{path.name} declares no check but selects "
+            f"{sorted(selected_checks(rule))}")
+        for key in EVIDENCE_KEYS:
+            assert key not in evidence, (
+                f"{path.name} has no check and still quotes {key}")
+        return
+    assert evidence.get("card_cell") == HEADLINE_CELL
+    measured = card_checks()[family]
+    stated = {k: evidence.get(k) for k in EVIDENCE_KEYS}
+    truth = {k: measured[k] for k in EVIDENCE_KEYS}
+    assert stated == truth, (
+        f"{path.name} quotes {stated} for {family}; the card says {truth}")
+
+
+@pytest.mark.parametrize("path", sigma_files(), ids=lambda p: p.stem)
+def test_content_readme_lists_every_rule_at_the_tier_the_rule_declares(path):
+    """A tier nobody can see before they deploy is not a control.
+
+    The rule carries it for a pipeline; content/README.md carries it for the
+    engineer choosing what to enable, and the two drift the moment one of them
+    is edited alone.
+    """
+    tier = load_rule(path)["custom"]["deployment_tier"]
+    rows = [line for line in CONTENT_README.read_text(encoding="utf-8").splitlines()
+            if line.startswith("|") and f"`{path.name}`" in line]
+    assert rows, f"{path.name} is not listed in content/README.md"
+    assert any(f"`{tier}`" in row for row in rows), (
+        f"content/README.md does not list {path.name} as {tier}: {rows}")
+
+
+def test_ch05_is_quarantined_and_the_rule_says_why():
+    """CH05 has never fired on an attack it is responsible for, because the
+    corpus contains none. That is not a passing grade on zero tests; it is zero
+    tests. Deleting the rule would hide the gap, so it ships quarantined and
+    says so where somebody about to enable it will read it.
+    """
+    measured = card_checks()["CH05_unpaired_calls"]
+    assert measured["labelled"] == 0 and measured["on_target_attacks"] == 0, (
+        "the corpus now labels attacks for CH05. Re-measure it and re-read the "
+        "quarantine note in cohaera_unpaired_consequential_call.yml, which "
+        "asserts there are none.")
+    assert measured["on_benign"] > 0 and measured["target_precision_pct"] == 0.0
+
+    rule = load_rule(SIGMA_DIR / "cohaera_unpaired_consequential_call.yml")
+    assert rule["custom"]["deployment_tier"] != "production"
+    text = rule["description"] + " ".join(rule["falsepositives"])
+    for phrase in ("QUARANTINED", "0.0%", "never demonstrated"):
+        assert phrase in text, f"the CH05 rule no longer says {phrase!r}"
+
+
+def test_ch02_records_that_it_is_blind_by_default_and_expensive_when_it_is_not():
+    """The two halves have to appear together. Either on its own reads as a
+    tuning note; together they are the trade, and it is the worst in the pack.
+    """
+    rule = load_rule(SIGMA_DIR / "cohaera_concealment_gap.yml")
+    assert rule["custom"]["deployment_tier"] == "hunt"
+    text = rule["description"] + " ".join(rule["falsepositives"])
+    for phrase in ("capture_tool_data", "hot_cold.py", "27.1%", "108 benign"):
+        assert phrase in text, f"the CH02 rule no longer says {phrase!r}"
+
+
+def test_the_dashboard_tier_did_not_flatten_the_coverage_rules_guidance():
+    """The coverage rule's falsepositives block was already right before there
+    were tiers: the state is not a false positive, and the alertable event is a
+    DROP. Tiering it must not have rewritten that into boilerplate.
+    """
+    rule = load_rule(SIGMA_DIR / "cohaera_coverage_degraded.yml")
+    assert rule["custom"]["deployment_tier"] == "dashboard"
+    assert rule["level"] == "informational"
+    text = " ".join(rule["falsepositives"])
+    assert "NOT A FALSE POSITIVE, A CONFIGURATION STATE" in text
+    assert "DROP in completeness" in text
+
+
+def test_the_tiers_partition_the_pack_the_way_the_card_does():
+    """The whole point, stated once as an inventory rather than per rule.
+
+    Three checks measured at zero benign hits, four measured with hundreds
+    between them, and a pack that used to present all of them as one thing
+    called "14 Sigma rules, validated".
+    """
+    by_tier: dict[str, set[str | None]] = {}
+    for path in sigma_files():
+        rule = load_rule(path)
+        by_tier.setdefault(rule["custom"]["deployment_tier"], set()).add(
+            declared_family(rule))
+    assert by_tier["production"] == {"CH04_guardrail_overrun",
+                                     "CH06_evidence_integrity",
+                                     "CH07_effect_contradiction"}
+    assert by_tier["hunt"] == {"CH01_sequence_order", "CH02_concealment_gap",
+                               "CH03_untrusted_to_consequential",
+                               "CH05_unpaired_calls"}
+    assert by_tier["dashboard"] == {None}
+    assert set(card_checks()) == set().union(*by_tier.values()) - {None}
 
 
 # ---------------------------------------------------------------------------
