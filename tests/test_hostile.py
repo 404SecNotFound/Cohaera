@@ -541,6 +541,147 @@ def test_ch04_policy_semantics_gap_is_in_the_coverage_contract():
 
 
 # =====================================================================
+# EXTERNAL-01  CH04's coverage contract on a session with no control plane
+# =====================================================================
+
+def _ungoverned_egress(manifest):
+    """One consequential egress call, no policy event, no approval.
+
+    Everything else is as good as this telemetry gets -- producer session_id,
+    valid clocks, a manifest-declared tool class -- so that the only thing
+    CH04's contract can be short of is guardrail evidence. Any confidence below
+    1.0 here is attributable to that and nothing else.
+    """
+    return Session(session_id="s1", manifest=manifest, events=[
+        ev("tool_start", 0, tool_name="send_email", span_id="A",
+           trace_id="s1"),
+        ev("tool_end", 1, tool_name="send_email", span_id="A", trace_id="s1"),
+        ev("model_response", 2, trace_id="s1",
+           data={"response_text": "I sent the email."}),
+    ])
+
+
+_EXT01_TOOLS = {"send_email": {"effects": ["egress"], "reversible": False,
+                             "destination": "external:smtp"}}
+_EXT01_UNGOVERNED = CapabilityManifest.from_obj({
+    "producer": "t", "manifest_version": "1", "tools": _EXT01_TOOLS})
+_EXT01_GOVERNED = CapabilityManifest.from_obj({
+    "producer": "t", "manifest_version": "1", "tools": _EXT01_TOOLS,
+    "policies": {
+        "cost_threshold_exceeded": {"enforcement": "advisory"},
+        "depth_exceeded": {"enforcement": "blocking"},
+    }})
+
+
+def test_ext01_ch04_declines_on_a_session_with_no_guardrail_evidence():
+    """EXTERNAL-01. The coverage contract inverted: full confidence for being blind.
+
+    ``coverage()`` added ``policy_semantics`` and ``approval_binding`` to CH04's
+    required surfaces only ``if has_policy`` -- only once policy events already
+    existed. So the one state that cost CH04 nothing was the state where it had
+    no guardrail evidence whatsoever: a consequential egress call, zero policy
+    events, zero approvals reported ``evaluated`` at confidence 1.0 with an
+    empty ``missing_surfaces`` and no reasons. That is not a rare corner. It is
+    every public trace corpus and every deployment that has not wired a policy
+    engine to its telemetry. CH06 and CH07 decline in the equivalent state and
+    name the surface they are short of; CH04 alone reported a clean bill.
+
+    THE MUTATION THIS TEST EXISTS TO CATCH: put the ``if has_policy:`` guard
+    back on CH04's ``required`` list in ``coverage()``. The contract goes back
+    to ``evaluated``/1.0/``missing_surfaces == []`` on this exact session, and
+    this test fails on every assertion below.
+    """
+    s = _ungoverned_egress(_EXT01_UNGOVERNED)
+    assert [c.name for c in s.consequential_calls] == ["send_email"]
+    assert s.policy_events == []
+    assert len(s.approvals) == 0
+
+    ch04 = next(c for c in coverage(s, None)["checks"]
+                if c["check"] == "CH04_guardrail_overrun")
+
+    assert ch04["status"] == "not_evaluated"
+    assert ch04["confidence"] == 0.0
+    assert ch04["reasons"] == ["NO_POLICY_EVIDENCE"]
+    assert ch04["missing_surfaces"] == ["policy_semantics", "approval_binding"]
+    # The required list is the check's standing bill of materials. It must not
+    # shrink because the session happens not to supply an entry on it -- that
+    # is the defect, stated as a property rather than as an output.
+    assert "policy_semantics" in ch04["required_surfaces"]
+    assert "approval_binding" in ch04["required_surfaces"]
+    assert ch04["remedies"], "a declined check that names no remedy is a shrug"
+
+
+def test_ext01_ch04_required_surfaces_do_not_depend_on_the_session():
+    """The same list whether or not a control fired. That IS the contract."""
+    quiet = _ungoverned_egress(_EXT01_UNGOVERNED)
+    fired = Session(session_id="s1", manifest=_EXT01_UNGOVERNED, events=[
+        ev("cost_threshold_exceeded", 0, trace_id="s1",
+           data={"session_cost_usd": 0.9}),
+        *_ungoverned_egress(_EXT01_UNGOVERNED).events,
+    ])
+    both = [next(c for c in coverage(s, None)["checks"]
+                 if c["check"] == "CH04_guardrail_overrun")
+            for s in (quiet, fired)]
+    assert both[0]["required_surfaces"] == both[1]["required_surfaces"]
+
+
+def test_ext01_declared_controls_that_did_not_fire_are_a_result():
+    """The other world, and the reason the fix is not a blanket decline.
+
+    A session with no policy event is either a governed agent that stayed
+    inside its limits or an agent with no limits at all, and the event stream
+    cannot tell them apart -- both are an absence. The operator's manifest can:
+    a ``policies`` section declares that these controls exist and what they do,
+    out of band, and it outranks the event for the same reason it does in
+    ``_resolved_enforcement``. With one, silence is a result and CH04 reports
+    it; the approval surface is vacuous rather than missing, because no control
+    fired and there was therefore no continuation for an approval to cover.
+    """
+    s = _ungoverned_egress(_EXT01_GOVERNED)
+    assert s.policy_events == []
+
+    ch04 = next(c for c in coverage(s, None)["checks"]
+                if c["check"] == "CH04_guardrail_overrun")
+
+    assert ch04["status"] == "evaluated"
+    assert ch04["confidence"] == 1.0
+    assert ch04["missing_surfaces"] == []
+    assert "NO_POLICY_EVIDENCE" not in ch04["reasons"]
+    # ...and it must say what it is resting on, or the two worlds differ only
+    # by a number an analyst has no way to interpret.
+    assert any("declared in the capability manifest" in a
+               for a in ch04["assumptions"])
+
+
+def test_ext01_a_control_that_fired_is_unaffected():
+    """The guard on the fix. A session with policy events keeps its old path.
+
+    ``benign_hard_advisory_threshold``, ``benign_hard_approved_continuation``
+    and ``benign_hard_reapproved_retry`` are the corpus kinds that exercise a
+    control firing on correct behaviour, and they sit at zero false positives.
+    Nothing about the fix may reach them: the new code is charged for the
+    ABSENCE of policy evidence, and a fired control is its presence.
+    """
+    s = Session(session_id="s1", manifest=_EXT01_GOVERNED, events=[
+        ev("cost_threshold_exceeded", 0, trace_id="s1",
+           data={"session_cost_usd": 0.9, "threshold_usd": 0.5}),
+        *_ungoverned_egress(_EXT01_GOVERNED).events,
+    ])
+    assert s.policy_events == ["cost_threshold_exceeded"]
+
+    findings = ch04_guardrail_overrun(s)
+    assert findings == [], "an advisory control declared in the manifest"
+
+    ch04 = next(c for c in coverage(s, None)["checks"]
+                if c["check"] == "CH04_guardrail_overrun")
+    assert "NO_POLICY_EVIDENCE" not in ch04["reasons"]
+    # Declared, so no semantics gap; unapproved, so the approval gap stands --
+    # exactly what this session reported before EXTERNAL-01.
+    assert "POLICY_SEMANTICS_UNDECLARED" not in ch04["reasons"]
+    assert "NO_APPROVAL_EVIDENCE" in ch04["reasons"]
+
+
+# =====================================================================
 # BUG-10  coverage confidence
 # =====================================================================
 
