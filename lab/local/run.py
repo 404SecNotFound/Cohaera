@@ -18,29 +18,39 @@ has been built.
 
 This is the other half, and it is deliberately not a substitute. It runs the
 part that IS reproducible anywhere Python is: mint a collector key, emit the
-same workflow in five states, sign it, score it with the real CLI under a real
+same workflow in six states, sign it, score it with the real CLI under a real
 trust store and a real ledger, replay it, fork it, and write down exactly what
 came out with a digest over every input and output.
+
+It then scores three more sessions TWICE each -- with a capability manifest and
+without, signed and merely chained, with a correlation secret and without --
+because the equipped configuration is the one the author chose and the empty
+one is the one a new operator has. See ``_contract``.
 
 WHAT IT PROVES, AND WHAT IT DOES NOT
 ------------------------------------
 It proves the evidence path works end to end and keeps working: the run
 manifest is committed and CI re-runs it, so a change that quietly alters what a
-verdict says fails a diff rather than a reviewer's memory.
+verdict says fails a diff rather than a reviewer's memory. It is a SMOKE TEST
+and a REPRODUCIBILITY CHECK.
 
-It proves nothing about network isolation, nothing about a real agent, nothing
-about a real provider's receipts, and nothing about detection efficacy -- these
-are six hand-written sessions, not a sample of anything. The numbers that speak
-to efficacy are in ``eval/EVALUATION-CARD.md`` and they are worse than these
-six sessions would suggest.
+It is not an evaluation and its output is not a result. It proves nothing about
+network isolation, nothing about a real agent, nothing about a real provider's
+receipts, and nothing about detection efficacy -- these are nine hand-written
+sessions, not a sample of anything. The numbers that speak to efficacy are in
+``eval/EVALUATION-CARD.md`` and they are worse than these sessions would
+suggest.
 
 DETERMINISM
 -----------
 Every timestamp derives from a fixed constant, the signing key is a fixed lab
-seed, and ``--evidence-as-of`` is pinned. No wall clock and no random value
-reaches the manifest, so two runs on two machines produce the same bytes. That
-is the property that makes the committed artefact worth committing: if it
-changes, something changed.
+seed, ``--evidence-as-of`` is pinned, and the correlation secret is set by this
+file rather than inherited from the shell. No wall clock, no interpreter
+version, no hostname, no absolute path and no random value reaches the
+manifest, so two runs on two machines produce the same bytes. That is the
+property that makes the committed artefact worth committing: if it changes,
+something changed. Verified on CPython 3.10, 3.11, 3.12 and 3.13, which is the
+whole range ``pyproject.toml`` supports.
 """
 
 from __future__ import annotations
@@ -67,11 +77,14 @@ from cohaera import (  # noqa: E402
     __version__,
     ed25519,
 )
+from cohaera.cli import SECRET_ENV  # noqa: E402
 from cohaera.evidence import (  # noqa: E402
     INTEGRITY_FIELD,
+    INTEGRITY_SCHEMA,
     ROLE_COLLECTOR,
     TRUST_STORE_SCHEMA,
     body_digest,
+    chain_seed,
     chain_step,
     signing_input,
 )
@@ -82,6 +95,14 @@ from tools.collector_sign import key_id_for, sign_stream  # noqa: E402
 # cannot reach, and a key in a public repository is reachable by everyone. It
 # is here so the run is reproducible, and for no other reason.
 LAB_SEED = bytes.fromhex("5c" * 32)
+
+# Likewise worth nothing, and committed for the same reason. A correlation
+# secret keys the anonymous session digests so a small identity space cannot be
+# enumerated out of the SIEM copy; one published in a repository keys nothing
+# against anybody. It is here so the `keyed` half of the 08 pair is
+# reproducible, and the lab pins it rather than reading the operator's -- see
+# _score.
+LAB_CORRELATION_SECRET = "lab-correlation-secret-published-on-purpose"
 STREAM = "lab-collector-01"
 AS_OF = scenarios.BASE + 10_000.0
 MAX_AGE = 86_400.0
@@ -112,8 +133,9 @@ def _jsonl(path: Path, records: list[dict]) -> Path:
                                 for r in records))
 
 
-def _score(work: Path, telemetry: Path, *, store: Path, manifest: Path,
-           ledger: Path | None = None) -> tuple[int, list[dict], str]:
+def _score(work: Path, telemetry: Path, *, store: Path,
+           manifest: Path | None = None, ledger: Path | None = None,
+           secret: str | None = None) -> tuple[int, list[dict], str]:
     """Run the real CLI, the way an operator would."""
     # Every path is relative to `work`, and the CLI is run FROM there. That is
     # not tidiness: analysis_run_id commits to the source string, so an
@@ -123,12 +145,26 @@ def _score(work: Path, telemetry: Path, *, store: Path, manifest: Path,
     # the lab has to stop feeding it a machine-specific input.
     argv = [sys.executable, "-m", "cohaera.cli", "score", telemetry.name,
             "--trust-store", store.name,
-            "--tool-manifest", manifest.name,
             "--evidence-max-age", str(MAX_AGE),
             "--evidence-as-of", str(AS_OF)]
+    if manifest is not None:
+        argv += ["--tool-manifest", manifest.name]
     if ledger is not None:
         argv += ["--seen-streams", ledger.name]
     env = dict(os.environ, PYTHONPATH=str(REPO / "src"))
+    # THE LAB DECIDES THIS, NOT THE SHELL THE LAB WAS STARTED FROM.
+    #
+    # `correlation_keyed` and `correlation_key_version` are folded into
+    # trust_config_digest and therefore into analysis_run_id and every
+    # verdict_id below. Inheriting $COHAERA_CORRELATION_SECRET from the
+    # environment made the committed manifest a function of whoever ran it:
+    # `python lab/local/run.py --check` passed on a clean shell and failed on
+    # an operator's, with a diff full of changed verdict IDs and no clue why.
+    # That is the same defect as stamping the interpreter version into the
+    # document, arriving through an input rather than through a field.
+    env.pop(SECRET_ENV, None)
+    if secret is not None:
+        env[SECRET_ENV] = secret
     proc = subprocess.run(argv, capture_output=True, text=True, env=env,
                           cwd=str(work), timeout=300, check=False)
     records = [json.loads(line) for line in proc.stdout.splitlines()
@@ -139,6 +175,8 @@ def _score(work: Path, telemetry: Path, *, store: Path, manifest: Path,
 def _summarise(record: dict) -> dict:
     data = record["data"]
     findings = data.get("findings", [])
+    coverage = data.get("coverage", {})
+    correlation = data.get("correlation") or {}
     return {
         "session_id": record["session_id"],
         "verdict_id": record["verdict_id"],
@@ -148,8 +186,22 @@ def _summarise(record: dict) -> dict:
         # From coverage, not from the findings: a session that triggered
         # nothing still has an answer to "how far was this telemetry
         # established", and the quiet session is where it matters most.
-        "evidence_status": data.get("coverage", {}).get("evidence_status"),
-        "coverage_completeness": data.get("coverage", {}).get("completeness"),
+        "evidence_status": coverage.get("evidence_status"),
+        "coverage_completeness": coverage.get("completeness"),
+        # Per check, because the aggregate hides the thing worth seeing. A
+        # check that stops being able to run drops from `evaluated` to
+        # `not_evaluated` while the finding list stays empty and the
+        # completeness figure moves by a few hundredths -- so before this the
+        # committed manifest could not tell "nothing to report" from "nothing
+        # I was in a position to report", which is the distinction the whole
+        # project is about.
+        "checks": {c["check"]: {"status": c["status"],
+                                "confidence": round(c["confidence"], 3)}
+                   for c in coverage.get("checks", [])},
+        # What the session grouping rests on. 1.0 means the producer said
+        # where the session began; anything less means Cohaera inferred it.
+        "correlation": {"kind": correlation.get("kind"),
+                        "confidence": correlation.get("confidence")},
         "finding_count": len(findings),
     }
 
@@ -188,6 +240,112 @@ def _rechain(records: list[dict], secret: bytes, key_id: str,
         )).decode("ascii")
         clone[INTEGRITY_FIELD] = sidecar
         out.append(clone)
+    return out
+
+
+def _chain_only(records: list[dict], stream_id: str) -> list[dict]:
+    """Chain a stream the way a collector with nowhere to keep a key does.
+
+    Not ``sign_stream`` with the signatures deleted afterwards. The chain seed
+    is ``H(scheme || stream_id || key_id)`` and the verifier recomputes it from
+    the key_id ON THE RECORD, so a stream chained under a real key_id and then
+    stripped of it does not chain at all -- it reports INTEGRITY_CHAIN_BROKEN,
+    which is a different and much more alarming finding than the one this state
+    is about. A keyless collector seeds with the empty string, and this is that
+    collector.
+    """
+    out: list[dict] = []
+    head = chain_seed(stream_id, "")
+    for seq, record in enumerate(records):
+        body = {k: v for k, v in record.items() if k != INTEGRITY_FIELD}
+        prev = head
+        head = chain_step(prev, body_digest(body))
+        out.append({**body, INTEGRITY_FIELD: {
+            "scheme": INTEGRITY_SCHEMA, "stream_id": stream_id, "seq": seq,
+            "prev": prev, "chain": head}})
+    return out
+
+
+def _pass(label: str, note: str,
+          result: tuple[int, list[dict], str]) -> dict:
+    """One scoring pass, with the run-level trust configuration it ran under.
+
+    ``correlation`` here is the CORRELATOR's state -- whether a secret was in
+    force for this invocation -- and not the session's. The two are separate
+    facts and the whole point of the 08 pair is that they move independently.
+    """
+    code, records, _err = result
+    provenance = records[0]["data"]["provenance"] if records else {}
+    return {
+        "pass": label,
+        "note": note,
+        "exit_code": code,
+        "correlation_key_version": provenance.get("correlation_key_version"),
+        "correlation_keyed": provenance.get("correlation_keyed"),
+        "verdicts": [_summarise(r) for r in records],
+        "integrity_codes": _integrity_codes(records),
+    }
+
+
+def _contract(work: Path, store: Path, manifest: Path, key_id: str,
+              inputs: dict[str, str]) -> list[dict]:
+    """Three prerequisites the detector needs, each scored with and without.
+
+    Everything above this runs in the configuration the author chose. That is
+    the wrong thing to show first: the SHIPPING DEFAULT is no capability
+    manifest, no collector key and, in a great many adapters, no producer
+    session_id -- and in that configuration large parts of Cohaera decline to
+    answer. A new operator should be able to see the tool decline, and read why,
+    before deciding whether the equipped case is worth the work.
+
+    Scored in pairs because a blind spot on its own reads as a quiet result.
+    """
+    out: list[dict] = []
+
+    # ---- 1. The capability manifest ------------------------------------
+    key, title, build, question = scenarios.CONTRACT_STATES[0]
+    signed = sign_stream(build(), f"{STREAM}-{key}", LAB_SEED, key_id)
+    path = _jsonl(work / f"{key}.jsonl", signed)
+    inputs[path.name] = _sha256(path)
+    out.append({"contract": key, "title": title, "question": question,
+                "inputs": [path.name], "passes": [
+        _pass("absent", "No --tool-manifest. The default.",
+              _score(work, path, store=store)),
+        _pass("supplied", "--tool-manifest declares issue_refund a write.",
+              _score(work, path, store=store, manifest=manifest)),
+    ]})
+
+    # ---- 2. The collector signature -------------------------------------
+    key, title, build, question = scenarios.CONTRACT_STATES[1]
+    records = build()
+    unsigned = _jsonl(work / f"{key}.jsonl",
+                      _chain_only(records, f"{STREAM}-{key}"))
+    countersigned = _jsonl(work / f"{key}-signed.jsonl",
+                           sign_stream(records, f"{STREAM}-{key}-signed",
+                                       LAB_SEED, key_id))
+    inputs[unsigned.name] = _sha256(unsigned)
+    inputs[countersigned.name] = _sha256(countersigned)
+    out.append({"contract": key, "title": title, "question": question,
+                "inputs": [unsigned.name, countersigned.name], "passes": [
+        _pass("chained", "Hash chain, no signature. The first-adoption state.",
+              _score(work, unsigned, store=store, manifest=manifest)),
+        _pass("signed", "The same records, signed by the same collector.",
+              _score(work, countersigned, store=store, manifest=manifest)),
+    ]})
+
+    # ---- 3. The correlation key ------------------------------------------
+    key, title, build, question = scenarios.CONTRACT_STATES[2]
+    signed = sign_stream(build(), f"{STREAM}-{key}", LAB_SEED, key_id)
+    path = _jsonl(work / f"{key}.jsonl", signed)
+    inputs[path.name] = _sha256(path)
+    out.append({"contract": key, "title": title, "question": question,
+                "inputs": [path.name], "passes": [
+        _pass("unkeyed", f"No ${SECRET_ENV}. The default.",
+              _score(work, path, store=store, manifest=manifest)),
+        _pass("keyed", f"${SECRET_ENV} set to the committed lab value.",
+              _score(work, path, store=store, manifest=manifest,
+                     secret=LAB_CORRELATION_SECRET)),
+    ]})
     return out
 
 
@@ -300,6 +458,8 @@ def main(argv: list[str] | None = None) -> int:
          "verdicts": [_summarise(r) for r in fork_records]},
     ]
 
+    contract = _contract(work, store, manifest, key_id, inputs)
+
     inputs[store.name] = _sha256(store)
     inputs[manifest.name] = _sha256(manifest)
 
@@ -319,6 +479,7 @@ def main(argv: list[str] | None = None) -> int:
         "inputs": dict(sorted(inputs.items())),
         "states": states,
         "ledger": ledger_states,
+        "contract": contract,
     }
 
     manifest_path = out / "RUN-MANIFEST.json"
@@ -336,18 +497,33 @@ def main(argv: list[str] | None = None) -> int:
                   "committing it: a change here is a change in what a verdict "
                   "says.", file=sys.stderr)
             return 1
-        print(f"lab/local: {len(states)} states + 3 ledger passes match the "
-              f"committed manifest ({elapsed:.1f}s, python "
+        print(f"lab/local: {len(states)} states, 3 ledger passes and "
+              f"{len(contract)} coverage-contract pairs match the committed "
+              f"manifest ({elapsed:.1f}s, python "
               f"{sys.version_info.major}.{sys.version_info.minor})")
         return 0
 
     _write(manifest_path, text)
     _jsonl(out / "verdicts.jsonl", verdicts)
     _write(out / "RESULTS.md", _results_markdown(document))
-    print(f"lab/local: wrote {manifest_path.relative_to(REPO)} "
-          f"({len(states)} states, {elapsed:.1f}s, "
+    # Relative when it can be, absolute when --out points outside the tree.
+    # `Path.relative_to` RAISES on a path it cannot express, so a run written
+    # to a scratch directory used to die after doing all its work.
+    try:
+        where: Path | str = manifest_path.relative_to(REPO)
+    except ValueError:
+        where = manifest_path
+    print(f"lab/local: wrote {where} "
+          f"({len(states)} states, {len(contract)} contract pairs, "
+          f"{elapsed:.1f}s, "
           f"python {sys.version_info.major}.{sys.version_info.minor})")
     return 0
+
+
+def _cell(entry: dict | None) -> str:
+    if entry is None:
+        return "—"
+    return f"`{entry['status']}` {entry['confidence']}"
 
 
 def _results_markdown(doc: dict) -> str:
@@ -366,7 +542,7 @@ def _results_markdown(doc: dict) -> str:
         f"signing key `{doc['signing_key_id']}`, "
         f"freshness pinned to `{doc['evidence_as_of']}`.",
         "",
-        "## The five states of one workflow",
+        "## The six states of one workflow",
         "",
         "Same agent, same ticket-handling workflow. What differs between rows",
         "is the thing being demonstrated.",
@@ -396,6 +572,62 @@ def _results_markdown(doc: dict) -> str:
         codes = ", ".join(f"`{c}`" for c in entry["integrity_codes"]) or "—"
         lines.append(f"| {entry['pass']} | {codes} |")
     lines += [
+        "",
+        "## What it declines to answer, and why",
+        "",
+        "Three prerequisites the detector needs and that a first deployment",
+        "does not have. Each pair is the same telemetry scored twice — once",
+        "without the prerequisite and once with it — so the difference between",
+        "the two rows is attributable to that one thing.",
+        "",
+        "| Prerequisite | Configuration | Coverage | Session grouping | Session key | Evidence | Fired |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for entry in doc["contract"]:
+        for p in entry["passes"]:
+            for verdict in p["verdicts"]:
+                rules = ", ".join(f"`{r}`" for r in verdict["triggered_rules"]) or "—"
+                lines.append(
+                    f"| {entry['title']} | `{p['pass']}` | "
+                    f"{verdict['coverage_completeness']} | "
+                    f"{verdict['correlation']['confidence']} "
+                    f"(`{verdict['correlation']['kind']}`) | "
+                    f"`{p['correlation_key_version']}` | "
+                    f"`{verdict['evidence_status']}` | {rules} |")
+    lines += [
+        "",
+        "And per check, which is where it is actually legible. Only the checks",
+        "whose contract MOVED are listed: a check that reads the same either",
+        "way did not depend on the prerequisite.",
+        "",
+        "| Prerequisite | Check | Without | With |",
+        "|---|---|---|---|",
+    ]
+    for entry in doc["contract"]:
+        before, after = entry["passes"]
+        left = before["verdicts"][0]["checks"] if before["verdicts"] else {}
+        right = after["verdicts"][0]["checks"] if after["verdicts"] else {}
+        for check in sorted(set(left) | set(right)):
+            a, b = left.get(check), right.get(check)
+            if a == b:
+                continue
+            lines.append(
+                f"| {entry['title']} | `{check}` | "
+                f"{_cell(a)} | {_cell(b)} |")
+    lines += [
+        "",
+        "The `absent`, `chained` and `unkeyed` rows are the **shipping default**,",
+        "not a misconfiguration. A check reported `degraded` at confidence 0.0",
+        "has not run and says so; it is not a check that ran and found nothing.",
+        "",
+        "The correlation-key pair moves **no** check contract, and that is its",
+        "point. Setting `$COHAERA_CORRELATION_SECRET` changes the session key",
+        "from an unkeyed digest to an HMAC, so the identity behind it cannot be",
+        "enumerated out of the SIEM copy. It does not raise the 0.3: nothing",
+        "raises that but a producer emitting a `session_id`. What the missing",
+        "`session_id` costs is in the coverage column — the same workflow scores",
+        "0.7 with one (the `signed` row) and 0.3 without, because correlation",
+        "confidence multiplies through every check that reasons across events.",
         "",
         "## What this does not show",
         "",
