@@ -80,7 +80,17 @@
     "",
     "Where nothing declares a policy, CH04 keeps its old behaviour and its",
     "old check ID: it reports the sequence, claims no bypass, and coverage",
-    "says POLICY_SEMANTICS_UNDECLARED."
+    "says POLICY_SEMANTICS_UNDECLARED.",
+    "",
+    "There is a second reason to fill this section in, and it applies to the",
+    "sessions where NOTHING fires. A session with no policy event is either",
+    "a governed agent that stayed inside its limits or an agent with no",
+    "limits at all, and the event stream cannot tell those apart -- both are",
+    "an absence. This section can: it says the controls exist. With it, a",
+    "quiet session means CH04 looked and found nothing, and CH04 reports",
+    "evaluated. Without it, CH04 declines with NO_POLICY_EVIDENCE, because",
+    "a clean verdict over evidence it never had is the worst output this",
+    "project can produce."
   ],
 
   "manifest_version": "1",

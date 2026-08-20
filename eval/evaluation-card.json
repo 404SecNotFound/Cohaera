@@ -547,7 +547,7 @@
         "false_positives_per_1000_benign_sessions": 342.1,
         "false_positives_per_1000_sessions": 228.1,
         "incidental_detections": 32,
-        "mean_coverage_completeness": 0.6197,
+        "mean_coverage_completeness": 0.5044,
         "precision": {
           "ci95_high": 0.6103,
           "ci95_low": 0.522,
@@ -587,7 +587,7 @@
           "numerator": 240,
           "value": 0.7895
         },
-        "weighted_detected_mass": 0.8912
+        "weighted_detected_mass": 0.8968
       },
       "provenance": {
         "baseline_hash": "90972a4ce1b8c0a7",
@@ -1167,7 +1167,7 @@
         "false_positives_per_1000_benign_sessions": 394.7,
         "false_positives_per_1000_sessions": 263.2,
         "incidental_detections": 32,
-        "mean_coverage_completeness": 0.493,
+        "mean_coverage_completeness": 0.4123,
         "precision": {
           "ci95_high": 0.5741,
           "ci95_low": 0.488,
@@ -1207,7 +1207,7 @@
           "numerator": 240,
           "value": 0.7895
         },
-        "weighted_detected_mass": 0.8907
+        "weighted_detected_mass": 0.8954
       },
       "provenance": {
         "baseline_hash": "90972a4ce1b8c0a7",
@@ -1787,7 +1787,7 @@
         "false_positives_per_1000_benign_sessions": 342.1,
         "false_positives_per_1000_sessions": 228.1,
         "incidental_detections": 32,
-        "mean_coverage_completeness": 0.4952,
+        "mean_coverage_completeness": 0.4145,
         "precision": {
           "ci95_high": 0.6103,
           "ci95_low": 0.522,
@@ -1827,7 +1827,7 @@
           "numerator": 240,
           "value": 0.7895
         },
-        "weighted_detected_mass": 0.8907
+        "weighted_detected_mass": 0.8954
       },
       "provenance": {
         "baseline_hash": "90972a4ce1b8c0a7",
@@ -2463,7 +2463,7 @@
         "false_positives_per_1000_benign_sessions": 331.2,
         "false_positives_per_1000_sessions": 223.7,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.7648,
+        "mean_coverage_completeness": 0.6477,
         "precision": {
           "ci95_high": 0.6342,
           "ci95_low": 0.5484,
@@ -3147,7 +3147,7 @@
         "false_positives_per_1000_benign_sessions": 370.1,
         "false_positives_per_1000_sessions": 250.0,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.6162,
+        "mean_coverage_completeness": 0.5343,
         "precision": {
           "ci95_high": 0.6067,
           "ci95_low": 0.5221,
@@ -3831,7 +3831,7 @@
         "false_positives_per_1000_benign_sessions": 331.2,
         "false_positives_per_1000_sessions": 223.7,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.6178,
+        "mean_coverage_completeness": 0.5359,
         "precision": {
           "ci95_high": 0.6342,
           "ci95_low": 0.5484,
@@ -4515,7 +4515,7 @@
         "false_positives_per_1000_benign_sessions": 420.4,
         "false_positives_per_1000_sessions": 284.5,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.7637,
+        "mean_coverage_completeness": 0.6479,
         "precision": {
           "ci95_high": 0.5727,
           "ci95_low": 0.4907,
@@ -5199,7 +5199,7 @@
         "false_positives_per_1000_benign_sessions": 458.6,
         "false_positives_per_1000_sessions": 310.3,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.6156,
+        "mean_coverage_completeness": 0.5346,
         "precision": {
           "ci95_high": 0.5504,
           "ci95_low": 0.4699,
@@ -5883,7 +5883,7 @@
         "false_positives_per_1000_benign_sessions": 420.4,
         "false_positives_per_1000_sessions": 284.5,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.6172,
+        "mean_coverage_completeness": 0.5362,
         "precision": {
           "ci95_high": 0.5727,
           "ci95_low": 0.4907,
@@ -6511,7 +6511,7 @@
         "false_positives_per_1000_benign_sessions": 342.1,
         "false_positives_per_1000_sessions": 228.1,
         "incidental_detections": 32,
-        "mean_coverage_completeness": 0.6197,
+        "mean_coverage_completeness": 0.5044,
         "precision": {
           "ci95_high": 0.6103,
           "ci95_low": 0.522,
@@ -6551,7 +6551,7 @@
           "numerator": 240,
           "value": 0.7895
         },
-        "weighted_detected_mass": 0.8912
+        "weighted_detected_mass": 0.8968
       },
       "provenance": {
         "baseline_hash": "73a194c0d6d9c945",
@@ -7751,7 +7751,7 @@
         "false_positives_per_1000_benign_sessions": 342.1,
         "false_positives_per_1000_sessions": 228.1,
         "incidental_detections": 32,
-        "mean_coverage_completeness": 0.4939,
+        "mean_coverage_completeness": 0.4132,
         "precision": {
           "ci95_high": 0.6103,
           "ci95_low": 0.522,
@@ -7791,7 +7791,7 @@
           "numerator": 240,
           "value": 0.7895
         },
-        "weighted_detected_mass": 0.8907
+        "weighted_detected_mass": 0.8954
       },
       "provenance": {
         "baseline_hash": "73a194c0d6d9c945",
@@ -8427,7 +8427,7 @@
         "false_positives_per_1000_benign_sessions": 331.2,
         "false_positives_per_1000_sessions": 223.7,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.7648,
+        "mean_coverage_completeness": 0.6477,
         "precision": {
           "ci95_high": 0.6342,
           "ci95_low": 0.5484,
@@ -9795,7 +9795,7 @@
         "false_positives_per_1000_benign_sessions": 331.2,
         "false_positives_per_1000_sessions": 223.7,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.6171,
+        "mean_coverage_completeness": 0.5352,
         "precision": {
           "ci95_high": 0.6342,
           "ci95_low": 0.5484,
@@ -10479,7 +10479,7 @@
         "false_positives_per_1000_benign_sessions": 420.4,
         "false_positives_per_1000_sessions": 284.5,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.7637,
+        "mean_coverage_completeness": 0.6479,
         "precision": {
           "ci95_high": 0.5727,
           "ci95_low": 0.4907,
@@ -11847,7 +11847,7 @@
         "false_positives_per_1000_benign_sessions": 420.4,
         "false_positives_per_1000_sessions": 284.5,
         "incidental_detections": 0,
-        "mean_coverage_completeness": 0.6168,
+        "mean_coverage_completeness": 0.5358,
         "precision": {
           "ci95_high": 0.5727,
           "ci95_low": 0.4907,
@@ -12042,7 +12042,7 @@
       "false_positives_per_1000_benign_sessions": 420.4,
       "false_positives_per_1000_sessions": 284.5,
       "incidental_detections": 0,
-      "mean_coverage_completeness": 0.7637,
+      "mean_coverage_completeness": 0.6479,
       "precision": {
         "ci95_high": 0.5893,
         "ci95_low": 0.4736,
@@ -12168,7 +12168,7 @@
       "false_positives_per_1000_benign_sessions": 324.8,
       "false_positives_per_1000_sessions": 219.8,
       "incidental_detections": 0,
-      "mean_coverage_completeness": 0.7637,
+      "mean_coverage_completeness": 0.6479,
       "precision": {
         "ci95_high": 0.654,
         "ci95_low": 0.5336,
