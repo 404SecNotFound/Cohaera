@@ -16,11 +16,39 @@ past an earlier version of this file.
 
 ## Before anything else
 
+Set the environment up once, then verify with one command:
+
 ```bash
-python -m pip install -e ".[dev]"
-python -m pytest tests/ -q          # ~1m30s cold
+python -m venv .venv && source .venv/bin/activate
+python -m pip install -e ".[dev,content]" build
+python tools/verify.py
+```
+
+That replays **every gate CI runs** — 15 of them — and prints which passed,
+which failed, and which could not run. It takes about four minutes cold.
+`--fast` skips the slow ones; `--only lab readme-facts` runs a subset; `--list`
+prints each gate and why it exists.
+
+**`pytest` alone is not the build, and believing otherwise has cost this project
+two red pipelines.** Both were generated artefacts going stale — the evaluation
+card quotes the evasion count, the lab manifest records coverage states — and no
+unit test can see either. 12 of the 15 gates are things `pytest` does not
+run.
+
+**A gate that cannot run reports `not_evaluated`, and the run does not come out
+green.** If `sigma` or `mypy` or `build` is missing, you get a reason code and a
+non-zero exit, not a quiet tick over an unexamined gate. Pass `--allow-skips` to
+accept a hole deliberately. This is the same rule the detector holds itself to,
+applied to the thing that checks the checker.
+
+The individual commands, if you want them one at a time:
+
+```bash
+python -m pytest tests/ -q          # ~1m50s cold
 python tests/test_evasion.py        # the catalogued evasions must still work
 ruff check src tests eval tools
+python tools/readme_facts.py --check
+python lab/local/run.py --check
 ```
 
 `tests/fixtures/*.jsonl` and `eval/corpus/data/` are generated and gitignored.
