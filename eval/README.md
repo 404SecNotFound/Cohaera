@@ -554,6 +554,5 @@ The card's own "What this does not measure" section is the authoritative list.
 The short version: the corpus is synthetic and written by the detector's author,
 attack prevalence is an absurd 33%, and there is no adaptive attacker. One
 catalogued evasion from `EVASION.md` now appears in it, `attack_dilution` for
-E02, and it is there because a fix could not be graded without it — the other
-sixteen still do not. It is a large improvement on twelve fixtures and it is not
+E02, and it is there because a fix could not be graded without it — the other 27 of 28 still do not. It is a large improvement on twelve fixtures and it is not
 real agent traffic.

@@ -41,6 +41,8 @@ README = REPO / "README.md"
 EVASION = REPO / "EVASION.md"
 SECURITY = REPO / "SECURITY.md"
 CONTENT_README = REPO / "content" / "README.md"
+DOC_MAP = REPO / "docs" / "README.md"
+EVAL_README = REPO / "eval" / "README.md"
 CHANGELOG = REPO / "CHANGELOG.md"
 SIGMA = REPO / "content" / "sigma"
 CHECKS = REPO / "src" / "cohaera" / "checks.py"
@@ -164,6 +166,61 @@ def count_evasion_tests() -> int:
     """Test functions in tests/test_evasion.py."""
     path = REPO / "tests" / "test_evasion.py"
     return len(_EVASION_TEST.findall(path.read_text(encoding="utf-8")))
+
+
+# ---- counts that were spelled as words, and therefore drifted -------------
+
+# R-20, third occurrence. SECURITY.md said "Seventeen catalogued evasions" and
+# the evaluation card said "seventeen ways" against a real twenty-two. Both
+# survived a fact checker that reads digits, and a test was added to forbid
+# spelled counts -- in three files. It did not cover docs/README.md, README.md
+# or eval/README.md, and all three had drifted by the time anybody looked.
+
+# The one catalogued evasion the corpus contains: E02, as `attack_dilution`.
+# It is here rather than inline so the arithmetic below has a name, and it is a
+# constant rather than a derivation because nothing in the corpus declares
+# which evasion a kind corresponds to. If a second evasion is ever graded, this
+# is the line that has to move, and the claims below will fail until it does.
+EVASIONS_IN_CORPUS = 1
+
+
+def count_evasions_absent_from_corpus() -> int:
+    return count_constructed_evasions() - EVASIONS_IN_CORPUS
+
+
+def _indexed_documents() -> list[Path]:
+    """Every document the documentation map actually links to.
+
+    Counted from the map's own rows rather than from a directory walk. The
+    sentence being checked says "N documents. This page exists so you never
+    have to guess which one answers your question" -- so the number it owes the
+    reader is how many rows the page has, not how many markdown files exist.
+    Deriving it any other way lets the sentence and the table below it disagree
+    while both look right.
+    """
+    text = DOC_MAP.read_text(encoding="utf-8")
+    seen, out = set(), []
+    for target in re.findall(r"^\| \[[^\]]+\]\((?!https?:)([^)#]+)", text, re.M):
+        path = (DOC_MAP.parent / target).resolve()
+        if path not in seen and path.exists():
+            seen.add(path)
+            out.append(path)
+    return out
+
+
+def count_documents() -> int:
+    return len(_indexed_documents())
+
+
+def documentation_words() -> str:
+    """Total words across the indexed documents, to the nearest thousand.
+
+    Rounded because the sentence says "about", and derived because "about" is
+    not a licence to be wrong by a third.
+    """
+    words = sum(len(d.read_text(encoding="utf-8").split())
+                for d in _indexed_documents())
+    return f"{round(words / 1000) * 1000:,}"
 
 
 # ---- numbers the README quotes from the evaluation card -------------------
@@ -336,6 +393,27 @@ class Claim:
         hit = self.pattern.search(self.text() if text is None else text)
         return hit.group(1) if hit else None
 
+    def stated_everywhere(self, text: str | None = None) -> list[str]:
+        """Every stated value, in document order.
+
+        A claim's sentence can legitimately appear more than once. The README
+        states the projected precision on its first screen AND again in the
+        measured-results table, because a reader who starts at either place
+        deserves the number. ``search`` returns only the first, so the second
+        copy was never read and -- worse -- ``write`` never rewrote it.
+
+        That is not hypothetical. With the second copy set to ``99.900%`` and
+        the first left correct, ``--check`` exited 0 and all 857 tests passed:
+        a README publishing a precision four hundred times better than the
+        measured one, in the flattering direction, with nothing objecting. It
+        is C4-11 again -- a number nothing derives is already wrong -- hiding
+        inside the tool built to prevent C4-11.
+
+        Every occurrence is a claim. This returns all of them.
+        """
+        source = self.text() if text is None else text
+        return [m.group(1) for m in self.pattern.finditer(source)]
+
     def actual(self) -> str:
         return str(self.truth())
 
@@ -466,6 +544,35 @@ CLAIMS = (
     Claim("README contents-table working evasions", README,
           re.compile(r"\d+ ways to defeat this, (\d+) still working"),
           count_working_evasions),
+    # The three sentences the word-spelling test did not cover.
+    Claim("doc map document count", DOC_MAP,
+          re.compile(r"^(\d+) documents, about", re.M), count_documents),
+    Claim("doc map word count", DOC_MAP,
+          re.compile(r"documents, about ([\d,]+) words"), documentation_words),
+    # R-20, sixth instance, and this one went wrong on main in the time it took
+    # to merge a pull request. The map's EVASION row said "22 constructed
+    # evasions, 20 still working" while the branch adding E24 through E29 was in
+    # flight; the moment it landed the sentence was out by six and nothing
+    # objected, because the claims covering that pair live in README.md and
+    # SECURITY.md and nobody had added them here.
+    #
+    # The lesson is not "add this claim". It is that a counted sentence copied
+    # into a new document arrives unchecked by default, and the copy is exactly
+    # where drift hides.
+    Claim("doc map constructed evasions", DOC_MAP,
+          re.compile(r"(\d+) constructed evasions, \d+ still working"),
+          count_constructed_evasions),
+    Claim("doc map working evasions", DOC_MAP,
+          re.compile(r"\d+ constructed evasions, (\d+) still working"),
+          count_working_evasions),
+    Claim("README doc map document count", README,
+          re.compile(r"maps all (\d+) by the"), count_documents),
+    Claim("eval README evasions absent from corpus", EVAL_README,
+          re.compile(r"the other (\d+) of \d+ still do not"),
+          count_evasions_absent_from_corpus),
+    Claim("eval README constructed evasions", EVAL_README,
+          re.compile(r"the other \d+ of (\d+) still do not"),
+          count_constructed_evasions),
 )
 
 
@@ -507,13 +614,19 @@ def problems() -> list[str]:
     """Every way the committed documents currently disagree with the repository."""
     out = []
     for claim in CLAIMS:
-        stated, actual = claim.stated(), claim.actual()
-        if stated is None:
+        stated, actual = claim.stated_everywhere(), claim.actual()
+        if not stated:
             out.append(f"{claim.name}: no sentence matching "
                        f"{claim.pattern.pattern!r} found in {claim.path.name}")
-        elif stated != actual:
-            out.append(f"{claim.name}: {claim.path.name} says {stated}, "
-                       f"repository has {actual}")
+            continue
+        wrong = sorted({s for s in stated if s != actual})
+        if wrong:
+            # Name the occurrence count when there is more than one, because
+            # "says 0.238 and 99.900" reads like a typo until you know the
+            # document states the number twice.
+            where = "" if len(stated) == 1 else f" in {len(stated)} places"
+            out.append(f"{claim.name}: {claim.path.name} says "
+                       f"{', '.join(wrong)}{where}, repository has {actual}")
     for dupe in duplicate_roadmap_entries():
         out.append(f"roadmap: {dupe!r} is listed more than once")
     return out
@@ -524,14 +637,20 @@ def write() -> list[str]:
     changed = []
     for claim in CLAIMS:
         text = claim.text()
-        stated, actual = claim.stated(text), claim.actual()
-        if stated is None or stated == actual:
+        stated, actual = claim.stated_everywhere(text), claim.actual()
+        if not stated or all(s == actual for s in stated):
             continue
-        hit = claim.pattern.search(text)
-        assert hit is not None
-        lo, hi = hit.span(1)
-        claim.path.write_text(text[:lo] + actual + text[hi:], encoding="utf-8")
-        changed.append(f"{claim.name}: {stated} -> {actual}")
+        # Rewrite from the end so that replacing one span cannot shift the
+        # offsets of a span still to come.
+        rewritten = text
+        for hit in reversed(list(claim.pattern.finditer(text))):
+            lo, hi = hit.span(1)
+            rewritten = rewritten[:lo] + actual + rewritten[hi:]
+        claim.path.write_text(rewritten, encoding="utf-8")
+        stale = ", ".join(sorted({s for s in stated if s != actual}))
+        changed.append(f"{claim.name}: {stale} -> {actual}"
+                       + (f" ({len(stated)} occurrences)"
+                          if len(stated) > 1 else ""))
     return changed
 
 

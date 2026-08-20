@@ -360,16 +360,57 @@ def test_no_count_is_spelled_as_a_word_where_a_checker_cannot_read_it():
     """
     words = ("fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
              "twenty-one", "twenty-two")
+
+    # Covering three files was the mistake. R-20 happened a third time in
+    # docs/README.md ("Sixteen documents, about 57,000 words" against 19 and
+    # about 63,000), a fourth in README.md's pointer to it, and a fifth in
+    # eval/README.md ("the other sixteen still do not" against 21). None of
+    # those files was looked at. Every tracked document is looked at now, and
+    # a spelled count is a failure unless it is a frozen historical fact.
+    #
+    # Each exemption names a specific sentence, and adding one should feel
+    # like a decision rather than a convenience.
+    allowed = {
+        # A changelog records what was true at the time; the number is frozen
+        # to that release and must not track the current count.
+        ("CHANGELOG.md", "twenty-one"),
+        # Likewise: these describe what two external reviews raised, not what
+        # the repository currently contains.
+        ("REVIEW-RESPONSE.md", "sixteen"),
+        ("REVIEW-RESPONSE.md", "twenty-one"),
+        ("REVIEW-RESPONSE.md", "twenty-two"),
+        ("docs/EVIDENCE-TRUST.md", "twenty-two"),
+        ("docs/THREAT-MODEL.md", "twenty-two"),
+        # Not a count of anything tracked -- it is the heading over the short
+        # version of the pitch.
+        ("README.md", "fifteen"),
+        # Describes a defect ("assembling the same session eighteen times"),
+        # not a quantity that can drift.
+        ("eval/README.md", "eighteen"),
+        # KNOWN WRONG, AND NOT FIXED HERE. docs/THREAT-MODEL.md says "Exactly
+        # one of seventeen catalogued evasions appears in it"; the real count
+        # is twenty-two. That file is being rewritten wholesale on another
+        # branch, so fixing the line here would collide. This entry is a
+        # deliberate, temporary hole: delete it when that branch lands and the
+        # test will then enforce the correction.
+        ("docs/THREAT-MODEL.md", "seventeen"),
+    }
+
+    tracked = subprocess.run(["git", "ls-files", "*.md"], cwd=REPO,
+                             capture_output=True, text=True,
+                             check=True).stdout.split()
     offenders = []
-    for path in (REPO / "SECURITY.md", REPO / "EVASION.md",
-                 REPO / "eval" / "EVALUATION-CARD.md"):
-        text = path.read_text(encoding="utf-8").lower()
+    for rel in tracked:
+        text = (REPO / rel).read_text(encoding="utf-8").lower()
         for word in words:
-            if word in text:
-                offenders.append(f"{path.name}: {word!r}")
+            if re.search(rf"\b{re.escape(word)}\b", text):
+                if (rel, word) not in allowed:
+                    offenders.append(f"{rel}: {word!r}")
     assert not offenders, (
-        "counts spelled as words cannot be checked and have drifted twice:\n  "
-        + "\n  ".join(offenders))
+        "counts spelled as words cannot be checked and have now drifted five "
+        "times:\n  " + "\n  ".join(sorted(offenders))
+        + "\n\nEither use a digit and add a Claim in tools/readme_facts.py, "
+          "or add an exemption naming why the number is frozen.")
 
 
 def _repository_is_shallow() -> bool:
@@ -550,3 +591,75 @@ def test_the_release_notes_state_a_false_positive_rate():
         "the release notes report no false-positive rate against a benign "
         "denominator")
     assert not release_gate.problems()
+
+
+def test_a_claim_is_read_at_every_occurrence_not_just_the_first(tmp_path):
+    """The tool built to stop C4-11 had C4-11 living inside it.
+
+    ``Claim.stated`` used ``re.search``, which finds the first match and stops.
+    A document may legitimately state the same number twice -- the README
+    states the projected precision on its first screen AND again in the
+    measured-results table, because a reader who starts at either one deserves
+    the figure. Only the first was ever read, and ``--write`` only ever
+    rewrote the first.
+
+    Reproduced before fixing: with the second copy set to ``99.900%`` and the
+    first left correct, ``python tools/readme_facts.py --check`` exited 0 and
+    the whole suite passed. A README claiming precision four hundred times
+    better than the measured value, in the flattering direction, with nothing
+    in the repository objecting.
+    """
+    doc = tmp_path / "DOC.md"
+    pattern = re.compile(r"\| \*\*([\d.]+)%\*\*")
+    claim = readme_facts.Claim("precision", doc, pattern, lambda: "0.238")
+
+    doc.write_text("headline | **0.238%**\n\nresults table | **0.238%**\n",
+                   encoding="utf-8")
+    assert claim.stated_everywhere() == ["0.238", "0.238"]
+
+    doc.write_text("headline | **0.238%**\n\nresults table | **99.900%**\n",
+                   encoding="utf-8")
+    # The first-match reading still sees a correct number, which is exactly
+    # how the wrong one survived.
+    assert claim.stated() == "0.238"
+    # Reading every occurrence is what makes the disagreement visible at all.
+    assert claim.stated_everywhere() == ["0.238", "99.900"]
+
+
+def test_writing_a_claim_repairs_every_occurrence(tmp_path, monkeypatch):
+    """Detecting the drift is half of it; --write has to reach the copy too.
+
+    Rewriting only the first occurrence would leave --check failing forever on
+    a document the tool claims to be able to fix, which is a worse failure than
+    not noticing: it teaches the operator that --write does not work.
+    """
+    doc = tmp_path / "DOC.md"
+    doc.write_text("first | **1%**\nsecond | **9%**\n", encoding="utf-8")
+    claim = readme_facts.Claim(
+        "t", doc, re.compile(r"\| \*\*(\d+)%\*\*"), lambda: 1)
+    monkeypatch.setattr(readme_facts, "CLAIMS", (claim,))
+
+    changed = readme_facts.write()
+
+    assert doc.read_text(encoding="utf-8") == "first | **1%**\nsecond | **1%**\n"
+    assert changed and "2 occurrences" in changed[0], changed
+    assert not readme_facts.problems()
+
+
+def test_no_counted_claim_disagrees_with_itself():
+    """A number stated twice in one document must be the same number twice.
+
+    This is the live guard. The unit tests above prove the mechanism; this one
+    runs against the committed documents, so a future edit that copies a
+    counted sentence to a second place and lets the two drift fails here rather
+    than being published.
+    """
+    disagreeing = []
+    for claim in readme_facts.CLAIMS:
+        values = sorted(set(claim.stated_everywhere()))
+        if len(values) > 1:
+            disagreeing.append(
+                f"{claim.name} ({claim.path.name}) states {values}")
+    assert not disagreeing, (
+        "a counted claim contradicts itself within one document:\n  "
+        + "\n  ".join(disagreeing))

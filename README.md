@@ -206,7 +206,7 @@ validated.
 - [Known limitations](#known-limitations)
 - [Relationship to the upstream projects](#relationship-to-the-upstream-projects)
 
-**Other documents** — [docs/README.md](docs/README.md) maps all sixteen by the
+**Other documents** — [docs/README.md](docs/README.md) maps all 24 by the
 question each one answers. The four read most often:
 
 | | |
@@ -1141,7 +1141,7 @@ And the half that is a port rather than a contribution:
 - [x] Sigma content pack, 14 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 1024 passing across unit, hostile-input and content conformance
+- [x] Tests, 1027 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 34 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger
