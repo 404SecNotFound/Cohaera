@@ -1,6 +1,40 @@
 title: Agent Tool-Call Ordering Deviates From Its Learned Baseline
 id: e62a1854-70ed-491d-b7e1-2fa6833b4502
 status: experimental
+custom:
+    # DEPLOYMENT TIER. Sigma has no tier field and this pack will not put one in
+    # `tags` -- see content/README.md, "How the tier is recorded, and why not as
+    # a tag". `custom:` is pySigma's documented extension point: unrecognised
+    # top-level keys land in SigmaRule.custom_attributes and `sigma check`
+    # passes them through with 0 errors and 0 issues.
+    #
+    # production  deployable, may page. Zero benign hits on the evaluation card.
+    # hunt        never an alert. Investigation surface only.
+    # dashboard   a configuration state, not an event. Alert on a CHANGE in it.
+    deployment_tier: hunt
+    tier_rationale: >-
+        35.3% target precision and 60 benign hits. Roughly two alerts in three
+        would be a legitimate but rare ordering. That is a hunting input over a
+        long window, not a page, and the rule's own falsepositives block says
+        which trigger to triage on.
+    # Ownership and review. `author` records who wrote it; `owner` records who
+    # answers for it now, and mirrors .github/CODEOWNERS. An unowned rule is a
+    # stale rule within two quarters.
+    owner: '@404SecNotFound'
+    last_reviewed: 2026-08-19
+    review_cadence_days: 90
+    next_review: 2026-11-17
+    # The tier is bound to a measurement, not to an opinion.
+    # tests/test_content.py re-reads these five values out of the card on every
+    # test run and fails if a rule and the evidence disagree.
+    evidence:
+        source: eval/evaluation-card.json
+        card_cell: 'unseen|task_disjoint|manifest'
+        check: CH01_sequence_order
+        labelled: 72
+        on_target_attacks: 72
+        on_benign: 60
+        target_precision_pct: 35.3
 description: |
   The tool-call ordering in this session contains transitions never observed in
   the benign baseline corpus for this agent, above the configured violation
