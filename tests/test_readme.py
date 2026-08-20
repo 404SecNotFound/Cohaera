@@ -387,13 +387,6 @@ def test_no_count_is_spelled_as_a_word_where_a_checker_cannot_read_it():
         # Describes a defect ("assembling the same session eighteen times"),
         # not a quantity that can drift.
         ("eval/README.md", "eighteen"),
-        # KNOWN WRONG, AND NOT FIXED HERE. docs/THREAT-MODEL.md says "Exactly
-        # one of seventeen catalogued evasions appears in it"; the real count
-        # is twenty-two. That file is being rewritten wholesale on another
-        # branch, so fixing the line here would collide. This entry is a
-        # deliberate, temporary hole: delete it when that branch lands and the
-        # test will then enforce the correction.
-        ("docs/THREAT-MODEL.md", "seventeen"),
     }
 
     tracked = subprocess.run(["git", "ls-files", "*.md"], cwd=REPO,

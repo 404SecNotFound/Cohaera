@@ -653,7 +653,7 @@ Things that would change this document and have not been done.
 
 - **No real-traffic evaluation.** Every number is from a synthetic corpus
   written by the detector's author.
-- **No adaptive attacker in the corpus.** Exactly one of seventeen catalogued
+- **No adaptive attacker in the corpus.** Exactly 1 of 28 catalogued
   evasions appears in it, and only because a fix could not be graded otherwise.
 - **No fuzzing of the CLI argument surface**, only of the record surface.
 - **No measurement of Cohaera under concurrent or streaming load.** The

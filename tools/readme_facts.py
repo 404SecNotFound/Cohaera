@@ -43,6 +43,7 @@ SECURITY = REPO / "SECURITY.md"
 CONTENT_README = REPO / "content" / "README.md"
 DOC_MAP = REPO / "docs" / "README.md"
 EVAL_README = REPO / "eval" / "README.md"
+THREAT_MODEL = REPO / "docs" / "THREAT-MODEL.md"
 CHANGELOG = REPO / "CHANGELOG.md"
 SIGMA = REPO / "content" / "sigma"
 CHECKS = REPO / "src" / "cohaera" / "checks.py"
@@ -572,6 +573,16 @@ CLAIMS = (
           count_evasions_absent_from_corpus),
     Claim("eval README constructed evasions", EVAL_README,
           re.compile(r"the other \d+ of (\d+) still do not"),
+          count_constructed_evasions),
+    # The threat model's known-unknowns section counts the catalogue too. It
+    # said "seventeen" for long enough that the catalogue grew to 28 around it
+    # -- spelled as a word, so no checker could read it and no test could
+    # object. The word is now a digit for exactly that reason.
+    Claim("threat model evasions in corpus", THREAT_MODEL,
+          re.compile(r"Exactly (\d+) of [\s>]*\d+ catalogued"),
+          lambda: str(EVASIONS_IN_CORPUS)),
+    Claim("threat model catalogued evasions", THREAT_MODEL,
+          re.compile(r"Exactly \d+ of[\s>]*(\d+) catalogued"),
           count_constructed_evasions),
 )
 
