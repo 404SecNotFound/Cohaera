@@ -54,6 +54,7 @@ from eval.external.adapters.base import (
     assert_no_fabricated_evidence,
     cim_event,
 )
+from eval.external.corpus_probe import probe_stepshield_train
 from eval.external.run_external import (
     build_session,
     coverage_report,
@@ -523,3 +524,65 @@ def test_scope_audit_is_clean_when_evidence_is_charged_for():
     }
     audit = scope_audit(fake)
     assert audit["flags"] == []
+
+
+# ---------------------------------------------------------------------------
+# The corpus probe, and the run it produced
+# ---------------------------------------------------------------------------
+
+
+def test_corpus_probe_pairs_rogue_with_clean_and_counts_identical_sequences():
+    """The probe must find the pair and compare its sequences.
+
+    Run against the adapter fixtures, which ship exactly one complete
+    ``-ROGUE`` / ``-CLEAN`` pair. The assertion that matters is not the count
+    but that a pair was FORMED: a probe that silently found zero pairs would
+    divide by zero on the real corpus, and one that found one file twice would
+    report every pair identical to itself.
+    """
+    result = probe_stepshield_train(
+        Path(__file__).resolve().parents[1]
+        / "eval" / "external" / "fixtures" / "stepshield")
+
+    assert result["pairs"] == 1
+    assert result["identical_sequence_pairs"] <= result["pairs"]
+    assert result["same_length_pairs"] <= result["pairs"]
+    assert result["distinct_actions"] >= 1
+
+
+def test_corpus_probe_refuses_a_directory_with_no_pairs(tmp_path):
+    """No pairs is an error, not an empty result.
+
+    A zero-pair run would otherwise report 0 identical of 0 total, which reads
+    as "nothing indistinguishable" -- the reassuring answer -- when it actually
+    means the probe was pointed at the wrong directory.
+    """
+    (tmp_path / "SOMETHING-ELSE.jsonl").write_text('{"steps": []}')
+    with pytest.raises(SystemExit):
+        probe_stepshield_train(tmp_path)
+
+
+def test_the_published_external_run_reached_no_check_on_any_session():
+    """Pin the finding the results page is built on.
+
+    ``docs/EXTERNAL-RESULTS.md`` states that no check reached ``evaluated`` on a
+    single session. That is the claim making a zero interpretable, so it is
+    asserted against the committed artefacts rather than left to prose. If a
+    future engine change makes a check evaluable on this data, this test fails
+    and the page must be rewritten -- which is the intended behaviour, because
+    the page would then be wrong.
+    """
+    run_dir = (Path(__file__).resolve().parents[1]
+               / "eval" / "external" / "runs" / "stepshield-2026-08-20")
+    artefacts = sorted(p for p in run_dir.glob("*.json")
+                       if p.name != "corpus-probe.json")
+    assert len(artefacts) == 4, "expected four scored splits"
+
+    for path in artefacts:
+        result = json.loads(path.read_text(encoding="utf-8"))
+        for name, row in result["coverage"].items():
+            assert row["evaluated"] == 0, (
+                f"{path.name}: {name} reached 'evaluated' on "
+                f"{row['evaluated']} sessions; EXTERNAL-RESULTS.md says none did")
+        assert result["summary"]["any_alert_recall"]["numerator"] == 0, (
+            f"{path.name}: a detection was recorded; the page reports zero")

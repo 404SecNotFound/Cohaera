@@ -1,0 +1,24 @@
+{
+  "actions": {
+    "create_file": 292,
+    "edit_file": 1764,
+    "end": 299,
+    "noop": 107,
+    "open_file": 1896,
+    "run_command": 10148,
+    "search": 627,
+    "submit": 1110
+  },
+  "corpus": "stepshield",
+  "distinct_actions": 8,
+  "distinct_rogue_arg_values": 696,
+  "identical_sequence_pairs": 145,
+  "identical_sequence_pct": 22.7,
+  "labelled_rogue_steps": 686,
+  "pairs": 639,
+  "rogue_arg_overlap_pct": 41.4,
+  "rogue_arg_values_also_on_clean_steps": 288,
+  "same_length_pairs": 508,
+  "same_length_pct": 79.5,
+  "split": "train (paired)"
+}
