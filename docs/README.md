@@ -5,7 +5,7 @@
 
 # Documentation map
 
-22 documents, about 79,000 words. This page exists so you never have to
+23 documents, about 85,000 words. This page exists so you never have to
 guess which one answers your question.
 
 Each row says what question the document answers, not what it contains.
@@ -29,6 +29,7 @@ Each row says what question the document answers, not what it contains.
 | [REVIEW-RESPONSE](../REVIEW-RESPONSE.md) | Two external reviews raised 43 findings. What happened to every one, and which recommendations were declined and why? |
 | [REVIEWS-2026-08](REVIEWS-2026-08.md) | Three reviews read the *project* rather than the code — product, threat research, detection engineering. What did they each find, where did they converge without conferring, and what happened to every finding? |
 | [RESEARCH-2026-08](RESEARCH-2026-08.md) | What did the field do while this was being built? Twelve months surveyed: which of this project's claims were falsified, which prior art it should have been citing, and what it could not verify. |
+| [PRIOR-ART](PRIOR-ART.md) | Who did all of this first? The coverage contract is a port, the evaluation card is a model card, and the last section bounds what is actually new to three narrow things. |
 
 ## If you are integrating it
 
