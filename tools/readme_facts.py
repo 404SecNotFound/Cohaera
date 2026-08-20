@@ -677,6 +677,14 @@ CLAIMS = (
     Claim("doc map constructed evasions", DOC_MAP,
           re.compile(r"(\d+) constructed evasions, \d+ still working"),
           count_constructed_evasions),
+    # The doc map restates the external attack count. It was typed, correct on
+    # the day it was typed, and derived by nothing -- the tenth instance of the
+    # defect class, found while adding the ceiling section rather than by a
+    # test, because no test could see it. Same lesson as the evasion pair
+    # above: the COPY is where drift hides.
+    Claim("doc map external attack sessions", DOC_MAP,
+          re.compile(r"Zero detections across ([\d,]+) attack sessions"),
+          external_attack_sessions),
     Claim("doc map working evasions", DOC_MAP,
           re.compile(r"\d+ constructed evasions, (\d+) still working"),
           count_working_evasions),
