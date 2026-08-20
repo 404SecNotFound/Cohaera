@@ -44,6 +44,8 @@ CONTENT_README = REPO / "content" / "README.md"
 DOC_MAP = REPO / "docs" / "README.md"
 EVAL_README = REPO / "eval" / "README.md"
 THREAT_MODEL = REPO / "docs" / "THREAT-MODEL.md"
+EXTERNAL_RESULTS = REPO / "docs" / "EXTERNAL-RESULTS.md"
+EXTERNAL_RUN = REPO / "eval" / "external" / "runs" / "stepshield-2026-08-20"
 CHANGELOG = REPO / "CHANGELOG.md"
 CONTRIBUTING = REPO / "CONTRIBUTING.md"
 SIGMA = REPO / "content" / "sigma"
@@ -420,6 +422,83 @@ class Claim:
         return str(self.truth())
 
 
+# ---------------------------------------------------------------------------
+# The external run
+#
+# These are the first numbers in this repository that CI cannot re-derive from
+# source, because the corpus they came from is somebody else's and is not
+# vendored here. The compromise is to derive them from the COMMITTED RUN
+# ARTEFACT instead: the prose cannot drift from the run, even though the run
+# cannot be re-executed without the corpus. That is a weaker guarantee than
+# every other claim here and is stated as such on the page itself.
+# ---------------------------------------------------------------------------
+
+
+def _external_run(name: str) -> dict:
+    return json.loads((EXTERNAL_RUN / f"{name}.json").read_text(encoding="utf-8"))
+
+
+def _probe() -> dict:
+    return _external_run("corpus-probe")
+
+
+def external_attack_sessions() -> str:
+    """Attack sessions scored across every split that had any.
+
+    The benign split contributes none by construction and the mark-untrusted
+    run re-scores the same paired split, so counting it again would double the
+    denominator with the same sessions.
+    """
+    total = sum(_external_run(n)["summary"]["attacks"]
+                for n in ("train-paired", "test-holdout"))
+    return f"{total:,}"
+
+
+def external_benign_test_sessions() -> str:
+    total = sum(_external_run(n)["summary"]["benign"]
+                for n in ("generated-benign", "train-paired", "test-holdout"))
+    return f"{total:,}"
+
+
+def external_identical_sequence_pairs() -> str:
+    return str(_probe()["identical_sequence_pairs"])
+
+
+def external_identical_sequence_pct() -> str:
+    return f'{_probe()["identical_sequence_pct"]}'
+
+
+def external_pairs() -> str:
+    return str(_probe()["pairs"])
+
+
+def external_same_length_pairs() -> str:
+    return str(_probe()["same_length_pairs"])
+
+
+def external_same_length_pct() -> str:
+    return f'{_probe()["same_length_pct"]}'
+
+
+def external_distinct_actions() -> str:
+    return str(_probe()["distinct_actions"])
+
+
+def external_run_command_pct() -> str:
+    actions = _probe()["actions"]
+    return f'{100 * actions["run_command"] / sum(actions.values()):.1f}'
+
+
+def external_rogue_arg_overlap() -> str:
+    return str(_probe()["rogue_arg_values_also_on_clean_steps"])
+
+
+def external_distinct_rogue_args() -> str:
+    return str(_probe()["distinct_rogue_arg_values"])
+
+
+def external_rogue_arg_overlap_pct() -> str:
+    return f'{_probe()["rogue_arg_overlap_pct"]}'
 
 
 def _verify_gates() -> tuple:
@@ -620,6 +699,49 @@ CLAIMS = (
           re.compile(r"Exactly \d+ of[\s>]*(\d+) catalogued"),
           count_constructed_evasions),
 
+    # The external run. Sourced from the committed artefacts, not from source.
+    Claim("external attack sessions", EXTERNAL_RESULTS,
+          re.compile(r"Across ([\d,]+) held-out attack sessions"),
+          external_attack_sessions),
+    Claim("external benign test sessions", EXTERNAL_RESULTS,
+          re.compile(r"zero false alarms across ([\d,]+) held-out benign"),
+          external_benign_test_sessions),
+    Claim("external attacks cleared", EXTERNAL_RESULTS,
+          re.compile(r"a detector that examined ([\d,]+) attacks and cleared"),
+          external_attack_sessions),
+    Claim("external pairs", EXTERNAL_RESULTS,
+          re.compile(r"complete ROGUE/CLEAN pairs \| (\d+)"),
+          external_pairs),
+    Claim("external identical sequence pairs", EXTERNAL_RESULTS,
+          re.compile(r"identical tool-call sequence\*\* \| \*\*(\d+) "),
+          external_identical_sequence_pairs),
+    Claim("external identical sequence pct", EXTERNAL_RESULTS,
+          re.compile(r"identical tool-call sequence\*\* \| \*\*\d+ \(([\d.]+)%\)"),
+          external_identical_sequence_pct),
+    Claim("external identical pairs in prose", EXTERNAL_RESULTS,
+          re.compile(r"For those (\d+) pairs the rogue"),
+          external_identical_sequence_pairs),
+    Claim("external same length pairs", EXTERNAL_RESULTS,
+          re.compile(r"identical step count \| (\d+) "),
+          external_same_length_pairs),
+    Claim("external same length pct", EXTERNAL_RESULTS,
+          re.compile(r"identical step count \| \d+ \(([\d.]+)%\)"),
+          external_same_length_pct),
+    Claim("external distinct actions", EXTERNAL_RESULTS,
+          re.compile(r"distinct tool names in the entire split \| \*\*(\d+)\*\*"),
+          external_distinct_actions),
+    Claim("external run_command share", EXTERNAL_RESULTS,
+          re.compile(r"`run_command` is ([\d.]+)% of all steps"),
+          external_run_command_pct),
+    Claim("external rogue arg overlap", EXTERNAL_RESULTS,
+          re.compile(r"\*\*(\d+) of \d+ distinct argument values"),
+          external_rogue_arg_overlap),
+    Claim("external distinct rogue args", EXTERNAL_RESULTS,
+          re.compile(r"\*\*\d+ of (\d+) distinct argument values"),
+          external_distinct_rogue_args),
+    Claim("external rogue arg overlap pct", EXTERNAL_RESULTS,
+          re.compile(r"steps \(([\d.]+)%\) also appear on unlabelled"),
+          external_rogue_arg_overlap_pct),
     # The local verifier's own counts, imported from its gate table.
     Claim("CONTRIBUTING verify gates", CONTRIBUTING,
           re.compile(r"\*\*every gate CI runs\*\* . (\d+) of them"),
@@ -631,6 +753,7 @@ CLAIMS = (
           re.compile(r"\d+ of the (\d+) gates are things"),
           count_verify_gates),
 )
+
 
 
 # ---------------------------------------------------------------------------

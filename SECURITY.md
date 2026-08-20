@@ -8,7 +8,10 @@
 ## Status: pre-alpha. Read this before deploying anything.
 
 Cohaera is a **research prototype**. It has never been run against real agent
-traffic, its numbers come from a synthetic corpus written by its own author, and
+traffic. Its detection numbers come from a synthetic corpus written by its own
+author; the one run against an outside corpus
+([EXTERNAL-RESULTS.md](docs/EXTERNAL-RESULTS.md)) detected nothing and could not
+bring a single check to `evaluated`.
 [EVASION.md](EVASION.md) catalogues 28 constructed ways to defeat its checks, 26
 of which currently work.
 
