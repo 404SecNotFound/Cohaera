@@ -15,10 +15,12 @@ today. One partially. Three cannot be validated externally *at all* — not
 they read is produced by a control plane and no public agent-trace corpus has
 one.
 
-Nothing in this page reports a detection result. No external corpus has been
-scored yet — the data could not be downloaded from the network this harness was
-built on. What is delivered is the harness, the adapters, the scope statement
-and the runbook, plus what was verified about each corpus along the way.
+Nothing on *this* page reports a detection result; it describes the harness, the
+adapters, the scope statement and the runbook, plus what was verified about each
+corpus along the way. **StepShield has since been scored** — see
+[EXTERNAL-RESULTS.md](EXTERNAL-RESULTS.md), which reports zero detections across
+375 held-out attack sessions and explains, with three measurements, why that is
+a category mismatch between corpus and detector rather than a tuning result.
 
 ---
 
@@ -332,8 +334,11 @@ ruff check .
 
 ## 6. What this still does not measure
 
-- **No external corpus has been scored.** The harness runs, on adapter
-  fixtures. The numbers it will produce tomorrow do not exist yet.
+- **Scoring a corpus did not validate a check.** StepShield has now been
+  scored ([EXTERNAL-RESULTS.md](EXTERNAL-RESULTS.md)) and no check reached
+  `evaluated` on a single session: four declined outright and three ran
+  degraded throughout. The run bounds what public data can do here; it does not
+  establish that any check is correct.
 - **Three checks remain unvalidatable by any public data**, and no amount of
   additional corpora fixes that — it needs an instrumented deployment.
 - **CH02 is measured against tool output, not an agent summary.** StepShield
