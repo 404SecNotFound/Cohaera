@@ -27,11 +27,24 @@ weaker than executing the script, and they are much stronger than nothing.
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 LAB = REPO / "lab"
+
+sys.path.insert(0, str(REPO / "src"))
+sys.path.insert(0, str(REPO / "tests"))
+
+import make_fixtures  # noqa: E402
+
+from cohaera.checks import SequenceGrammar, run_all  # noqa: E402
+from cohaera.ingest import load  # noqa: E402
+
 SCRIPT = LAB / "Build-CohaeraLab.ps1"
 CONFIG = LAB / "lab.config.psd1"
 
@@ -481,6 +494,35 @@ def test_the_local_lab_does_not_claim_to_be_the_isolated_one():
         "stand in for them")
 
 
+def _walk(node: object) -> Iterator[tuple[str | None, object]]:
+    """Every (key, value) in the document, at any depth."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield key, value
+            yield from _walk(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield None, value
+            # Recursing here is the whole point: `states`, `ledger` and
+            # `contract` are all lists of dicts, so a walk that stopped at the
+            # list saw none of the document that was added after it was
+            # written. Caught by mutation -- a hostname three levels down
+            # passed a guard whose name says it forbids exactly that.
+            yield from _walk(value)
+
+
+# Names that describe the machine a run happened on rather than the run. Any of
+# them appearing as a key means the document has stopped being a statement about
+# the detector and started being a statement about a host.
+_ENVIRONMENT_KEYS = frozenset({
+    "python", "python_version", "interpreter", "implementation", "platform",
+    "machine", "processor", "os", "hostname", "fqdn", "cwd", "pwd", "workdir",
+    "username", "uid", "environ", "env", "wall_clock", "generated_at",
+    "created_at", "started_at", "finished_at", "elapsed", "elapsed_s",
+    "duration", "duration_s", "runtime_s", "seed", "random_seed", "pid",
+})
+
+
 def test_the_run_manifest_carries_no_environment_facts():
     """The manifest asserts that these inputs produce these verdicts. That has
     to hold on every interpreter the project supports, so CI running a
@@ -490,12 +532,436 @@ def test_the_run_manifest_carries_no_environment_facts():
     first CI run failed on 3.12 against a file written on 3.11 -- a real
     property turned into a host fact, and a green local check that meant
     nothing.
+
+    Extended when the coverage-contract section was added. The original scanned
+    the TOP-LEVEL keys for "python" and the raw text for four version strings.
+    That catches the fault it was written for and would not have caught the
+    same fault three levels down inside `contract`, nor a hostname, nor an
+    absolute path, nor a wall-clock reading -- none of which contain the string
+    "3.11". A guard that only knows the last defect is not a guard.
     """
     raw = LOCAL_RUN.read_text(encoding="utf-8")
     doc = local_manifest()
-    assert "python" not in doc, (
-        "the compared document names an interpreter; a manifest that depends "
-        "on the environment cannot assert a property of the detector")
+
+    for key, _value in _walk(doc):
+        assert key is None or key.lower() not in _ENVIRONMENT_KEYS, (
+            f"the compared document carries {key!r}, which describes the "
+            f"machine rather than the run; a manifest that depends on the "
+            f"environment cannot assert a property of the detector")
+
     for host_fact in ("3.10", "3.11", "3.12", "3.13", "elapsed", "duration"):
         assert f'"{host_fact}"' not in raw, (
             f"{host_fact!r} appears as a value in the compared manifest")
+
+    # No path from this machine, and no absolute path from anyone else's.
+    assert str(REPO) not in raw, "the manifest names this checkout's location"
+    assert '"/' not in raw, (
+        "a string value in the manifest is an absolute path, so the document "
+        "depends on where the checkout lives")
+
+    # No wall clock. Every instant in this document derives from the fixed
+    # constant in scenarios.py, so anything at epoch scale must sit inside the
+    # lab's own window. A `time.time()` reading is roughly a fortnight past it
+    # and moves every second.
+    base = _lab_base()
+    for _key, value in _walk(doc):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            assert value < 1_000_000 or base <= value <= base + 100_000, (
+                f"{value} is at epoch scale and outside the lab's pinned "
+                f"window, which is what a wall-clock reading looks like")
+
+
+def _lab_base() -> float:
+    """``scenarios.BASE``, read from the file rather than copied.
+
+    A duplicated constant in the test would go on passing after the lab moved
+    its clock, which is the failure mode this whole module is about.
+    """
+    src = (LAB / "local" / "scenarios.py").read_text(encoding="utf-8")
+    match = re.search(r"^BASE = ([\d_]+\.\d+)$", src, re.MULTILINE)
+    assert match, "scenarios.BASE is gone or was reformatted"
+    return float(match.group(1).replace("_", ""))
+
+
+def test_the_lab_run_ignores_a_correlation_secret_in_the_environment():
+    """$COHAERA_CORRELATION_SECRET is folded into trust_config_digest and so
+    into every verdict_id in the manifest. Inheriting it made the committed
+    document a function of whoever ran the lab: --check passed on a clean shell
+    and failed on an operator's, with a diff full of changed verdict IDs and
+    nothing to explain them. Same defect as stamping the interpreter version,
+    arriving through an input instead of through a field.
+
+    Asserted by RUNNING the lab with the variable set, not by reading run.py
+    for the line that clears it. The source assertion was tried first and it
+    passed with that line commented out, because a regex over the file cannot
+    tell code from a comment -- which is the "test that passes for the wrong
+    reason" this repository treats as worse than no test.
+    """
+    env = dict(os.environ)
+    env["COHAERA_CORRELATION_SECRET"] = "an-operators-own-secret"
+    proc = subprocess.run(
+        [sys.executable, str(LAB / "local" / "run.py"), "--check"],
+        cwd=str(REPO), env=env, capture_output=True, text=True, timeout=300,
+        check=False)
+    assert proc.returncode == 0, (
+        "the committed lab run depends on the operator's environment:\n"
+        + proc.stdout + proc.stderr)
+
+
+def test_the_correlation_secret_the_lab_uses_is_a_committed_constant():
+    """And it must not reach the compared document. Hashing a secret into a
+    published field is how a secret stops being one -- this one is worthless by
+    construction, and the habit is not."""
+    src = (LAB / "local" / "run.py").read_text(encoding="utf-8")
+    match = re.search(r'^LAB_CORRELATION_SECRET = "([^"]+)"$', src, re.MULTILINE)
+    assert match, (
+        "the keyed pass must use a committed lab constant, not the operator's "
+        "own secret")
+    assert match.group(1) not in LOCAL_RUN.read_text(encoding="utf-8"), (
+        "the correlation secret reached the compared document")
+
+
+# ---------------------------------------------------------------------------
+# The coverage contract, as the thing a first-time reader actually meets.
+#
+# The six states above all run in the configuration the author chose: manifest
+# supplied, collector key supplied, producer emitting a session_id. The
+# SHIPPING DEFAULT is none of those, and in that configuration large parts of
+# the detector decline to answer. `run.py` scores three more sessions twice
+# each, with the prerequisite and without, and these assert that the pairs stay
+# a demonstration rather than becoming two rows that say the same thing.
+# ---------------------------------------------------------------------------
+
+LOCAL_INPUTS = LAB / "local" / "runs" / "latest" / "inputs"
+LOCAL_RESULTS = LAB / "local" / "runs" / "latest" / "RESULTS.md"
+LOCAL_README = LAB / "local" / "README.md"
+
+
+def contracts() -> dict[str, dict]:
+    return {c["contract"]: c for c in local_manifest()["contract"]}
+
+
+def pair(key: str) -> tuple[dict, dict]:
+    """The (without, with) passes for one prerequisite."""
+    without, supplied = contracts()[key]["passes"]
+    return without, supplied
+
+
+def checks_of(entry: dict) -> dict[str, dict]:
+    return entry["verdicts"][0]["checks"]
+
+
+def test_every_prerequisite_is_scored_both_ways():
+    """A blind spot shown on its own reads as a quiet result. The pair is the
+    demonstration: same telemetry, one thing different, two different answers."""
+    found = contracts()
+    assert set(found) == {"06-no-manifest", "07-chained-unsigned",
+                          "08-anonymous"}, sorted(found)
+    for key, entry in found.items():
+        assert len(entry["passes"]) == 2, key
+        assert entry["question"].endswith("?"), (
+            f"{key} states a description where it should state the question "
+            f"the pair answers")
+        for p in entry["passes"]:
+            assert p["exit_code"] == 0, (key, p["pass"])
+            assert p["verdicts"], f"{key}/{p['pass']} produced no verdict"
+
+
+def test_without_a_capability_manifest_the_behavioural_checks_decline():
+    """The documented default state, and the one a new operator is actually in.
+
+    ``issue_refund`` matches no keyword set in model.py and the stream carries
+    no ``reversible`` hint, so with nothing declaring it Cohaera does not know
+    the session contained a consequential action. What matters is that it says
+    so: the checks report `degraded` at confidence 0.0, which is a stated
+    absence, and NOT `evaluated` with an empty finding list, which would be a
+    clean bill of health for a question nobody asked.
+
+    Supplying the manifest recovers three of the four. CH04 stays declined,
+    because a manifest that declares a tool's effects does not declare that a
+    policy plane exists -- see the comment below.
+    """
+    absent, supplied = pair("06-no-manifest")
+
+    blinded = ["CH02_concealment_gap", "CH03_untrusted_to_consequential",
+               "CH04_guardrail_overrun", "CH07_effect_contradiction"]
+    for check in blinded:
+        assert checks_of(absent)[check]["confidence"] == 0.0, (
+            f"{check} claims confidence on a session containing a call it "
+            f"could not classify")
+
+    # Three of the four recover. CH04 does not, and that is the corrected
+    # contract rather than a broken pair.
+    #
+    # A manifest that declares `issue_refund` establishes what the tool DOES.
+    # It says nothing about whether a policy plane exists to have stopped it,
+    # and CH04 is a question about controls, not about tools. Since the fix on
+    # claude/cohaera-ch04-coverage, only a `policies` section answers that, and
+    # this lab's manifest declares tools alone -- so CH04 keeps declining with
+    # NO_POLICY_EVIDENCE while the other three go green.
+    #
+    # That is a better demonstration than the one this test originally made.
+    # A single flag does not buy uniform coverage: it buys exactly the surfaces
+    # it declares, and the checks whose evidence it does not supply keep saying
+    # so.
+    for check in ["CH02_concealment_gap", "CH03_untrusted_to_consequential",
+                  "CH07_effect_contradiction"]:
+        assert checks_of(supplied)[check]["status"] == "evaluated", (
+            f"{check} does not recover when the manifest declares the tool, so "
+            f"the pair no longer attributes anything to the manifest")
+
+    ch04 = checks_of(supplied)["CH04_guardrail_overrun"]
+    assert ch04["status"] == "not_evaluated", (
+        "CH04 recovered from a manifest that declares no policies, which means "
+        "the contract is charging for the wrong evidence again")
+    assert ch04["confidence"] == 0.0
+    # The reason code is not asserted here: the manifest records status and
+    # confidence per check, not reasons. tests/test_hostile.py pins
+    # NO_POLICY_EVIDENCE against the contract itself, which is where it belongs.
+
+    assert absent["verdicts"][0]["triggered_rules"] == [], (
+        "the unequipped pass fires something, so the demonstration is not "
+        "about the manifest any more")
+    assert "CH03_untrusted_to_completed_action" in \
+        supplied["verdicts"][0]["triggered_rules"], (
+        "the equipped pass must fire, or the pair shows two silences")
+    assert (absent["verdicts"][0]["coverage_completeness"]
+            < supplied["verdicts"][0]["coverage_completeness"])
+
+
+def test_the_manifest_pair_differs_only_by_the_manifest():
+    """Both passes read the same file. If they did not, the difference between
+    them would be attributable to the telemetry as easily as to the flag."""
+    assert contracts()["06-no-manifest"]["inputs"] == ["06-no-manifest.jsonl"]
+    assert contracts()["08-anonymous"]["inputs"] == ["08-anonymous.jsonl"]
+
+
+def test_a_chain_with_no_key_is_not_a_verified_session():
+    """The realistic first-adoption state, which eval/EVALUATION-CARD.md says
+    most of the evaluation corpus is in. A hash chain establishes that a stream
+    is internally consistent, and so is a stream an attacker rewrote end to
+    end, because with no key there is nothing to check the chain against."""
+    chained, signed = pair("07-chained-unsigned")
+    assert chained["verdicts"][0]["evidence_status"] == "chained_unsigned"
+    assert signed["verdicts"][0]["evidence_status"] == "verified_complete"
+
+    weak = checks_of(chained)["CH06_evidence_integrity"]
+    strong = checks_of(signed)["CH06_evidence_integrity"]
+    assert weak["status"] == "degraded"
+    assert weak["confidence"] < strong["confidence"], (
+        "an unsigned chain must cost CH06 confidence, or the signature is "
+        "buying nothing the contract can see")
+
+
+def test_the_signed_and_unsigned_streams_carry_identical_records():
+    """The pair's attribution. Only the integrity sidecar may differ; the
+    bodies the verdict is about have to be the same bytes, or the difference
+    between the two passes is not the signature."""
+    def bodies(name: str) -> list[dict]:
+        lines = (LOCAL_INPUTS / name).read_text(encoding="utf-8").splitlines()
+        return [{k: v for k, v in json.loads(x).items() if k != "integrity"}
+                for x in lines if x.strip()]
+
+    assert bodies("07-chained-unsigned.jsonl") == \
+        bodies("07-chained-unsigned-signed.jsonl")
+
+
+def test_a_correlation_secret_does_not_buy_back_correlation_confidence():
+    """The honest half of the third pair, and the reason it is a pair.
+
+    A stream with no producer session_id correlates at 0.3 whatever else is
+    configured, because the session boundary was inferred. Setting
+    $COHAERA_CORRELATION_SECRET changes the key from an unkeyed digest to an
+    HMAC -- which is what stops a small identity space being enumerated out of
+    the SIEM copy -- and changes NOTHING about how much the grouping deserves
+    to be believed. Presenting the secret as a fix for the 0.3 would be exactly
+    the kind of overstatement this repository keeps removing.
+    """
+    unkeyed, keyed = pair("08-anonymous")
+    for entry in (unkeyed, keyed):
+        correlation = entry["verdicts"][0]["correlation"]
+        assert correlation["kind"] == "scoped_anonymous"
+        assert correlation["confidence"] == 0.3, (
+            "an inferred session boundary must not report full confidence")
+
+    assert unkeyed["correlation_key_version"] == "sha256-unkeyed-v1"
+    assert keyed["correlation_key_version"] == "hmac-sha256-v1"
+    assert unkeyed["correlation_keyed"] is False
+    assert keyed["correlation_keyed"] is True
+    assert (unkeyed["verdicts"][0]["checks"]
+            == keyed["verdicts"][0]["checks"]), (
+        "the secret moved a check contract, which would mean the lab is "
+        "teaching that a secret improves what the detector can establish")
+
+
+def test_an_inferred_session_costs_the_checks_that_reason_across_events():
+    """And the other half: what the missing session_id actually does cost.
+
+    Compared against the same workflow WITH a session_id -- the `signed` pass
+    of the 07 pair is the same records, fully attested -- so the comparison is
+    the correlation key and not the scenario.
+    """
+    anonymous, _ = pair("08-anonymous")
+    _, identified = pair("07-chained-unsigned")
+    assert (anonymous["verdicts"][0]["coverage_completeness"]
+            < identified["verdicts"][0]["coverage_completeness"])
+    for check in ("CH02_concealment_gap", "CH04_guardrail_overrun",
+                  "CH05_unpaired_calls", "CH07_effect_contradiction"):
+        assert checks_of(anonymous)[check]["confidence"] <= 0.3, check
+
+
+# ---------------------------------------------------------------------------
+# The quickstart. A reader has to be able to tell whether their run matched.
+# ---------------------------------------------------------------------------
+
+
+def test_the_quickstart_quotes_the_output_the_run_actually_produces():
+    """lab/local/README.md reproduces the generated tables inline so somebody
+    can compare their run against the page rather than against a memory of it.
+
+    Duplicated prose drifts, so it is checked rather than trusted: every table
+    row RESULTS.md generates must appear verbatim in the README. This is the
+    same treatment tools/readme_facts.py gives the counted claims.
+    """
+    generated = [line for line in
+                 LOCAL_RESULTS.read_text(encoding="utf-8").splitlines()
+                 if line.startswith("|")]
+    readme = LOCAL_README.read_text(encoding="utf-8")
+    missing = [line for line in generated if line not in readme]
+    assert not missing, (
+        "the quickstart quotes output the run no longer produces:\n  "
+        + "\n  ".join(missing[:8]))
+
+
+def test_the_quickstart_names_the_one_entry_point():
+    readme = LOCAL_README.read_text(encoding="utf-8")
+    assert "python lab/local/run.py --check" in readme
+    assert "python lab/local/run.py\n" in readme
+
+
+def test_the_local_lab_says_it_is_not_an_evaluation():
+    """Its output is six hand-written stories and it must not be mistaken for a
+    measurement. The evaluation card is the thing that measures the detector,
+    and the page has to send the reader there in as many words."""
+    readme = LOCAL_README.read_text(encoding="utf-8").lower()
+    assert "smoke test" in readme
+    assert "not an evaluation" in readme
+    assert "eval/evaluation-card.md" in readme
+
+
+# ---------------------------------------------------------------------------
+# The unexecuted plan, marked as one.
+# ---------------------------------------------------------------------------
+
+LAB_MD = REPO / "LAB.md"
+_PHASE = re.compile(r"^## Phase \d+ · .+$", re.MULTILINE)
+
+
+def test_lab_md_opens_by_saying_it_has_not_been_executed():
+    """Three reviews made the same point: an unexecuted five-phase build plan
+    shipped beside working code makes a reader discount the working code. The
+    objection was to the PRESENTATION, so the fix is presentation -- the status
+    goes at the top, in the first screen, not in a caveat at the bottom."""
+    doc = LAB_MD.read_text(encoding="utf-8")
+    opening = doc[:doc.index("## Status of every phase")]
+    lowered = opening.lower()
+    assert "none of the vmware phases on this page have been executed" in lowered, (
+        "the top of the page does not say plainly that the VMware phases were "
+        "never run")
+    assert "no vm has been created" in lowered
+    assert "lab/local" in opening, (
+        "and it does not point at the half that does run")
+    # Before the first phase heading, not after it. The objection three reviews
+    # made was to the presentation: a status a reader meets on screen two has
+    # already let them read the plan as a record.
+    assert doc.index("have been executed") < doc.index("## Phase 0")
+
+
+def test_every_phase_declares_a_status():
+    """Per phase, because a page-level disclaimer gets scrolled past and a
+    reader who lands on Phase 3 from a link never sees it."""
+    doc = LAB_MD.read_text(encoding="utf-8")
+    headings = _PHASE.findall(doc)
+    assert len(headings) == 6, headings
+    for heading in headings:
+        after = doc[doc.index(heading) + len(heading):][:600]
+        assert "> **Status:" in after, (
+            f"{heading!r} states no status; a reader arriving at this heading "
+            f"cannot tell whether it happened")
+
+
+def test_the_phase_status_table_covers_every_phase():
+    doc = LAB_MD.read_text(encoding="utf-8")
+    table = doc[doc.index("## Status of every phase"):
+                doc.index("## Status of every artefact")]
+    for phase in range(6):
+        assert f"**{phase} ·" in table, f"phase {phase} missing from the table"
+    assert "Not built" in table, (
+        "a status table in which nothing is unbuilt is not describing this lab")
+
+
+def test_the_powershell_builder_says_at_the_top_that_it_never_ran():
+    """It is a real design and it is kept. What it must not do is present
+    itself with the same authority as the half that has been executed."""
+    doc = (LAB / "README.md").read_text(encoding="utf-8")
+    opening = doc[:doc.index("## Read this before you run it")]
+    assert "NEVER EXECUTED" in opening
+    assert "local/README.md" in opening
+
+
+def test_lab_md_does_not_present_the_evaluation_card_as_this_lab_output():
+    """The measurement that exists is synthetic and is a different measurement
+    from the one phase 4 designs. Letting the two blur would give the plan
+    credit for a result it did not produce."""
+    doc = LAB_MD.read_text(encoding="utf-8")
+    phase4 = doc[doc.index("## Phase 4 · Measure"):doc.index("## Phase 5 ·")]
+    assert "synthetic" in phase4.lower()
+    assert "eval/EVALUATION-CARD.md" in phase4
+
+
+# ---------------------------------------------------------------------------
+# The one command on that page that anybody can run, and the number it prints.
+# ---------------------------------------------------------------------------
+
+
+def test_the_fixture_counts_lab_md_quotes_are_the_counts_it_produces(tmp_path):
+    """LAB.md step 2.2 is the only step of the VMware plan that runs anywhere,
+    and it told the reader to expect NINE findings against a tree that produces
+    seven. That is the C4-11 defect -- a number in the documentation that
+    nothing keeps true -- in the one place a new reader is most likely to check
+    the tool against the page and conclude the tool is broken.
+    """
+    def written(name: str, records: list[dict]) -> Path:
+        path = tmp_path / name
+        path.write_text("".join(json.dumps(r) + "\n" for r in records),
+                        encoding="utf-8")
+        return path
+
+    benign = load(written("benign.jsonl",
+                          [e for i in range(12)
+                           for e in make_fixtures.benign_session(i)]),
+                  quiet=True)
+    suspect = load(written("suspect.jsonl",
+                           make_fixtures.s_concealment()
+                           + make_fixtures.s_untrusted_flow()
+                           + make_fixtures.s_guardrail_overrun()
+                           + make_fixtures.s_novel_sequence()),
+                   quiet=True)
+    grammar = SequenceGrammar().fit(benign)
+
+    findings = sum(len(run_all(s, grammar)[0]) for s in suspect)
+    clean = sum(len(run_all(s, grammar)[0]) for s in benign)
+
+    doc = LAB_MD.read_text(encoding="utf-8")
+    claim = re.search(r"(\w+) findings across (\w+) suspect sessions, zero on "
+                      r"the (\w+) benign ones", doc)
+    assert claim, "the step 2.2 expectation is gone or was reworded"
+    words = {"zero": 0, "four": 4, "seven": 7, "twelve": 12, "nine": 9}
+    assert words[claim.group(1).lower()] == findings, (
+        f"LAB.md promises {claim.group(1)} findings; the fixtures produce "
+        f"{findings}")
+    assert words[claim.group(2).lower()] == len(suspect)
+    assert words[claim.group(3).lower()] == len(benign)
+    assert clean == 0, (
+        f"the benign fixtures now produce {clean} finding(s), so the page's "
+        f"'zero' is wrong and the detector has a false positive")

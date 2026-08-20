@@ -3,18 +3,67 @@
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Cohaera lab build
+# Cohaera lab build — a design note, not a build record
 
-Everything needed to stand up the measurement environment, in order, with
-verification gates between phases.
+> ## None of the VMware phases on this page have been executed.
+>
+> No VM has been created. No corpus has been generated. No measurement
+> described below has been taken. What follows is a **design**: a topology, an
+> experiment protocol and a cost model, written down so the intent is on the
+> record and so that somebody — me later, or you — can run it and report what
+> actually happened. Every phase carries its status in the table below and
+> again at its own heading. Read the page as a plan.
+>
+> Three external reviews made the same point, and they were right: shipping an
+> unexecuted five-phase build plan beside working code makes a reader discount
+> the working code. The plan is kept because it is a real design and it
+> documents intent. It is labelled because it is not evidence.
+>
+> **If you want something that runs today, it is
+> [`lab/local/`](lab/local/README.md)** — no VMs, no cloud account, no API key,
+> no dependencies, about two seconds, and its output is committed and re-run by
+> CI on every push:
+>
+> ```bash
+> python lab/local/run.py --check
+> ```
 
-**Constraint set this is written for:** VMs on a home hypervisor, no GPU, hosted
-LLM API keys. Every step respects that.
+**Constraint set this design is written for:** VMs on a home hypervisor, no GPU,
+hosted LLM API keys. Every step respects that.
+
+---
+
+## Status of every phase
+
+Three values only. **Executed** means it has been run and there is a record in
+this repository you can re-check. **Partially executed** means some of it has.
+**Not built** means nobody has run it and no artefact from it exists.
+
+| Phase | What it would establish | Status |
+|---|---|---|
+| **0 · Verify the gap** | observra has no correlation or baselining layer | **EXECUTED, off-lab.** Run on 2026-08-07 against observra at `202683a0`, off the lab because this phase needs no VM. The raw output of every command below is captured verbatim in [docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md), and the findings drawn from it are [FINDINGS.md](FINDINGS.md) F-01 to F-03, each citing a file and a line. **The gate passed**: the gap is real. |
+| **1 · Build and segment the VMs** | Network isolation, without which `egress` has no boundary to cross and means nothing | **Not built.** No VM exists. [`lab/Build-CohaeraLab.ps1`](lab/README.md) would build them unattended and has never been run either; its own page says so in its second paragraph. |
+| **2 · Instrument and smoke test** | Telemetry travelling from an instrumented agent to a collector to a scoring host | **Not built.** One step of it is reproducible on any machine and is exercised on every CI run: 2.2, which installs Cohaera and scores the generated fixtures. Everything involving observra, AgentDojo or a VM is not. |
+| **3 · Generate the corpus** | A labelled corpus of real agent runs under attack | **Not built.** No agent run has been recorded, and `tools/label_corpus.py` — which this page's own step 3.3 calls — does not exist. |
+| **4 · Measure** | Detection rate and false positive rate on real traffic, paired, per task | **Not built.** A weaker and entirely different measurement does exist, in [`eval/EVALUATION-CARD.md`](eval/EVALUATION-CARD.md): a synthetic corpus generated from a seed, not agent runs, and the card is explicit about what that does and does not support. Nothing in the protocol below has been executed. |
+| **5 · Detection content** | Sigma, AIE and parser content whose rule-level false positive rate has been measured | **Partially executed.** The content exists in `content/` and `tests/test_content.py` asserts every field it references appears in a real verdict record. It has **not** been tested by replaying a labelled corpus, because phase 3 has not run — so its false positive rate is unmeasured. |
+
+## Status of every artefact
+
+| Artefact | Status |
+|---|---|
+| [`lab/Build-CohaeraLab.ps1`](lab/Build-CohaeraLab.ps1) | **Written, never executed.** No PowerShell interpreter in the environment it was authored in. Its safety properties are asserted against its source as text in `tests/test_lab.py`, which is strictly weaker than running it and strictly stronger than nothing. |
+| [`lab/lab.config.psd1`](lab/lab.config.psd1) | **Written, never executed.** The addressing and the `Reachability` matrix are the single source of truth for the topology, and the table further down this page is checked against it by a test. |
+| [`lab/local/run.py`](lab/local/run.py) | **Executed. Committed. Re-run by CI on every push**, and byte-identical on CPython 3.10 through 3.13. |
+| [`lab/local/runs/latest/`](lab/local/runs/latest/) | **Executed output**, produced by the file above and diffed against a fresh run in CI. |
+| `tools/label_corpus.py` | **Does not exist.** Step 3.3 calls it. It is the next thing to build if phase 3 is ever attempted. |
+| `content/sigma`, `content/aie`, `content/parser` | **Exist, conformance-tested, not corpus-tested.** See phase 5. |
 
 ---
 
 ## Contents
 
+- [Status of every phase](#status-of-every-phase)
 - [Before you start](#before-you-start)
 - [Hardware and hypervisor](#hardware-and-hypervisor)
 - [Phase 0 · Verify the gap](#phase-0--verify-the-gap)
@@ -30,6 +79,12 @@ LLM API keys. Every step respects that.
 ---
 
 ## Before you start
+
+None of this is needed to exercise Cohaera. It is needed to answer questions
+about **network isolation** and about **real agent traffic**, and nothing else
+on this page or in this repository can answer those. If that is not the question
+you have, close this file and run
+[`python lab/local/run.py`](lab/local/README.md).
 
 | Prerequisite | Detail |
 |---|---|
@@ -88,6 +143,18 @@ back into the analysis host.
 ---
 
 ## Phase 0 · Verify the gap
+
+> **Status: EXECUTED, off-lab.** This is the one phase that needs no lab. It was
+> run on 2026-08-07 against observra at commit `202683a0`, v1.1.0, and the raw
+> output of the commands below is captured verbatim in
+> [docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md) so anyone can
+> re-run them and compare. The findings drawn from it are
+> [FINDINGS.md](FINDINGS.md) F-01 to F-03.
+>
+> **The gate passed**: no behavioural analytics, a single-event rule engine,
+> `detect_suspicious_sequence` unreachable, and injection scanning nowhere near
+> `tool_result`. Upstream moves — re-run against a current checkout before
+> quoting any of it.
 
 **Time: 1 evening. This is a gate.**
 
@@ -165,6 +232,11 @@ inference into evidence.
 ---
 
 ## Phase 1 · Build and segment the VMs
+
+> **Status: NOT BUILT.** No VM has been created and none of the commands below
+> has been run. The nftables ruleset, the audit rules and the verification gate
+> are a design. `lab/Build-CohaeraLab.ps1` automates most of this and has not
+> been run either.
 
 **Time: 1 evening.**
 
@@ -295,6 +367,13 @@ control you cannot audit after the fact.
 
 ## Phase 2 · Instrument and smoke test
 
+> **Status: NOT BUILT, except 2.2.** Nothing has been installed on a VM, no
+> telemetry has been shipped anywhere and the gate at 2.5 has never been run.
+> **Step 2.2 is the exception**: installing Cohaera and scoring the generated
+> fixtures needs no lab, runs anywhere, and is exercised on every CI run
+> against a wheel installed into a clean virtualenv. Its expected output below
+> is checked by `tests/test_lab.py`.
+
 **Time: 2 hours.**
 
 ### 2.1 Install on `agent-01`
@@ -307,6 +386,9 @@ git clone https://github.com/usnistgov/agentdojo-inspect.git
 
 ### 2.2 Install Cohaera on `analysis-01`
 
+**This step needs no lab.** It is the one thing on this page you can run right
+now, and the fastest way to tell whether the detector is working at all.
+
 ```bash
 git clone https://github.com/404SecNotFound/Cohaera.git && cd Cohaera
 python3 tests/make_fixtures.py
@@ -314,8 +396,19 @@ PYTHONPATH=src python3 -m cohaera.cli score tests/fixtures/suspect.jsonl \
     --baseline tests/fixtures/benign.jsonl
 ```
 
-Nine findings across four suspect sessions, zero on the twelve benign ones.
-If that reproduces, Cohaera is working.
+Seven findings across four suspect sessions, zero on the twelve benign ones.
+If that reproduces, Cohaera is working. `tests/test_lab.py` derives both counts
+from the fixtures and fails if this page disagrees with them, because a number
+in the documentation that nothing keeps true is the one defect this repository
+cannot afford.
+
+For the evidence path — signing, trust stores, freshness, the ledger, and what
+the checks say when a prerequisite is missing — run the local lab instead. It
+is a superset of this step and takes about two seconds:
+
+```bash
+python lab/local/run.py --check
+```
 
 ### 2.3 Wire the telemetry
 
@@ -370,6 +463,11 @@ not after a weekend of runs.
 ---
 
 ## Phase 3 · Generate the corpus
+
+> **Status: NOT BUILT.** No agent run has been recorded, no API spend has been
+> incurred, and the calibration gate at 3.1 has never been executed. Step 3.3
+> calls `tools/label_corpus.py`, **which does not exist**. Everything below is
+> the plan, including the cost discipline, which is the part most worth keeping.
 
 **Time: 1 weekend, mostly unattended. This phase has a cost gate.**
 
@@ -428,6 +526,18 @@ python3 tools/label_corpus.py \
 
 ## Phase 4 · Measure
 
+> **Status: NOT BUILT.** No paired comparison has been run, no statistic below
+> has been computed, and there is no number anywhere in this repository that
+> came from this protocol.
+>
+> **Do not read the shipped evaluation as this phase's output.**
+> [`eval/EVALUATION-CARD.md`](eval/EVALUATION-CARD.md) measures the detector
+> against a **synthetic corpus generated from a fixed seed** — not agent runs,
+> not AgentDojo, no control-versus-treatment pairing and no model in the loop.
+> It is the honest number this project has, it is considerably less flattering
+> than the local lab looks, and it is a different measurement from the one
+> designed here.
+
 **Time: 2 evenings.**
 
 ### Design
@@ -467,6 +577,18 @@ before running**, so the analysis is not fishing.
 ---
 
 ## Phase 5 · Detection content
+
+> **Status: PARTIALLY EXECUTED.** All three artefacts exist in `content/`, and
+> `tests/test_content.py` asserts that every field the Sigma pack references
+> appears in a real verdict record — so the content cannot reference a field the
+> detector does not emit. CI additionally validates the rules with `sigma check`
+> and converts them to a Splunk backend, which proves a backend can turn them
+> into a query.
+>
+> **What has not happened is the last line of this section.** No rule has been
+> replayed against a labelled corpus, because phase 3 has not run, so the
+> rule-level false positive rate is **unmeasured**. A rule that validates,
+> converts and has never been fired at real traffic is content, not a detection.
 
 **Time: 2 evenings.**
 

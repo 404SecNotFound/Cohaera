@@ -1,5 +1,23 @@
 # Automated lab build, VMware Workstation Pro 17
 
+> **Status: WRITTEN, NEVER EXECUTED.** This script has not been run — not by
+> its author, not by anyone. It has never built a VM. What was verified about
+> it, and what could not be, is in "Read this before you run it" below; the
+> short version is that its generated output parses and its safety properties
+> are asserted against its source as text, which is strictly weaker than
+> running it.
+>
+> **Nothing here is needed to exercise Cohaera.** The lab that has been run,
+> whose output is committed and re-run by CI, is
+> [`lab/local/`](local/README.md) — no VMs, no dependencies, about two seconds:
+>
+> ```bash
+> python lab/local/run.py --check
+> ```
+>
+> Phase-by-phase status for the whole build is at the top of
+> [`LAB.md`](../LAB.md).
+
 Four unattended Ubuntu Server 24.04 VMs, three segmented host-only networks,
 static addressing, SSH keys and audit rules. You supply the ISO.
 
