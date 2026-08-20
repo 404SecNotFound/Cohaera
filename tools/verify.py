@@ -95,7 +95,15 @@ GATES: tuple[Gate, ...] = (
     Gate("runtime-deps", "tests", "Runtime dependency check",
          "Zero runtime dependencies is a design commitment. Assert it rather "
          "than hoping. Read from installed metadata, not pyproject.",
-         [sys.executable, "-c", RUNTIME_DEPS_PROBE]),
+         [sys.executable, "-c", RUNTIME_DEPS_PROBE],
+         # The probe reads cohaera's INSTALLED metadata, so an uninstalled
+         # working copy cannot answer it. Without this line the gate raised
+         # PackageNotFoundError and was scored FAIL -- reporting "runtime
+         # dependencies appeared" when the truth was "I could not look".
+         # That is the precise confusion this repository exists to refuse,
+         # committed by the tool that polices it. Declared, it reports
+         # not_evaluated:DIST_ABSENT:cohaera and still refuses to pass.
+         requires_dists=("cohaera",)),
     Gate("lint", "tests", "Lint",
          "The rule set is pinned in pyproject, so a version bump cannot "
          "silently change what this gate means.",
