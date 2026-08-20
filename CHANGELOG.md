@@ -18,7 +18,40 @@ reports recall is a marketing document.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **CH04's coverage contract, which was inverted.** `coverage()` added
+  `policy_semantics` and `approval_binding` to CH04's required surfaces only
+  `if has_policy` — only once policy events already existed. So the one state
+  that cost CH04 nothing was the state where it had no guardrail evidence
+  whatsoever: a session with a consequential egress call, zero policy events
+  and zero approval records reported `evaluated` at confidence **1.0**, with an
+  empty `missing_surfaces` and no reason codes. Full confidence precisely where
+  there was nothing to be confident about, and not a rare corner — it is every
+  public trace corpus and every deployment that has not wired a policy engine
+  to its telemetry. CH06 and CH07 have always declined in the equivalent state
+  and named the surface they were short of.
+
+  The required list is now unconditional, and a session with no policy evidence
+  reports `not_evaluated` with the new reason code `NO_POLICY_EVIDENCE`. Two
+  different worlds produce a session with no firing — a governed agent that
+  stayed inside its limits, and an agent with no limits at all — and the event
+  stream cannot tell them apart, because both are an absence. The operator's
+  capability manifest can: a `policies` section declares that the controls
+  exist, and with one, silence is a control that did not trip and CH04 reports
+  `evaluated`. Found by pointing the detector at traces with no control plane,
+  which is something the internal corpus cannot do: it always emits policy
+  events.
+
+  **No finding moved**, on any corpus session, in either direction. CH04 could
+  not fire on a session with no policy event before the change either.
+  `mean_coverage_completeness` falls in every cell of the evaluation grid —
+  0.76 to 0.65 on the headline cell — which is the contract working rather
+  than a regression. Recall, false-positive rate, precision and per-check
+  alert precision are unchanged to the session, and the three benign kinds
+  that exercise a control firing on correct behaviour
+  (`benign_hard_advisory_threshold`, `benign_hard_approved_continuation`,
+  `benign_hard_reapproved_retry`) stay at zero false positives.
 
 ## [0.3.0] — 2026-08-19
 

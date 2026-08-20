@@ -561,6 +561,25 @@ def render_card(results: dict[str, Any], seed: int, summary: dict,
         "**Coverage fell because a control was added and is not in force**, which "
         "is the behaviour the contract is for: an absent check that says nothing "
         "would have left the number flat and the blind spot invisible.\n")
+    add(
+        "`mean_coverage_completeness` moved down a second time, and that one was "
+        "a defect rather than a new control. CH04's contract used to add "
+        "`policy_semantics` and `approval_binding` to its required surfaces only "
+        "when the session ALREADY contained policy events, so the single state "
+        "that cost CH04 nothing was the state where no guardrail evidence "
+        "existed at all: a consequential call, no policy event, no approval "
+        "reported `evaluated` at confidence 1.0 with nothing missing. Most of "
+        "this corpus is in that state, because most benign sessions never trip "
+        "a control — and so is every public trace corpus and every deployment "
+        "without a policy engine wired to its telemetry. CH04 now reports "
+        "`NO_POLICY_EVIDENCE` and declines. **No finding moved**, in either "
+        "direction: CH04 could not fire on a session with no policy event "
+        "before the change either. What changed is that it says so. The one way "
+        "back to `evaluated` on a quiet session is a `policies` section in the "
+        "capability manifest — an operator declaring that these controls exist, "
+        "which turns silence into a control that did not trip rather than a "
+        "control that is not there. The corpus manifests declare none, which is "
+        "why every cell moves.\n")
     dil = by_kind.get(gen.ATTACK_DILUTION, {"flagged": 0, "sessions": 0})
     long_rare = by_kind.get(gen.BENIGN_HARD_LONG_RARE,
                             {"flagged": 0, "sessions": 0})
