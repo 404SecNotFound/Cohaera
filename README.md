@@ -91,8 +91,8 @@ answer in. Every number below is derived from the evaluation card by
 > And it grades itself by the same rule. The repository ships an evaluation card,
 > regenerated on every commit with CI failing on any diff, and it leads with the
 > number most detection projects bury — 420.4 false positives per 1,000 benign
-> sessions, and 0.238% precision at a 0.1% attack base rate. 22 evasions
-> constructed, 20 still working, every one of them a permanent test. It is
+> sessions, and 0.238% precision at a 0.1% attack base rate. 28 evasions
+> constructed, 26 still working, every one of them a permanent test. It is
 > pre-alpha, the corpus is synthetic and its author wrote the detector too, and
 > nobody outside this repository has validated any of it. All of which is on the
 > first screen rather than discovered later.
@@ -150,7 +150,7 @@ fitted on those same twelve near-identical sessions. That is a smoke test wearin
 a lab coat.
 
 So there is a file in this repository called [EVASION.md](EVASION.md) whose
-entire job is to break this one. 22 constructed evasions, 20 of them still
+entire job is to break this one. 28 constructed evasions, 26 of them still
 working, each backed by a test that passes when the evasion succeeds. Read it
 before you trust anything else here — including the entry for the one that has
 been closed, which cost 36 new false positives and says so.
@@ -211,7 +211,7 @@ question each one answers. The four read most often:
 
 | | |
 |---|---|
-| [EVASION.md](EVASION.md) | 22 ways to defeat this, 20 still working, each with a test |
+| [EVASION.md](EVASION.md) | 28 ways to defeat this, 26 still working, each with a test |
 | [POSITIONING.md](POSITIONING.md) | What layer this is, what it is not, and the language it will not use |
 | [REVIEW-RESPONSE.md](REVIEW-RESPONSE.md) | Two external reviews, 43 findings, what happened to each |
 | [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) | What it trusts, and what survives a hostile producer |
@@ -1141,9 +1141,9 @@ And the half that is a port rather than a contribution:
 - [x] Sigma content pack, 14 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 996 passing across unit, hostile-input and content conformance
+- [x] Tests, 1006 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
-- [x] Adversarial self-test, 26 evasions ([EVASION.md](EVASION.md))
+- [x] Adversarial self-test, 34 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger
 - [x] Typed capability manifests per producer, replacing name heuristics
 - [x] Stable verdict, run and config identity for replay and dedup
@@ -1281,7 +1281,7 @@ tests/
                       resource amplification, correlation forgery, exit codes
   test_content.py     asserts every field the Sigma pack names exists in a real
                       record. Sigma validation cannot check this.
-  test_evasion.py     26 adversarial tests that PASS when an evasion works
+  test_evasion.py     34 adversarial tests that PASS when an evasion works
   test_evidence.py    the P1 mechanisms, attacked: RFC 8032 vectors, forged
                       signatures, deletion, modification, replay, reorder,
                       approval substitution and receipt copying

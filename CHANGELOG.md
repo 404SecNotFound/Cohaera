@@ -681,7 +681,7 @@ including the three recommended remedies that were declined.
   of COH-R12 is the one exception, and it reached the card only as a side
   effect of the `producer_flag` ablation rather than by design; see
   `eval/README.md`.
-- **22 constructed evasions are catalogued and 20 still work**, on purpose:
+- **28 constructed evasions are catalogued and 26 still work**, on purpose:
   `tests/test_evasion.py` asserts they do, so that closing one without updating
   the catalogue fails the build.
 - **Cohaera still holds the whole run in memory.** `load` materialises every
