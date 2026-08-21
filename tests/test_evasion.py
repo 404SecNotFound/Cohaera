@@ -62,6 +62,7 @@ from cohaera.evidence import (
     TRUST_STORE_SCHEMA,
     Approval,
     Binding,
+    SessionIntegrity,
     StreamLedger,
     StreamVerifier,
     TrustStore,
@@ -938,6 +939,13 @@ def test_evasion_23b_the_collector_sequence_does_take_the_tie_back():
     start = Event(raw={**start.raw, "integrity": integrity(11)})
 
     settled = sess([guardrail, start, end])
+    # The remedy's claim is "the signature over the chain's head", so the
+    # signature has to be there. Attaching the audit a verified stream produces
+    # is what makes this test exercise the remedy rather than assert it.
+    settled.integrity = SessionIntegrity(
+        with_integrity=3, signatures_verified=1, streams={"c1"},
+        signature_ranges=[{"stream_id": "c1", "first_seq": 0,
+                           "last_seq": 11, "verified_to": 11}])
     assert ch04_guardrail_overrun(settled), "the sequence must settle the tie"
     ch04 = next(c for c in coverage(settled, None)["checks"]
                 if c["check"] == "CH04_guardrail_overrun")

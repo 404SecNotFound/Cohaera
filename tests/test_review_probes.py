@@ -52,6 +52,7 @@ from cohaera.evidence import (
     ARGS_CONTRADICTED,
     BOUND_ARG_MISMATCH,
     RECEIPT_SCHEMA,
+    SessionIntegrity,
     arg_digest,
 )
 from cohaera.ingest import assemble
@@ -278,10 +279,50 @@ def test_f03_an_unchained_sequence_cannot_reorder_the_session():
         "an unauthenticated, unchained sequence must not suppress the bypass")
 
 
+def _attested_sess(*events, manifest=None, ranges=()):
+    """A session carrying the audit a VERIFIED stream would produce.
+
+    Built directly rather than through `assemble`, because `assemble` seals the
+    session after assigning `integrity` and a sealed session refuses rebinding
+    -- deliberately, that is C4-08. So the audit has to be present at
+    construction, which is also the honest shape: verification happens before
+    scoring, never after.
+
+    Constructing `SessionIntegrity` by hand is not forging producer evidence.
+    It is Cohaera's OWN conclusion after checking chains and signatures against
+    the trust store, so building one directly is how a unit test says "assume
+    verification already succeeded" without carrying a keypair into every
+    ordering probe.
+    """
+    session = Session(
+        session_id="s-attested", events=list(events),
+        manifest=manifest or CapabilityManifest(), limits=DEFAULT_LIMITS)
+    session.integrity = _audit(*ranges)
+    return session
+
+
+def _audit(*ranges):
+    return SessionIntegrity(
+        with_integrity=1,
+        signatures_verified=1,
+        streams={s for s, _, _ in ranges},
+        signature_ranges=[{"stream_id": s, "first_seq": lo,
+                           "last_seq": hi, "verified_to": hi}
+                          for s, lo, hi in ranges])
+
+
 def test_f03_a_chained_sequence_still_settles_what_the_clock_cannot():
-    """And the property R-11 bought, which this must not undo: a sequence that
-    IS chained still outranks a wall clock the producer chose."""
-    session = sess(
+    """And the property R-11 bought, which this must not undo: a sequence a
+    signature VERIFIED still outranks a wall clock the producer chose.
+
+    The original wording of this test said "a sequence that IS chained", and
+    that was the hole the test above now closes from the other side. Chained is
+    a shape the producer writes; the argument for letting a sequence beat the
+    clock is that a signature covers it, so the test has to supply the
+    signature or it is asserting the doctrine over evidence that cannot carry
+    it. `_attested` is the audit a verified stream produces.
+    """
+    session = _attested_sess(
         ev("cost_threshold_exceeded", BASE + 5, action="policy_event",
            policy_id="cost-guard", enforcement="blocking",
            integrity=chained("collector-1", 99)),
@@ -293,7 +334,8 @@ def test_f03_a_chained_sequence_still_settles_what_the_clock_cannot():
            integrity=chained("collector-1", 100)),
         manifest=CapabilityManifest.from_obj(
             {"schema": "cohaera.capabilities:1",
-             "tools": {"delete_record": {"effects": ["delete"]}}}))
+             "tools": {"delete_record": {"effects": ["delete"]}}}),
+        ranges=[("collector-1", 0, 1000)])
     assert ch04_guardrail_overrun(session) == [], (
         "the collector sequence says the call started before the control fired")
 
