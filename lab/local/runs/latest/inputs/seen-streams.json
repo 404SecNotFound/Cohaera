@@ -1,5 +1,5 @@
 {
-  "digest": "16437e66b9b8cfcec131987c46464e19d671918fd0286990c0675e14b5884d7c",
+  "digest": "8c1662b0969a65629d3bd5aa48612370c9a67846d940e2be563cdb7b7ef8370b",
   "generation": 3,
   "scheme": "cohaera.stream_ledger:1",
   "streams": {
@@ -9,7 +9,7 @@
       "key_ids": [
         "ed25519:ed6a47a39da869b5"
       ],
-      "last_run_id": "9e903c972ae1c8a40deb06f8",
+      "last_run_id": "bc247c5e55f30b21f15ffdde",
       "last_seen_at": 1785720000.0,
       "last_seq": 9,
       "runs": 3

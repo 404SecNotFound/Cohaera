@@ -20,6 +20,48 @@ reports recall is a marketing document.
 
 ### Added
 
+- **Approvals can now be signed, bounded and spent once** — EVASION.md E26, half
+  closed. An approval was previously plain JSON on a stream the agent writes:
+  rewriting one field, `subject.span_id`, moved a real approval onto a call it
+  was never issued for, and nothing recorded it as used or made it expire.
+
+  `cohaera.approval:1` gains a `nonce` and a detached issuer `signature`. The
+  trust store gains an **`approval` role**, so the party issuing approvals is
+  not the party signing telemetry — a deployment where one key does both is
+  exactly the arrangement the signature exists to rule out. `--seen-approvals`
+  keeps a ledger of spent nonces that survives across runs, and
+  `--require-signed-approvals` decides whether an unverified approval still
+  covers a call.
+
+  Assurance is **tiered** the way receipt trust is: `claimed`, `bound`,
+  `authenticated`, `single_use`. Unlike the receipt tiers, the top two are
+  reachable — the schema has a signature field and the store has a role.
+
+  Three design points, each a place this could have been theatre. **The signing
+  input covers the span**, so the edit that defeats binding breaks the
+  signature; it is a fixed field list joined by `\x1f` rather than canonical
+  JSON, because canonicalisation problems are where signature bugs live. **The
+  signature covers and requires `expires_at`**, so an issuer cannot mint an
+  eternal signed approval — that closes the window problem by construction
+  rather than by a flag. And **a nonce counts only on an approval whose
+  signature verified**, because an attacker who can rewrite the span can rewrite
+  the nonce in the same edit; that invariant survived a mutation run until a
+  test was written specifically for it.
+
+  **The default deployment is unchanged, deliberately.** Requiring signatures
+  unconditionally would make every authorised action in every keyless deployment
+  look like a bypass. So E26 is `half_closed` with precondition *signed
+  approvals*, exactly as E13 and E21 are conditional on a signed stream.
+
+  **The ledger inherits E22 whole**, stated here rather than discovered later:
+  it is a local file that cannot be signed by anyone but the host holding it,
+  so deleting it restores the replay, and it is per-host so a second collector
+  never saw it.
+
+  `Limits` gains `max_approval_nonces`, so **every `verdict_id` and
+  `config_hash` changes** again.
+
+
 - **A check that asks whether a cited control ever existed, and E24 half closed**
   (`CH04_undeclared_control_cited`). A consequential call fails for an ordinary
   infrastructure reason; the producer emits a policy event attributing the

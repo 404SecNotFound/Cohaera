@@ -40,8 +40,8 @@ sandbox this revision was written in — so each entry cites an ID and a title,
 says so on its face, and asserts only what its fixture measures against this
 tree. Nothing below paraphrases a result, a number or an author.
 
-Six more — E03, E09, E11, E13, E16 and E24 — have had half of their impact
-removed. For
+Seven more — E03, E09, E11, E13, E16, E24 and E26 — have had half of their
+impact removed. For
 E13 that half is now substantial rather than cosmetic: on a stream carrying
 `cohaera.integrity:1`, deleting or modifying a record is **detected and
 localised** instead of noticed by accident. The attack is not closed, because
@@ -131,7 +131,7 @@ same distinction without splitting the counts four ways.
 | E23 | `half_closed` | T0 | CH03, CH04 | Stamp the consequential call on the control's own tick | no *verified* collector sequence | Free, one field | Half closed, coverage sees it |
 | E24 | `half_closed` | T0 | CH04, CH07 | Fabricate the policy event that explains away a call that failed | **declared policies** | Free, one event | Half closed *only where the manifest declares controls*; citing a declared one still works, unsigned |
 | E25 | `working` | T0 | CH04 | Change the tool definition between approval and invocation | approvals in use | Free, an MCP rug pull | Yes, a tool-definition digest in `cohaera.approval:1` |
-| E26 | `working` | T0 | CH04 | Replay one approval across calls and across sessions | approvals in use | Free, one field | Yes, a nonce, a mandatory window and an issuer signature |
+| E26 | `half_closed` | T0 | CH04 | Replay one approval across calls and across sessions | **signed approvals** | Free, one field | Half closed *only where the operator issues approval keys and requires them*; the default deployment is unchanged |
 | E26b | `remedy` | — | — | An **unedited** approval does not cover a second call | — | — | *unplanned win* |
 | E27 | `working` | T0 | CH03 | Launder the taint through a marker-free derived artefact | none | Free | No, the label has to travel with the value |
 | E28 | `working` | T0 | CH03 | Make the durable memory write the consequential call | no manifest entry | Free, the default | Ship a manifest entry for the memory tools |
@@ -627,13 +627,49 @@ the order the test establishes them:
 Points 2, 3 and 4 compose into the actual attack: one field, no expiry, no
 memory.
 
-**Remedy.** A nonce the verifier records as spent, a mandatory validity window,
-and an issuer signature over the approval body so that rewriting the span
-invalidates it. All three are the shape of work this repository has already done
-once for telemetry, and the third is what makes the first two worth having:
-without a signature the attacker edits the nonce too.
+**HALF CLOSED, 22 August 2026.** All three remedies are built, and which half
+closed is the whole of the entry.
 
-Backed by `test_evasion_26_an_approval_replays_across_calls_and_sessions`.
+`cohaera.approval:1` gained a `nonce` and a detached issuer `signature`, the
+trust store gained an `approval` role so the party that issues approvals is not
+the party that signs telemetry, and there is an `ApprovalLedger` behind
+`--seen-approvals` that remembers spent nonces across runs. Assurance is tiered
+the way receipt trust is — `claimed`, `bound`, `authenticated`, `single_use` —
+and the tier is in every verdict.
+
+Three design points, because each is a place this could have been theatre:
+
+- **The signing input covers the span.** That is the one field this entry
+  rewrites, so the edit that defeats binding also breaks the signature. It is a
+  fixed field list joined by `\x1f`, not canonical JSON, for the reason
+  `capabilities` gives about the manifest: canonicalisation problems are where
+  signature bugs live.
+- **The signature covers `expires_at`, and requires it.** That closes point 4 by
+  construction rather than by a flag — an issuer physically cannot mint a signed
+  approval that never expires.
+- **A nonce is honoured only on an approval whose signature verified.** An
+  attacker who can rewrite the span can rewrite the nonce in the same edit, so
+  single-use on an unsigned approval would be decoration. That invariant
+  survived a mutation run until a test was written specifically for it.
+
+**What has NOT closed is the default, and the default is what an attacker
+meets.** Cohaera does not require signed approvals unless the operator turns on
+`--require-signed-approvals`, because doing so in a deployment that has issued
+no approval keys makes every authorised action look like a bypass. In a stock
+deployment every point above still works exactly as it did. Same shape as E13
+and E21: a status that is true only given a trust anchor almost nobody has
+deployed has to say so on its face, which is what the `Precondition` column
+now does.
+
+**And the ledger inherits E22 whole.** It is a local file that cannot be signed
+by anyone but the host holding it — signing it with the collector key would let
+the monitored side forge its own memory — so deleting it restores the replay,
+and replaying to a second Cohaera host was never covered because the ledger is
+per-host. That is not a new weakness discovered later; it is the known cost of
+the mechanism, stated here at the moment it is introduced.
+
+Backed by `test_evasion_26_an_approval_replays_across_calls_and_sessions` for
+the default, and by `tests/test_approval_trust.py` for the closure.
 
 ## E26b. An unedited approval does not cover a second call
 
@@ -1377,7 +1413,7 @@ regression tests.
 | CH05 | Orphan terminal events were constructed with `result="success"` and never flagged. | An irreversible action appearing from nowhere was invisible | **Fixed.** `orphan_end` state, reported by CH05. |
 
 The review's C-05 finding, no executable test suite, was accurate at revision
-`45d3bf8`. There are now 1143 tests: unit, hostile-input, content conformance and
+`45d3bf8`. There are now 1166 tests: unit, hostile-input, content conformance and
 34 evasion characterizations, plus a seeded fuzz smoke test in CI.
 
 ### What is still open from the third review

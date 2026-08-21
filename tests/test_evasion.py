@@ -1251,15 +1251,26 @@ def test_evasion_26_an_approval_replays_across_calls_and_sessions():
 
     Points 2, 3 and 4 compose: one field, no expiry, no memory.
 
-    REMEDY: a nonce the verifier records as spent, a mandatory validity window,
-    and an issuer signature over the approval body so that rewriting the span
-    invalidates it. All three are the same shape as the
-    ``cohaera.integrity:1`` work and none of them exists here -- ``Approval``
-    has no nonce field at all, which is the assertion this test pins.
+    HALF CLOSED, 22 August 2026. All three remedies are built: an issuer
+    signature over a signing input that covers the span, a validity window the
+    signature requires, and a nonce ledger that survives across runs. With a
+    trust store and ``require_signed_approvals``, points 2, 3 and 4 all close --
+    proved end to end in tests/test_approval_trust.py.
+
+    WHAT THIS TEST STILL ASSERTS IS THE DEFAULT, and the default is what an
+    attacker meets. Cohaera does not require signed approvals unless the
+    operator says so, because turning it on in a deployment that has issued no
+    approval keys makes every authorised action look like a bypass. So in a
+    stock deployment -- no trust store, no ledger, no flag -- every line below
+    still passes exactly as it did before the remedy existed.
+
+    That is the same shape as E13 and E21: a status that is true only given a
+    trust anchor almost nobody has deployed has to say so on its face.
     """
-    assert "nonce" not in Approval.__dataclass_fields__, (
-        "Approval gained a nonce; single-use approvals may now be possible and "
-        "E26 needs re-measuring")
+    assert "nonce" in Approval.__dataclass_fields__, (
+        "the E26 remedy has been removed; this entry should go back to "
+        "`working` and the closure tests should be deleted rather than left "
+        "passing against nothing")
 
     manifest = CapabilityManifest.from_obj({
         "tools": {"wire_transfer_send": {"effects": ["egress"],

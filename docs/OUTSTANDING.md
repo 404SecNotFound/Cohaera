@@ -43,9 +43,9 @@ Conducted against `5cca159`. Four findings were P0; all four are merged.
       and version, tenant/resource, call nonce, expiration, and an authoritative
       single-use approval ledger. **Large.**
 - [ ] **5. Work the free evasions rather than growing the catalogue.** 19 are
-      tier T0 — no attacker capability required — of which 12 work outright and
+      tier T0 — no attacker capability required — of which 11 work outright and
       the rest are half closed. Remaining, cheapest first: ship memory-tool
-      manifest entries, detect hidden delegation turns, close approval replay.
+      manifest entries, detect hidden delegation turns.
       **Medium, and the best security-per-hour on this page.**
 
       *E09 is half closed.* The local injection scan is built, and the shape it
@@ -68,6 +68,15 @@ Conducted against `5cca159`. Four findings were P0; all four are merged.
       `cohaera.policy_signature:1` attests a file. **The new check is unscored
       by the evaluation card**, so it ships at `hunt` saying so, which is the
       same treatment CH05 gets and for the same reason.
+
+      *E26 is half closed.* Signature, window and nonce ledger are all built.
+      `cohaera.approval:1` gained a `nonce` and a detached issuer signature, the
+      trust store gained an `approval` role, and `--seen-approvals` remembers
+      spent nonces across runs. **The default is unchanged and that is
+      deliberate** — requiring signed approvals in a deployment that has issued
+      no keys makes every authorised action look like a bypass, so the operator
+      turns it on. The ledger inherits E22 whole: unsigned by necessity, local,
+      per-host.
 - [ ] **6. Obtain external efficacy evidence that means something.** The one
       external run evaluated no checks. Needs an independently authored,
       properly instrumented corpus with agent, tool-family, task and
@@ -90,7 +99,7 @@ Conducted against `5cca159`. Four findings were P0; all four are merged.
       code-owner review and no last-push approval. **Owner: repository admin —
       see section D.** **Small.**
 - [ ] **9. Split the trust kernel before adding to it.** `checks.py` is 3,309
-      lines and `evidence.py` is 3,013. The decision not to split was taken when
+      lines and `evidence.py` is 3,306. The decision not to split was taken when
       they totalled about 4,700, and the ordering defect above crossed those
       module boundaries. Characterization tests first, then separate integrity
       admission, ordering, approvals, receipts, ledger handling and the check

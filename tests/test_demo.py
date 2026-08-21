@@ -201,9 +201,14 @@ def test_replay_the_fixture_declares_no_window_and_no_signature():
     appr = mod.approval("AP1")
     for absent in ("granted_at", "expires_at", "nonce", "signature"):
         assert absent not in appr, f"the fixture now carries {absent!r}"
-    assert "nonce" not in Approval.__dataclass_fields__, (
-        "Approval gained a nonce -- E26 is being closed and this demo needs "
-        "rewriting, not patching")
+    # E26's remedy now exists, so the canary changes shape. What the demo
+    # shows is the DEFAULT deployment -- no trust store, no ledger, no flag --
+    # and that is still exactly what acts 3 and 4 assert. The fixture must
+    # keep carrying no signature and no window, or it would be demonstrating
+    # the remedy rather than the gap.
+    assert "nonce" in Approval.__dataclass_fields__, (
+        "the E26 remedy has been removed; this demo should go back to being "
+        "about an unclosable gap")
 
 
 def test_the_replay_demo_runs_end_to_end():

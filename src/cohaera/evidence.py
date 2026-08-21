@@ -110,6 +110,7 @@ from .validate import identity_text, strict_json_loads
 INTEGRITY_SCHEMA = "cohaera.integrity:1"
 RECEIPT_SCHEMA = "cohaera.receipt:1"
 APPROVAL_SCHEMA = "cohaera.approval:1"
+APPROVAL_LEDGER_SCHEMA = "cohaera.approval_ledger:1"
 TRUST_STORE_SCHEMA = "cohaera.trust_store:1"
 POLICY_SIGNATURE_SCHEMA = "cohaera.policy_signature:1"
 # Superseded by the trust store and still loaded, because a deployment that
@@ -129,7 +130,14 @@ TRUST_STORE_SEMANTICS = "cohaera.trust_store.semantics:1"
 # watched authority over the rules it is watched by.
 ROLE_COLLECTOR = "collector"          # cohaera.integrity:1 on the wire
 ROLE_POLICY = "policy"                # cohaera.policy_signature:1 over a file
-VALID_ROLES = frozenset({ROLE_COLLECTOR, ROLE_POLICY})
+# E26. Approvals are issued by a different party from the one that signs
+# telemetry -- a human, a workflow engine, a ticketing system -- and the whole
+# argument for signing an approval is that the agent cannot mint one. A
+# deployment where the collector key also signs approvals has one party doing
+# both jobs, which is exactly the arrangement the signature was meant to rule
+# out, so the store can express the difference and the verdict reports it.
+ROLE_APPROVAL = "approval"            # issues cohaera.approval:1
+VALID_ROLES = frozenset({ROLE_COLLECTOR, ROLE_POLICY, ROLE_APPROVAL})
 
 # What is wrong with the STORE ITSELF, as opposed to with anything verified
 # under it. See TrustStore.warnings.
@@ -331,6 +339,45 @@ RECEIPT_RECONCILED = "reconciled"
 """Confirmed against the authority itself: the identifier was looked up and it
 exists. NOT REACHABLE, and out of scope for a detector that reads a stream."""
 
+# ---------------------------------------------------------------------------
+# cohaera.approval:1 assurance, tiered for the same reason receipts are.
+#
+# E26 is four separate weaknesses and only the first was ever closed: a
+# VERBATIM copy does not cover a second call, because the binding names a span.
+# Rewriting that one field defeated it, nothing recorded an approval as spent,
+# and the validity window was optional so an approval could cover forever.
+#
+# The tiers exist rather than a boolean because requiring signatures outright
+# would stop every deployed approval from covering anything, and CH04 would
+# fire on every authorised action in the world. The operator decides whether an
+# untrusted tier still covers; the verdict always says which tier it got.
+# ---------------------------------------------------------------------------
+
+APPROVAL_CLAIMED = "claimed"
+"""Parsed. Somebody asserted an approval exists. Nothing more."""
+
+APPROVAL_BOUND = "bound"
+"""The subject names this exact call -- span, tool and argument digest. Proves
+the approval is ABOUT this call. Proves nothing about who issued it, which is
+E26 point 2: one rewritten field moves a real approval onto another call."""
+
+APPROVAL_AUTHENTICATED = "authenticated"
+"""An issuer signed it, and the signature verified against a key the operator
+gave the `approval` role. The signature covers the span, so the rewrite that
+defeats BOUND invalidates it."""
+
+APPROVAL_SINGLE_USE = "single_use"
+"""Authenticated AND its nonce had not been spent before. Reachable only ON TOP
+of a verified signature: an attacker who can rewrite the span can rewrite the
+nonce in the same edit, so a nonce on an unsigned approval is decoration."""
+
+APPROVAL_TRUSTED_TIERS = frozenset({APPROVAL_AUTHENTICATED, APPROVAL_SINGLE_USE})
+"""The tiers where the approval is evidence rather than a claim. Unlike
+RECEIPT_AUTHENTIC this set is REACHABLE -- the schema has a signature field and
+the store has a role -- but it is empty in any deployment that has not issued
+keys, which is the state every deployment starts in."""
+
+
 RECEIPT_AUTHENTIC = frozenset({RECEIPT_AUTHENTICATED, RECEIPT_RECONCILED})
 """The tiers that support a high-confidence accusation. Empty in practice
 today, which is the honest state and is asserted by test."""
@@ -439,6 +486,24 @@ class Integrity:
 CHAIN_HEX_CHARS = 64
 
 
+def _sig_bytes(value: Any) -> bytes | None:
+    """An Ed25519 signature, base64, or None.
+
+    Base64 rather than hex because that is what `cohaera.integrity:1` already
+    uses for the same 64 bytes, and two encodings for one kind of field is how
+    a producer ends up emitting the wrong one. `validate=True` for the reason
+    stated there: base64 that silently ignores stray characters would let two
+    different strings decode to the same signature.
+    """
+    if not isinstance(value, str) or isinstance(value, bool) or not value:
+        return None
+    try:
+        blob = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return blob if len(blob) == ed25519.SIG_BYTES else None
+
+
 def _hex_or_none(value: Any) -> str | None:
     if not isinstance(value, str) or isinstance(value, bool) or not value:
         return None
@@ -497,6 +562,44 @@ def signing_input(stream_id: str, seq: int, chain: str) -> bytes:
                          stream_id.encode("utf-8"),
                          str(seq).encode("ascii"),
                          chain.encode("utf-8")))
+
+
+def approval_signing_input(*, decision: str, span_id: str, tool_id: str | None,
+                           arg_digest: str | None, nonce: str | None,
+                           granted_at: float | None,
+                           expires_at: float | None) -> bytes:
+    """The exact bytes an approval issuer signs.
+
+    A FIXED FIELD LIST, not canonical JSON, and the choice is the same one
+    `capabilities` makes about the manifest: a signature embedded in the
+    document it signs has to be excised before hashing, which is a
+    canonicalisation problem, and canonicalisation problems are where signature
+    bugs live. Seven fields, ordered, joined by an octet that cannot appear in
+    an identity that survived validation.
+
+    EVERY FIELD AN ATTACKER WOULD REWRITE IS IN HERE. `span_id` above all --
+    that is the single field EVASION.md E26 rewrites, and a signing input that
+    omitted it would leave the whole mechanism decorative. `nonce` is covered so
+    a spent approval cannot be re-minted with a fresh one; `expires_at` is
+    covered AND required, so an issuer cannot sign an eternal approval.
+
+    Floats are formatted with `repr` so that the value that round-trips through
+    JSON is the value that was signed. Formatting them any other way makes the
+    verifier and the issuer disagree about a number they both hold.
+    """
+    def num(value: float | None) -> bytes:
+        return b"" if value is None else repr(float(value)).encode("ascii")
+
+    return b"\x1f".join((
+        APPROVAL_SCHEMA.encode("utf-8"),
+        decision.encode("utf-8"),
+        span_id.encode("utf-8"),
+        (tool_id or "").encode("utf-8"),
+        (arg_digest or "").encode("utf-8"),
+        (nonce or "").encode("utf-8"),
+        num(granted_at),
+        num(expires_at),
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -575,6 +678,57 @@ class Approval:
     policy_digest: str | None = None
     enforcement: str = ENFORCEMENT_UNDECLARED
     origin: str = APPROVAL_ORIGIN_IN_BAND
+    # ---- E26 ------------------------------------------------------------
+    # Present on the wire. `verified` and `unspent` are NOT: they are set by
+    # the verifier and the ledger, so an approval cannot arrive claiming to be
+    # authenticated. That is the same rule `IntegrityRecord` follows and it is
+    # the reason the tier is a property rather than a field.
+    nonce: str | None = None
+    key_id: str | None = None
+    signature: bytes | None = None
+    verified: bool = False
+    unspent: bool | None = None
+
+    @property
+    def bound(self) -> bool:
+        """Does the subject name this call completely -- span, tool, args?
+
+        Completeness of the SUBJECT, judged without a call in hand. Whether it
+        matches a particular call is `Binding`'s job and a different question.
+        """
+        s = self.subject
+        return bool(s.span_id and s.tool_id and s.arg_digest)
+
+    @property
+    def signable(self) -> bool:
+        """Could this approval carry a meaningful signature at all?
+
+        `expires_at` is required, and that is how E26 point 4 closes without a
+        flag: the signing input covers the expiry, so an issuer physically
+        cannot mint a signed approval that never expires. An approval with a
+        signature and no window is refused before any curve arithmetic.
+        """
+        return bool(self.signature and self.key_id
+                    and self.expires_at is not None)
+
+    @property
+    def tier(self) -> str:
+        if self.verified and self.unspent is True:
+            return APPROVAL_SINGLE_USE
+        if self.verified:
+            return APPROVAL_AUTHENTICATED
+        return APPROVAL_BOUND if self.bound else APPROVAL_CLAIMED
+
+    @property
+    def trusted(self) -> bool:
+        return self.tier in APPROVAL_TRUSTED_TIERS
+
+    def signing_input(self) -> bytes:
+        return approval_signing_input(
+            decision=self.decision, span_id=self.subject.span_id or "",
+            tool_id=self.subject.tool_id, arg_digest=self.subject.arg_digest,
+            nonce=self.nonce, granted_at=self.granted_at,
+            expires_at=self.expires_at)
 
     def covers_clock(self, started_at: float) -> bool | None:
         """Was the call inside this approval's validity window?
@@ -599,7 +753,10 @@ class Approval:
                 "expires_at": self.expires_at, "policy_id": self.policy_id,
                 "policy_digest": self.policy_digest,
                 "enforcement": self.enforcement,
-                "approval_origin": self.origin}
+                "approval_origin": self.origin,
+                "approval_assurance": self.tier,
+                "nonce_present": self.nonce is not None,
+                "issuer_key_id": self.key_id}
 
     @classmethod
     def parse(cls, obj: Any, limits: Limits = DEFAULT_LIMITS
@@ -617,6 +774,8 @@ class Approval:
             # would recreate the exact fault this schema exists to remove: a
             # broad approval covering whatever came next.
             return None, (DEFECT_APPROVAL_TYPE,)
+        raw_sig = obj.get("signature")
+        sig: dict[str, Any] = raw_sig if isinstance(raw_sig, dict) else {}
         enforcement = obj.get("enforcement")
         codes: tuple[str, ...] = ()
         if enforcement is None:
@@ -631,6 +790,11 @@ class Approval:
             policy_id=_short(obj.get("policy_id"), limits),
             policy_digest=digest_text(obj.get("policy_digest")),
             enforcement=enforcement,
+            # Parsed, never trusted here. `verified` stays False until a key
+            # says otherwise, so a producer cannot ship `verified: true`.
+            nonce=_short(obj.get("nonce"), limits),
+            key_id=_short(sig.get("key_id"), limits),
+            signature=_sig_bytes(sig.get("sig")),
         ), codes
 
 
@@ -2230,6 +2394,135 @@ class StreamLedger:
             "streams_not_recorded": self.evicted,
             "verdicts": [v.as_dict() for v in self.verdicts],
         }
+
+
+class ApprovalLedger:
+    """Memory of which approval nonces have already been spent.
+
+    E26 point 3. Without this an approval works the hundredth time as well as
+    the first, in any session, forever. `--seen-streams` gave `cohaera.integrity:1`
+    exactly this capability against stream replay and nothing gave it to
+    approvals; this is that, for nonces.
+
+    IT INHERITS E22 WHOLE, AND THAT IS NOT A DETAIL. The ledger is a local file
+    that cannot be signed by anyone but the host holding it -- signing it with
+    the collector key would let the monitored side forge its own memory. So an
+    attacker who can delete this file restores the replay, and an attacker who
+    replays to a DIFFERENT Cohaera host was never covered because the ledger is
+    per-host. Both are catalogued rather than hidden: see EVASION.md E22 and
+    E22b, and the new entries this mechanism opens.
+
+    `spend` returns THREE values, deliberately. True is "not seen before",
+    False is "seen", and None is "there is no ledger" -- and None must never
+    collapse into either. Reporting "no memory" as "unspent" would silently
+    grant single-use assurance to every deployment that never enabled it.
+    """
+
+    def __init__(self, path: Path | None = None,
+                 nonces: dict[str, float] | None = None,
+                 limits: Limits = DEFAULT_LIMITS) -> None:
+        self._path = path
+        self._limits = limits
+        self._nonces: dict[str, float] = dict(nonces or {})
+        self._dirty = False
+        if path is not None and path.exists():
+            self._load(path)
+
+    def _load(self, path: Path) -> None:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise LedgerError(f"approval ledger {path} is not readable: {exc}") from exc
+        if not isinstance(raw, dict):
+            raise LedgerError(f"approval ledger {path} root must be an object")
+        seen = raw.get("nonces")
+        if seen is not None and not isinstance(seen, dict):
+            raise LedgerError(f"approval ledger {path}: 'nonces' must be an object")
+        for key, value in (seen or {}).items():
+            if isinstance(key, str) and key:
+                self._nonces[key] = _finite(value) or 0.0
+
+    @property
+    def enabled(self) -> bool:
+        return self._path is not None
+
+    @property
+    def size(self) -> int:
+        return len(self._nonces)
+
+    def spend(self, nonce: str | None, at: float = 0.0) -> bool | None:
+        """True if this nonce is new, False if already spent, None if no ledger.
+
+        Recording happens on FIRST SIGHT, before any verdict is reached, so a
+        run that crashes after checking cannot hand the same nonce back on the
+        next run. That ordering is the same one `StreamLedger` uses and for the
+        same reason.
+        """
+        if self._path is None or not nonce:
+            return None
+        if nonce in self._nonces:
+            return False
+        if len(self._nonces) >= self._limits.max_approval_nonces:
+            # An attacker chooses how many nonces it presents. Refusing to grow
+            # past the bound is the same decision every other bound here makes,
+            # and it fails toward "no answer" rather than "unspent".
+            return None
+        self._nonces[nonce] = at
+        self._dirty = True
+        return True
+
+    def save(self) -> None:
+        """Persist, atomically, only if something changed.
+
+        Cross-session replay is the whole point of the mechanism, so a ledger
+        that forgets between runs closes nothing.
+        """
+        if self._path is None or not self._dirty:
+            return
+        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
+        payload = {"schema": APPROVAL_LEDGER_SCHEMA, "nonces": self._nonces}
+        tmp.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        tmp.replace(self._path)
+        self._dirty = False
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"enabled": self.enabled, "nonces_recorded": self.size}
+
+
+NO_APPROVAL_LEDGER = ApprovalLedger()
+
+
+def verify_approval(approval: Approval, store: TrustStore,
+                    now: float | None = None) -> Approval:
+    """Return the approval with `verified` set if its issuer signature holds.
+
+    Ordering matches `verify_policy_signature` and `StreamVerifier`: everything
+    decidable without arithmetic is decided first, and the key's own validity
+    window is judged last. A failure returns the approval UNCHANGED rather than
+    marking it refused, because a bad signature and no signature reach the same
+    place -- the approval does not climb above BOUND -- and inventing a third
+    state would let a producer downgrade a real approval by attaching garbage.
+    """
+    if not approval.signable:
+        return approval
+    if not store.has_role(ROLE_APPROVAL):
+        return approval
+    key = store.get(approval.key_id or "")
+    if key is None or not key.authorises(ROLE_APPROVAL):
+        return approval
+    if key.revoked:
+        return approval
+    at = approval.granted_at if approval.granted_at is not None else now
+    if key.covers_clock(at) is False:
+        return approval
+    try:
+        # (public_key, message, signature). Getting this order wrong makes
+        # every signature fail closed, which looks like working code.
+        ok = ed25519.verify(key.public, approval.signing_input(),
+                            approval.signature or b"")
+    except (ValueError, TypeError):
+        return approval
+    return replace(approval, verified=True) if ok else approval
 
 
 NO_LEDGER = StreamLedger()

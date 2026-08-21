@@ -286,6 +286,11 @@ class Limits:
     # is the most expensive thing in this codebase per unit of attacker effort.
     # The comb changed the constant, not the shape: the work is still linear in
     # a number the producer chooses, which is why the bound below stays.
+    # E26. How many spent approval nonces one ledger will hold. An attacker
+    # chooses how many it presents, so the ledger is bounded like every other
+    # attacker-chosen quantity -- and it fails toward "no answer" rather than
+    # toward "unspent", so a full ledger cannot grant single-use assurance.
+    max_approval_nonces: int = 1_000_000
     max_integrity_streams: int = 10_000
     # How far a record may arrive out of order before the gap ahead of it is
     # called a deletion. This is the reordering-versus-deletion decision from
