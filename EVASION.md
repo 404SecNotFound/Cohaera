@@ -40,7 +40,8 @@ sandbox this revision was written in — so each entry cites an ID and a title,
 says so on its face, and asserts only what its fixture measures against this
 tree. Nothing below paraphrases a result, a number or an author.
 
-Five more — E03, E09, E11, E13 and E16 — have had half of their impact removed. For
+Six more — E03, E09, E11, E13, E16 and E24 — have had half of their impact
+removed. For
 E13 that half is now substantial rather than cosmetic: on a stream carrying
 `cohaera.integrity:1`, deleting or modifying a record is **detected and
 localised** instead of noticed by accident. The attack is not closed, because
@@ -128,7 +129,7 @@ same distinction without splitting the counts four ways.
 | E22 | `half_closed` | T2 | CH06 | Delete the seen-stream ledger, then replay the stream | `--seen-streams` in use | Write access to one local file | Half closed, the ledger is unsigned by necessity |
 | E22b | `working` | T2 | CH06 | Replay the stream to a *different* Cohaera host | `--seen-streams` in use | A second collector | Open, the ledger is per-host |
 | E23 | `half_closed` | T0 | CH03, CH04 | Stamp the consequential call on the control's own tick | no *verified* collector sequence | Free, one field | Half closed, coverage sees it |
-| E24 | `working` | T0 | CH04, CH07 | Fabricate the policy event that explains away a call that failed | none | Free, one event | Needs the control named in the manifest, signed by a second key |
+| E24 | `half_closed` | T0 | CH04, CH07 | Fabricate the policy event that explains away a call that failed | **declared policies** | Free, one event | Half closed *only where the manifest declares controls*; citing a declared one still works, unsigned |
 | E25 | `working` | T0 | CH04 | Change the tool definition between approval and invocation | approvals in use | Free, an MCP rug pull | Yes, a tool-definition digest in `cohaera.approval:1` |
 | E26 | `working` | T0 | CH04 | Replay one approval across calls and across sessions | approvals in use | Free, one field | Yes, a nonce, a mandatory window and an issuer signature |
 | E26b | `remedy` | — | — | An **unedited** approval does not cover a second call | — | — | *unplanned win* |
@@ -490,15 +491,33 @@ reason:
   there is nothing to contradict. CH07 is the one check in this repository that
   can catch a lying emitter, and it can only catch the lie in one direction.
 
-The gap is the question neither asks: **did this control exist?** A policy event
-is accepted as a control on the strength of its own `policy_id`. An operator
-manifest that declares a different control entirely does not make the
-undeclared one suspicious — it only changes where CH04 would have taken its
-enforcement semantics from, and the coverage code for that
-(`POLICY_ENFORCEMENT_DECLARED_IN_BAND`) is about *semantics*, not about
-*existence*. There is no reason code for an unattributable control, and
-`test_evasion_24_fabricate_the_control_event` asserts that there is not, so the
-assertion fails the day somebody builds one.
+The gap was the question neither asks: **did this control exist?** A policy
+event is accepted as a control on the strength of its own `policy_id`, and an
+operator manifest declaring a different control entirely did not make the
+undeclared one suspicious — it only changed where CH04 took its enforcement
+semantics from. The coverage code for that
+(`POLICY_ENFORCEMENT_DECLARED_IN_BAND`) is about *semantics*, not *existence*.
+
+**HALF CLOSED, 21 August 2026.** `CH04_undeclared_control_cited` now asks it. A
+policy event citing a control the operator's manifest does not declare raises a
+`medium` finding carrying both lists — what was cited, and what was declared.
+
+Three things it deliberately does not do, and each is a place this could have
+overclaimed:
+
+- **It does not fire where the manifest declares no `policies` section.** A
+  manifest that lists tools and stops has not said its control list is
+  complete, and reading that silence as a denial would fire on nearly every
+  deployment. The gate is why the check is usable at all.
+- **It is `medium`, not high.** An out-of-date manifest produces exactly this
+  verdict and Cohaera cannot tell it from the attack. The finding says so on
+  its face.
+- **It is not scored by the evaluation card**, because no corpus session pairs
+  a declared-policies manifest with an outside citation. Its Sigma rule ships
+  at `hunt` and says it is unmeasured, which is the treatment CH05 already gets
+  for the same reason. A new `unscored_check_id` marker in the content pack
+  makes that sayable without quoting the family's numbers as though they
+  covered it.
 
 **Note which direction this runs in, because it is the opposite of E20's.** The
 asymmetry E20 relies on — a producer can suppress a finding but cannot
@@ -513,16 +532,24 @@ as Scapegoats* — agents inventing a policy rationale for an infrastructure
 failure. arXiv:2603.05786, *Proof-of-Guardrail* — falsely advertising that a
 guardrail runs.
 
-**Remedy direction.** Require a policy event to be attributable to a control
-named in the capability manifest's `policies` section, and treat an
-unattributable one as evidence of nothing rather than as a control that fired.
-That is cheap and it is not sufficient on its own, because the same emitter
-writes the tool-call events and the policy events, so an attacker who can
-fabricate one can fabricate a `policy_id` that matches the manifest. What makes
-the attribution mean something is a *second* signing key: policy events signed
-by the control plane, tool-call events signed by the collector, and a verdict
-that says which of the two it has. That is `cohaera.integrity:1`'s trust store
-with one more role in it, which is a smaller change than it sounds.
+**What remains open, and it is the half that matters most.** The attribution
+requirement is built. It is **not sufficient on its own**, and was never going
+to be: the same emitter writes the tool-call events and the policy events, so
+an attacker who can fabricate one can read the manifest and fabricate a
+`policy_id` that matches it. `test_evasion_24_fabricate_the_control_event` now
+runs both shapes and asserts exactly that — the undeclared citation is caught,
+the declared one still evades.
+
+So the cost to the attacker went from "one event" to "one event, naming a
+control the operator declared", which is a raise only against an attacker who
+cannot read the manifest. Do not oversell it.
+
+What makes the attribution mean something is a *second* signing key: policy
+events signed by the control plane, tool-call events signed by the collector,
+and a verdict that says which of the two it has. That is `cohaera.integrity:1`'s
+trust store with one more role in it — but note that `cohaera.policy_signature:1`
+attests a **file**, not an event, so this needs a per-event schema that does not
+exist yet. Smaller than it sounds, and not free.
 
 Backed by `test_evasion_24_fabricate_the_control_event`.
 
@@ -1350,7 +1377,7 @@ regression tests.
 | CH05 | Orphan terminal events were constructed with `result="success"` and never flagged. | An irreversible action appearing from nowhere was invisible | **Fixed.** `orphan_end` state, reported by CH05. |
 
 The review's C-05 finding, no executable test suite, was accurate at revision
-`45d3bf8`. There are now 1117 tests: unit, hostile-input, content conformance and
+`45d3bf8`. There are now 1130 tests: unit, hostile-input, content conformance and
 34 evasion characterizations, plus a seeded fuzz smoke test in CI.
 
 ### What is still open from the third review

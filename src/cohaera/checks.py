@@ -1117,6 +1117,14 @@ CH04_ATTEMPTED = "CH04_post_guardrail_attempt"
 # approval bound to that work. Additive, so existing content keeps matching what
 # it always matched.
 CH04_BYPASSED = "CH04_blocking_control_bypassed"
+# E24. Not an overrun at all -- the inverse. A policy event cites a control the
+# operator's manifest does not declare, so the session carries a documented
+# refusal that nothing refused. It lives in CH04's family because CH04 owns
+# guardrail evidence, and every other check is looking the other way: CH04 asks
+# what happened AFTER a control fired, and here nothing did; CH07 falsifies a
+# reported failure carrying a receipt, and here the failure is real and there is
+# no receipt. Nothing asked the prior question -- did this control exist?
+CH04_UNDECLARED = "CH04_undeclared_control_cited"
 
 # Where the enforcement semantics came from. An operator's manifest outranks the
 # event, because the event is written by the thing being watched.
@@ -1144,6 +1152,33 @@ def _resolved_enforcement(event: Any, manifest: CapabilityManifest
     if in_band != ENFORCEMENT_UNDECLARED:
         return in_band, ENFORCEMENT_FROM_EVENT
     return ENFORCEMENT_UNDECLARED, ENFORCEMENT_FROM_NOWHERE
+
+
+# What the manifest's silence means, which is the whole design of E24's fix.
+# A manifest that declares TOOLS and no `policies` section has not said its
+# control list is complete; reading that silence as a denial would fire on
+# every deployment that has not filled the section in. A manifest that DOES
+# declare policies has made a statement about which controls exist, and a
+# citation outside it is the one the operator can act on.
+def _undeclared_controls(session: Session) -> list[Event]:
+    """Policy events citing a control the operator's manifest does not declare.
+
+    E24. The direction of trust is the same one E20 states and the opposite of
+    E20's case. E20 is a producer SUPPRESSING a finding with an in-band string,
+    and the manifest takes that back. This is a producer FABRICATING an
+    exculpation with an in-band event, and the manifest is the only thing in
+    the session with the standing to say the control was never there.
+
+    Empty unless the manifest declares policies at all. That gate is not
+    politeness: without it the check fires on every session from every
+    deployment whose manifest lists tools and stops, which is most of them.
+    """
+    manifest = session.manifest
+    if not manifest.policies:
+        return []
+    return [e for e in session.events
+            if e.event_type in POLICY_EVENTS
+            and manifest.policy(e.data.get("policy_id"), e.event_type) is None]
 
 
 def _policy_semantics(session: Session) -> dict[str, Any]:
@@ -1501,6 +1536,59 @@ def ch04_guardrail_overrun(session: Session,
             findings[first_for_this_policy:] = [
                 replace(f, detail=f.detail + note)
                 for f in findings[first_for_this_policy:]]
+
+    # E24. Asked once per session rather than per policy type, and asked
+    # OUTSIDE the loop above, because it is not a question about ordering. The
+    # loop asks "what happened after this control fired"; this asks whether the
+    # control was ever there. A session where nothing happened afterwards --
+    # which is precisely the fabricated-exculpation shape -- never enters the
+    # loop's finding paths at all.
+    undeclared = _undeclared_controls(session)
+    if undeclared:
+        cited = sorted({
+            sanitise_display(e.data.get("policy_id") or e.event_type,
+                             limits.max_identity_chars)
+            for e in undeclared})
+        cited_shown, cited_dropped = cap_list(cited, limits.max_evidence_items)
+        declared = sorted(session.manifest.policies)
+        declared_shown, declared_dropped = cap_list(
+            declared, limits.max_evidence_items)
+        findings.append(Finding(
+            check=CH04_UNDECLARED,
+            family=CH04_FAMILY,
+            # Medium, and deliberately not higher. The session states that a
+            # control fired which the operator did not declare, and the two
+            # explanations are an out-of-date manifest and a fabricated
+            # exculpation. Cohaera cannot tell them apart and must not price
+            # this as though it could.
+            severity="medium",
+            session_id=session.session_id,
+            title="Policy event cites a control the manifest does not declare",
+            detail=(
+                f"{len(undeclared)} policy event(s) cite "
+                f"{', '.join(cited_shown)}"
+                + (f" and {cited_dropped} more" if cited_dropped else "")
+                + ", which the operator's capability manifest does not declare. "
+                f"It declares {len(declared)}: {', '.join(declared_shown)}"
+                + (f" and {declared_dropped} more" if declared_dropped else "")
+                + ". A policy event is otherwise accepted as a control on the "
+                "strength of its own policy_id, so an undeclared one puts a "
+                "documented refusal in the session that nothing in the "
+                "manifest accounts for. THIS IS NOT A BYPASS AND NOT PROOF OF "
+                "FABRICATION: an out-of-date manifest produces it too. What it "
+                "establishes is that the exculpation in this session cannot be "
+                "attributed to a control the operator says exists. See "
+                "EVASION.md E24."
+            ),
+            evidence={
+                "undeclared_controls": cited_shown,
+                "undeclared_controls_truncated": cited_dropped,
+                "undeclared_event_count": len(undeclared),
+                "declared_controls": declared_shown,
+                "declared_controls_truncated": declared_dropped,
+                "declared_total": len(declared),
+            },
+        ))
 
     shown, dropped = cap_list(findings, limits.max_findings_per_check)
     return shown
@@ -3168,7 +3256,7 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
 
 ALL_CHECKS = ["CH01_sequence_order", "CH02_concealment_gap",
               CH03_COMPLETED, CH03_ATTEMPTED,
-              CH04_COMPLETED, CH04_ATTEMPTED, CH04_BYPASSED,
+              CH04_COMPLETED, CH04_ATTEMPTED, CH04_BYPASSED, CH04_UNDECLARED,
               "CH05_unpaired_calls",
               CH06_INTEGRITY,
               CH07_CONTRADICTED, CH07_UNBOUND, CH07_PARTIAL]
@@ -3182,6 +3270,7 @@ CHECK_FAMILIES = {
     CH04_COMPLETED: CH04_FAMILY,
     CH04_ATTEMPTED: CH04_FAMILY,
     CH04_BYPASSED: CH04_FAMILY,
+    CH04_UNDECLARED: CH04_FAMILY,
     "CH05_unpaired_calls": "CH05_unpaired_calls",
     CH06_INTEGRITY: CH06_INTEGRITY,
     CH07_CONTRADICTED: CH07_FAMILY,

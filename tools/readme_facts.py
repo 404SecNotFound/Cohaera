@@ -619,6 +619,34 @@ def count_t0_open() -> str:
                    if tier == "T0" and status in ("working", "half_closed")))
 
 
+def _material_fp_block() -> str:
+    """The bullet list under "Read the `falsepositives` blocks"."""
+    text = CONTENT_README.read_text(encoding="utf-8")
+    start = text.index("**Read the `falsepositives` blocks")
+    return text[start:text.index("**Tagging note.**", start)]
+
+
+def count_material_fp_rules() -> str:
+    """Rules whose false-positive story content/README.md spells out.
+
+    This number was hand-typed and read "Five" over a list of six bullets --
+    defensible if the dashboard coverage entry was not meant to count, and
+    unknowable to a reader either way. It is the same defect the rest of this
+    module exists for, sitting in the one paragraph that tells a deploying
+    engineer what will page them at 3am.
+
+    Derived by counting the bullets themselves, which also forced the prose to
+    stop drawing a distinction it never explained.
+    """
+    return str(len(re.findall(r"^- \*\*", _material_fp_block(), re.M)))
+
+
+def count_material_fp_hunt() -> str:
+    """...of which how many are hunt tier, which is the clause after the comma."""
+    return str(len(re.findall(r"^- \*\*[^*]+\*\* \(`hunt`", _material_fp_block(),
+                              re.M)))
+
+
 def count_roadmap_open() -> str:
     return str(len(re.findall(r"^- \[ \]", README.read_text(encoding="utf-8"), re.M)))
 
@@ -1012,8 +1040,18 @@ CLAIMS = (
     Claim("content README statements", CONTENT_README,
           re.compile(r"invalidates all (\d+) statements"), count_sigma_rules),
     Claim("content README rules with material fp", CONTENT_README,
-          re.compile(r"Five of the (\d+) have a false positive"),
+          re.compile(r"of the (\d+) have a false positive story"),
           count_sigma_rules),
+    # The numerator, which was hand-typed as a word over a list of six.
+    Claim("content README material fp count", CONTENT_README,
+          re.compile(r"(\d+) of the \d+ have a false positive story"),
+          count_material_fp_rules),
+    Claim("content README material fp hunt share", CONTENT_README,
+          re.compile(r"\n(\d+) of those \d+ are why the `hunt` tier"),
+          count_material_fp_hunt),
+    Claim("content README material fp restated", CONTENT_README,
+          re.compile(r"of those (\d+) are why the `hunt` tier"),
+          count_material_fp_rules),
     Claim("review response sigma rules", REVIEW_RESPONSE,
           re.compile(r"evaluation card and (\d+) Sigma rules downstream"),
           count_sigma_rules),

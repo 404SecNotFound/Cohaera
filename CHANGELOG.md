@@ -20,6 +20,54 @@ reports recall is a marketing document.
 
 ### Added
 
+- **A check that asks whether a cited control ever existed, and E24 half closed**
+  (`CH04_undeclared_control_cited`). A consequential call fails for an ordinary
+  infrastructure reason; the producer emits a policy event attributing the
+  failure to a control; the response cites the policy. The session now carries a
+  documented refusal that nothing refused, and an incident review reading it
+  concludes the guardrails worked.
+
+  Every check was looking elsewhere, each for a good reason. CH04 asks what
+  happened *after* a control fired, and here nothing did. CH07 falsifies a
+  reported failure carrying an effect receipt, and here the failure is genuine
+  with no receipt. **Nothing asked the prior question.** A policy event was
+  accepted as a control on the strength of its own `policy_id`.
+
+  It now raises a `medium` finding carrying both lists — cited and declared.
+  Three deliberate limits: it does not fire where the manifest declares no
+  `policies` section (silence is not a denial, and reading it as one would fire
+  on nearly every deployment); it is `medium` rather than high because an
+  out-of-date manifest produces the identical verdict and Cohaera cannot tell
+  them apart; and it is **not scored by the evaluation card**, because no corpus
+  session pairs a declared-policies manifest with an outside citation.
+
+  **Half of E24 remains open, which is the half that matters.** An attacker who
+  reads the manifest and cites a control that IS declared produces no finding,
+  because nothing signs a policy event —
+  `cohaera.policy_signature:1` attests a file, not an event. The cost went from
+  "one event" to "one event naming a declared control", which raises nothing
+  against an attacker who can read the manifest. `test_evasion_24` now runs both
+  shapes and asserts exactly that.
+
+### Changed
+
+- **The content pack can say a check ID is unmeasured** (`unscored_check_id`).
+  The evaluation card scores per coverage *family*, so a check ID added after
+  its family was measured inherits numbers taken without it. Quoting them is the
+  laundering `test_the_check_a_rule_claims_evidence_for_is_the_one_it_selects_on`
+  exists to stop; dropping the family loses the link. A rule may now declare the
+  gap instead, which bars the `production` tier and forbids every numeric
+  evidence key. `CH04_guardrail_overrun` is consequently the first family to
+  span two deployment tiers, and the inventory test records why.
+
+- **`content/README.md`'s false-positive count is derived.** It read "Five of
+  the 14" over a list of six bullets — defensible only if the dashboard entry
+  was not meant to count, and unknowable to a reader either way. It is now two
+  derived claims over the bullets themselves, which also forced the prose to
+  stop drawing a distinction it never explained. That number is the one telling
+  a deploying engineer what will page them, and nothing recomputed it.
+
+
 - **A second opinion on captured tool output, and E09 half closed with it**
   (`src/cohaera/content_scan.py`). CH03's detection ceiling is set by the
   upstream scanner's pattern list, so an attacker who stays below it evades the

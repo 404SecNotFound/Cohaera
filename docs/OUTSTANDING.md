@@ -14,7 +14,7 @@ parked. They are listed separately because they have different owners and very
 different sizes.
 
 **The numbers here are derived.** 19 free evasions, 9 roadmap items, 8 role
-review findings, 3,220 lines in `checks.py` — every one of those is read out of
+review findings, 3,309 lines in `checks.py` — every one of those is read out of
 the file it describes by [`tools/readme_facts.py`](../tools/readme_facts.py) and
 checked in CI. Status *within this page* is a checkbox rather than a total,
 because a checklist cannot disagree with itself the way "6 of 10 remain" can.
@@ -43,11 +43,10 @@ Conducted against `5cca159`. Four findings were P0; all four are merged.
       and version, tenant/resource, call nonce, expiration, and an authoritative
       single-use approval ledger. **Large.**
 - [ ] **5. Work the free evasions rather than growing the catalogue.** 19 are
-      tier T0 — no attacker capability required — of which 13 work outright and
-      the rest are half closed. Remaining, cheapest first: require signed policy
-      declarations, ship memory-tool manifest entries, detect hidden delegation
-      turns, close approval replay. **Medium, and the best security-per-hour on
-      this page.**
+      tier T0 — no attacker capability required — of which 12 work outright and
+      the rest are half closed. Remaining, cheapest first: ship memory-tool
+      manifest entries, detect hidden delegation turns, close approval replay.
+      **Medium, and the best security-per-hour on this page.**
 
       *E09 is half closed.* The local injection scan is built, and the shape it
       took is worth knowing before starting the next one. This page and
@@ -60,6 +59,15 @@ Conducted against `5cca159`. Four findings were P0; all four are merged.
       CH07's receipts are tiered: `cohaera.content_scan` reports on the
       *scanner*, can only lower a confidence, and can never build a finding. The
       ceiling E09 names is untouched and the entry says so.
+
+      *E24 is half closed.* `CH04_undeclared_control_cited` asks the question no
+      check asked — did this control exist? — where the manifest declares its
+      controls. The half that remains is the one worth watching: an attacker who
+      reads the manifest cites a control that IS declared, and nothing signs a
+      policy event. Closing it needs a per-event policy signature schema;
+      `cohaera.policy_signature:1` attests a file. **The new check is unscored
+      by the evaluation card**, so it ships at `hunt` saying so, which is the
+      same treatment CH05 gets and for the same reason.
 - [ ] **6. Obtain external efficacy evidence that means something.** The one
       external run evaluated no checks. Needs an independently authored,
       properly instrumented corpus with agent, tool-family, task and
@@ -81,7 +89,7 @@ Conducted against `5cca159`. Four findings were P0; all four are merged.
       a recorded GitHub review, and the ruleset requires zero approvals, no
       code-owner review and no last-push approval. **Owner: repository admin —
       see section D.** **Small.**
-- [ ] **9. Split the trust kernel before adding to it.** `checks.py` is 3,220
+- [ ] **9. Split the trust kernel before adding to it.** `checks.py` is 3,309
       lines and `evidence.py` is 3,013. The decision not to split was taken when
       they totalled about 4,700, and the ordering defect above crossed those
       module boundaries. Characterization tests first, then separate integrity
