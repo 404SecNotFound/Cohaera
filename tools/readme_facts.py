@@ -533,6 +533,48 @@ def count_gates_pytest_does_not_run() -> str:
         return "pytest" in " ".join(gate.command) + (gate.shell or "")
     return str(sum(not uses_pytest(g) for g in _verify_gates()))
 
+# ---------------------------------------------------------------------------
+# The discrimination ceiling
+#
+# Same compromise as the external run above and for the same reason: the corpus
+# is not vendored, so CI cannot re-derive these. They are derived from the
+# COMMITTED ceiling artefact, which stops the prose drifting from the analysis
+# even though the analysis cannot be re-executed here.
+# ---------------------------------------------------------------------------
+
+
+def _ceiling() -> dict:
+    return json.loads((EXTERNAL_RUN / "ceiling.json").read_text(encoding="utf-8"))
+
+
+def _bound(representation: str, field: str):
+    def truth() -> str:
+        value = _ceiling()["bounds"][representation][field]
+        return f"{value}"
+    return truth
+
+
+def _violation(bucket: str, *, as_pct: bool = False):
+    def truth() -> str:
+        layer = _ceiling()["violation_layer"]
+        n = layer["buckets"].get(bucket, 0)
+        if as_pct:
+            return f"{100 * n / layer['pairs']:.1f}"
+        return str(n)
+    return truth
+
+
+def _learn(population: str, field: str):
+    def truth() -> str:
+        block = _ceiling()["learnability"][population]
+        if field == "binomial_p":
+            return f"{block['binomial_p']:.4f}".rstrip("0")
+        if field == "permutation_median":
+            return f"{block['permutation']['null_median']}"
+        return f"{block['family_holdout'][field]}"
+    return truth
+
+
 CLAIMS = (
     Claim("README tests passing", README,
           re.compile(r"Tests, (\d+) passing across unit"), count_tests),
@@ -677,6 +719,14 @@ CLAIMS = (
     Claim("doc map constructed evasions", DOC_MAP,
           re.compile(r"(\d+) constructed evasions, \d+ still working"),
           count_constructed_evasions),
+    # The doc map restates the external attack count. It was typed, correct on
+    # the day it was typed, and derived by nothing -- the tenth instance of the
+    # defect class, found while adding the ceiling section rather than by a
+    # test, because no test could see it. Same lesson as the evasion pair
+    # above: the COPY is where drift hides.
+    Claim("doc map external attack sessions", DOC_MAP,
+          re.compile(r"Zero detections across ([\d,]+) attack sessions"),
+          external_attack_sessions),
     Claim("doc map working evasions", DOC_MAP,
           re.compile(r"\d+ constructed evasions, (\d+) still working"),
           count_working_evasions),
@@ -742,6 +792,94 @@ CLAIMS = (
     Claim("external rogue arg overlap pct", EXTERNAL_RESULTS,
           re.compile(r"steps \(([\d.]+)%\) also appear on unlabelled"),
           external_rogue_arg_overlap_pct),
+    # The ceiling analysis. Derived from the committed artefact.
+    Claim("ceiling seq blind", EXTERNAL_RESULTS,
+          re.compile(r"tool names, ordered \| (\d+) \("),
+          _bound("action_sequence", "indistinguishable")),
+    Claim("ceiling seq blind pct", EXTERNAL_RESULTS,
+          re.compile(r"tool names, ordered \| \d+ \(([\d.]+)%\)"),
+          _bound("action_sequence", "indistinguishable_pct")),
+    Claim("ceiling seq at zero fp", EXTERNAL_RESULTS,
+          re.compile(r"tool names, ordered \| \d+ \([\d.]+%\) \| \*\*([\d.]+)%"),
+          _bound("action_sequence", "ceiling_recall_at_zero_fp_pct")),
+    Claim("ceiling multiset blind", EXTERNAL_RESULTS,
+          re.compile(r"tool names, unordered \| (\d+) \("),
+          _bound("action_multiset", "indistinguishable")),
+    Claim("ceiling multiset blind pct", EXTERNAL_RESULTS,
+          re.compile(r"tool names, unordered \| \d+ \(([\d.]+)%\)"),
+          _bound("action_multiset", "indistinguishable_pct")),
+    Claim("ceiling multiset at zero fp", EXTERNAL_RESULTS,
+          re.compile(r"tool names, unordered \| \d+ \([\d.]+%\) \| ([\d.]+)%"),
+          _bound("action_multiset", "ceiling_recall_at_zero_fp_pct")),
+    Claim("ceiling arity blind", EXTERNAL_RESULTS,
+          re.compile(r"argument \*key names\* \| (\d+) \("),
+          _bound("sequence_plus_arity", "indistinguishable")),
+    Claim("ceiling arity blind pct", EXTERNAL_RESULTS,
+          re.compile(r"argument \*key names\* \| \d+ \(([\d.]+)%\)"),
+          _bound("sequence_plus_arity", "indistinguishable_pct")),
+    Claim("ceiling arity at zero fp", EXTERNAL_RESULTS,
+          re.compile(r"argument \*key names\* \| \d+ \([\d.]+%\) \| \*\*([\d.]+)%"),
+          _bound("sequence_plus_arity", "ceiling_recall_at_zero_fp_pct")),
+    Claim("ceiling digest blind", EXTERNAL_RESULTS,
+          re.compile(r"argument \*values\* \| (\d+) \("),
+          _bound("sequence_plus_digest", "indistinguishable")),
+    Claim("ceiling digest at zero fp", EXTERNAL_RESULTS,
+          re.compile(r"argument \*values\* \| \d+ \([\d.]+%\) \| ([\d.]+)%"),
+          _bound("sequence_plus_digest", "ceiling_recall_at_zero_fp_pct")),
+    Claim("ceiling violation argument only", EXTERNAL_RESULTS,
+          re.compile(r"argument \*\*values\*\* \| \*\*(\d+) "),
+          _violation("argument_values_only")),
+    Claim("ceiling violation argument only pct", EXTERNAL_RESULTS,
+          re.compile(r"argument \*\*values\*\* \| \*\*\d+ \(([\d.]+)%\)"),
+          _violation("argument_values_only", as_pct=True)),
+    Claim("ceiling violation sequence differs", EXTERNAL_RESULTS,
+          re.compile(r"no positional comparison is well defined \| (\d+) "),
+          _violation("sequence_differs")),
+    Claim("ceiling violation step identical", EXTERNAL_RESULTS,
+          re.compile(r"the difference is elsewhere \| (\d+) "),
+          _violation("step_identical")),
+    Claim("ceiling learnable accuracy", EXTERNAL_RESULTS,
+          re.compile(r"a structural difference exists \| \*\*([\d.]+)%"),
+          _learn("distinguishable_only", "accuracy")),
+    Claim("ceiling learnable correct", EXTERNAL_RESULTS,
+          re.compile(r"a structural difference exists \| \*\*[\d.]+%\*\* \((\d+)/"),
+          _learn("distinguishable_only", "correct")),
+    Claim("ceiling learnable total", EXTERNAL_RESULTS,
+          re.compile(r"a structural difference exists \| \*\*[\d.]+%\*\* \(\d+/(\d+)\)"),
+          _learn("distinguishable_only", "pairs")),
+    Claim("ceiling all pairs accuracy", EXTERNAL_RESULTS,
+          re.compile(r"ties scored wrong \| ([\d.]+)%"),
+          _learn("all_pairs", "accuracy")),
+    Claim("ceiling all pairs correct", EXTERNAL_RESULTS,
+          re.compile(r"ties scored wrong \| [\d.]+% \((\d+)/"),
+          _learn("all_pairs", "correct")),
+    Claim("ceiling perm median distinguishable", EXTERNAL_RESULTS,
+          re.compile(r"the null lands on\s*\n?([\d.]+)% for the distinguishable"),
+          _learn("distinguishable_only", "permutation_median")),
+    Claim("ceiling perm median all", EXTERNAL_RESULTS,
+          re.compile(r"For all pairs it lands on ([\d.]+)%"),
+          _learn("all_pairs", "permutation_median")),
+    Claim("ceiling all pairs total", EXTERNAL_RESULTS,
+          re.compile(r"ties scored wrong \| [\d.]+% \(\d+/(\d+)\)"),
+          _learn("all_pairs", "pairs")),
+    Claim("ceiling violation sequence differs pct", EXTERNAL_RESULTS,
+          re.compile(r"no positional comparison is well defined \| \d+ \(([\d.]+)%\)"),
+          _violation("sequence_differs", as_pct=True)),
+    Claim("ceiling violation step identical pct", EXTERNAL_RESULTS,
+          re.compile(r"the difference is elsewhere \| \d+ \(([\d.]+)%\)"),
+          _violation("step_identical", as_pct=True)),
+    Claim("ceiling learnable accuracy in prose", EXTERNAL_RESULTS,
+          re.compile(r"([\d.]+)% against a 50% coin"),
+          _learn("distinguishable_only", "accuracy")),
+    Claim("ceiling all pairs accuracy in prose", EXTERNAL_RESULTS,
+          re.compile(r"it scores ([\d.]+)%, worse than a coin flip"),
+          _learn("all_pairs", "accuracy")),
+    Claim("ceiling binomial p", EXTERNAL_RESULTS,
+          # Anchored to end on a DIGIT. The obvious [\d.]+ swallows the
+          # sentence-ending full stop and compares "0.0012." against
+          # "0.0012" forever.
+          re.compile(r"exact binomial p = ([\d.]*\d)"),
+          _learn("distinguishable_only", "binomial_p")),
     # The local verifier's own counts, imported from its gate table.
     Claim("CONTRIBUTING verify gates", CONTRIBUTING,
           re.compile(r"\*\*every gate CI runs\*\* . (\d+) of them"),
