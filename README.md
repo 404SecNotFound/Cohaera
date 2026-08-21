@@ -76,6 +76,18 @@ The demo scores the same log file twice. Without the operator's list of real
 controls, Cohaera reports what it cannot check. With it, it names the phantom.
 [What the demo shows and what it refuses to claim](demo/phantom-guardrail/README.md).
 
+There is a second one, and it deliberately does **not** end in a catch:
+
+```bash
+python demo/approval-replay/run.py
+```
+
+A human approves one $250 payment. Copy that approval onto a second payment and
+Cohaera refuses it. Rewrite **one field** and it goes through — then works
+again, thirty days later, in a different session. Nothing signs an approval,
+nothing expires it, and nothing remembers it was spent.
+[The approval that never expires](demo/approval-replay/README.md).
+
 ---
 
 ## Read the numbers before the prose
@@ -1138,7 +1150,7 @@ And the half that is a port rather than a contribution:
 - [x] Sigma content pack, 15 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 1136 passing across unit, hostile-input and content conformance
+- [x] Tests, 1143 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 34 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger
