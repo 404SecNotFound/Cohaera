@@ -73,6 +73,11 @@ from .evidence import (
     R_STREAM_REPLAYED,
     R_STREAM_SKIPPED_RECORDS,
     R_UNSIGNED,
+    RECEIPT_AUTHENTIC,
+    RECEIPT_AUTHENTICATED,
+    RECEIPT_BOUND,
+    RECEIPT_CLAIMED,
+    RECEIPT_RECONCILED,
     SessionIntegrity,
 )
 from .identity import digest
@@ -1729,6 +1734,56 @@ def _receipted_calls(session: Session) -> list[ToolCall]:
     return [c for c in session.tool_calls if c.receipt is not None]
 
 
+def _receipt_trust(calls: list[ToolCall]) -> str:
+    """The weakest receipt trust across these calls. See evidence.RECEIPT_*.
+
+    Weakest rather than strongest, and rather than per-call: one finding
+    carries them all, so its severity has to be the one the worst member
+    supports. Reporting the best would let a single authenticated receipt
+    launder every unauthenticated one beside it.
+    """
+    if not calls:
+        return RECEIPT_CLAIMED
+    # Nothing can currently exceed BOUND -- no signature field, no receipt role
+    # in the trust store. The loop is written against the full vocabulary
+    # anyway, so the day a receipt CAN be authenticated this reads it rather
+    # than needing to be found and changed.
+    tiers = {RECEIPT_CLAIMED: 0, RECEIPT_BOUND: 1,
+             RECEIPT_AUTHENTICATED: 2, RECEIPT_RECONCILED: 3}
+    worst = min((_receipt_trust_of(c) for c in calls), key=lambda x: tiers[x])
+    return worst
+
+
+def _receipt_trust_of(call: ToolCall) -> str:
+    """One call's receipt trust.
+
+    Binding is a NECESSARY condition for BOUND and is nowhere near sufficient
+    for anything above it, which is the distinction CH07 was missing: a receipt
+    can name this call exactly and still have been written by whoever wrote the
+    call.
+    """
+    if call.receipt is None:
+        return RECEIPT_CLAIMED
+    if _receipt_binding(call) in BINDING_TRUSTED:
+        return RECEIPT_BOUND
+    return RECEIPT_CLAIMED
+
+
+def _receipt_severity(contradicted: list[ToolCall]) -> str:
+    """Severity capped by what the receipt is actually worth.
+
+    An unauthenticated receipt cannot support `critical`, because `critical`
+    here means "an effect provably occurred" and nothing proves it. Egress
+    still outranks the rest -- a contradiction about an irreversible outward
+    action deserves more attention than one about a local write -- so the shape
+    of the old mapping survives, one step down.
+    """
+    egress = any(c.klass == "egress" for c in contradicted)
+    if _receipt_trust(contradicted) in RECEIPT_AUTHENTIC:
+        return "critical" if egress else "high"
+    return "high" if egress else "medium"
+
+
 def _receipt_binding(call: ToolCall) -> str:
     """How well this call's receipt binds to it. See evidence.Binding.
 
@@ -1824,23 +1879,40 @@ def ch07_effect_contradiction(session: Session,
         findings.append(Finding(
             check=CH07_CONTRADICTED,
             family=CH07_FAMILY,
-            severity="critical" if any(c.klass == "egress" for c in contradicted)
-            else "high",
+            severity=_receipt_severity(contradicted),
             session_id=session.session_id,
             title="Telemetry reports failure for a call that produced an effect",
+            # The detail an analyst receives states what is ESTABLISHED and
+            # what is CONDITIONAL, and nothing else. An earlier draft of this
+            # fix quoted the wording it was correcting, which put a changelog
+            # in every record shipped to a SIEM. The history belongs here.
+            #
+            # It previously read "an identifier minted by the system the action
+            # happened to, from a namespace the agent does not control" and
+            # claimed the finding "does not depend on the stream being honest".
+            # Neither clause was supported by anything: `authority` is a
+            # producer-written string.
             detail=(
-                f"{len(contradicted)} call(s) did not report success, and each "
-                "carries an effect receipt bound to that exact call: an "
-                "identifier minted by the system the action happened to, from a "
-                "namespace the agent does not control. The action took effect "
-                "and the telemetry says it did not. This is a contradiction "
-                "within the record itself, so unlike every other check here it "
-                "does not depend on the stream being honest -- it is evidence "
-                "that the stream is not."
+                f"{len(contradicted)} call(s) did not report success while "
+                "carrying an effect receipt whose binding names that exact "
+                "call. The record contradicts itself, which is what this "
+                "finding establishes.\n\n"
+                f"Receipt trust: {_receipt_trust(contradicted)}, NOT "
+                "authenticated. Whether the effect actually occurred depends on "
+                "the receipt being genuine, and that is not checked: "
+                "cohaera.receipt:1 carries no signature and the trust store has "
+                "no role for receipt authorities, so `authority` is a string "
+                "the producer chose. Treat this as a contradiction to "
+                "investigate, not as proof an action took effect."
             ),
             evidence={"contradicted": shown, "contradicted_truncated": dropped,
                       "contradicted_total": len(contradicted),
-                      "receipted_calls": len(receipted)},
+                      "receipted_calls": len(receipted),
+                      # Routable: a SIEM can hold unauthenticated contradictions
+                      # in a hunt queue and page only on authenticated ones,
+                      # without parsing the detail text.
+                      "receipt_trust": _receipt_trust(contradicted),
+                      "receipt_authenticated": False},
         ))
 
     if unbound:

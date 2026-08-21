@@ -75,7 +75,7 @@ what differs between rows is the thing being demonstrated.
 | `01-normal` | Normal | — | `verified_complete` | info |
 | `02-behaviour-change` | Behaviour change | `CH03_untrusted_to_completed_action` | `verified_complete` | critical |
 | `03-evidence-failure` | Evidence failure | `CH06_evidence_integrity` | `inadmissible` | critical |
-| `04-contradiction` | Outcome contradiction | `CH07_reported_failure_with_effect_receipt` | `verified_complete` | high |
+| `04-contradiction` | Outcome contradiction | `CH07_reported_failure_with_effect_receipt` | `verified_complete` | medium |
 | `04b-unbound-receipt` | Unbound receipt | `CH07_effect_receipt_partially_bound` | `verified_complete` | low |
 | `05-partial-attestation` | Partial attestation | — | `verified_prefix` | info |
 
