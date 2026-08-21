@@ -18,6 +18,49 @@ reports recall is a marketing document.
 
 ## [Unreleased]
 
+### Added
+
+- **A second opinion on captured tool output, and E09 half closed with it**
+  (`src/cohaera/content_scan.py`). CH03's detection ceiling is set by the
+  upstream scanner's pattern list, so an attacker who stays below it evades the
+  check entirely — EVASION.md E09, the most important entry in that file.
+
+  E09's remedy line said "scan `tool_result` inside Cohaera". Finding F-16 had
+  already refused exactly that, in a code comment and a passing test, because a
+  detector generating its own taint evidence grades its own work. **Both
+  documents were in the tree, giving opposite instructions, for two revisions.**
+  The drift was in the reasoning rather than in a count, and counts are the only
+  thing this repository recomputes.
+
+  Resolved by tiering the evidence the way CH07's effect receipts are tiered. An
+  upstream answer is evidence about *content*; a local pass is evidence about
+  *the scanner*. The local pass therefore cannot behave like a marker: it never
+  makes `scanner_marked` true, so **no CH03 finding is ever built on it**; it
+  never moves CH03 off `not_evaluated`; and it can only lower a confidence or
+  add a remedy, never raise one. No content buys a session a cleaner report.
+
+  Two new reason codes carry it. `UNSCANNED_CONTENT_CARRIES_MARKERS` — content
+  was captured, nothing upstream examined it, and it matches Cohaera's patterns.
+  `SCANNER_ANSWER_CONTRADICTED_BY_CONTENT` — a scanner examined the call, called
+  it clean, and Cohaera's patterns disagree. The second is E09 made visible, and
+  it costs CH03 half the confidence of the disputed share rather than all of it,
+  because a disagreement between two regex lists may be Cohaera's error.
+
+  **The ceiling is not closed and the entry says so.** An attacker below both
+  pattern lists is where E09 left them, with one more list to evade.
+
+  **Not measured, stated plainly.** The evaluation corpus cannot exercise this
+  in either direction: its 216 injection-marked records carry no `tool_result`,
+  and all 7,156 captured results in it are the literal string `ok`. Zero false
+  positives and zero true positives, neither meaning anything. That the corpus
+  has no content channel at all is the larger finding, and it is now recorded
+  against the external-corpus item in `docs/OUTSTANDING.md`.
+
+  `Limits` gains `max_scanned_result_chars` (64 KiB), so **every `verdict_id`
+  and `config_hash` changes** — the bounds digest binds configuration into
+  verdict identity, and a new bound is a configuration change. A SIEM
+  deduplicating on those IDs will see all-new ones after this release.
+
 ### Fixed
 
 - **CH04's coverage contract, which was inverted.** `coverage()` added

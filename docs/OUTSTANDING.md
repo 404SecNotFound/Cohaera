@@ -14,7 +14,7 @@ parked. They are listed separately because they have different owners and very
 different sizes.
 
 **The numbers here are derived.** 19 free evasions, 9 roadmap items, 8 role
-review findings, 3,052 lines in `checks.py` — every one of those is read out of
+review findings, 3,220 lines in `checks.py` — every one of those is read out of
 the file it describes by [`tools/readme_facts.py`](../tools/readme_facts.py) and
 checked in CI. Status *within this page* is a checkbox rather than a total,
 because a checklist cannot disagree with itself the way "6 of 10 remain" can.
@@ -43,16 +43,36 @@ Conducted against `5cca159`. Four findings were P0; all four are merged.
       and version, tenant/resource, call nonce, expiration, and an authoritative
       single-use approval ledger. **Large.**
 - [ ] **5. Work the free evasions rather than growing the catalogue.** 19 are
-      tier T0 — no attacker capability required — of which 14 work outright and
-      the rest are half closed. Cheapest first: scan injection markers locally,
-      require signed policy declarations, ship memory-tool manifest entries,
-      detect hidden delegation turns, close approval replay. **Medium, and the
-      best security-per-hour on this page.**
+      tier T0 — no attacker capability required — of which 13 work outright and
+      the rest are half closed. Remaining, cheapest first: require signed policy
+      declarations, ship memory-tool manifest entries, detect hidden delegation
+      turns, close approval replay. **Medium, and the best security-per-hour on
+      this page.**
+
+      *E09 is half closed.* The local injection scan is built, and the shape it
+      took is worth knowing before starting the next one. This page and
+      `EVASION.md` both said "scan locally"; finding F-16 had refused exactly
+      that, in a code comment and a passing test, on the grounds that a detector
+      generating its own taint evidence grades its own work. **Two documents
+      here gave opposite instructions for two revisions and nothing noticed** —
+      the drift was in the reasoning, not in a count, and counts are the only
+      thing anything recomputes. The resolution was to tier the evidence the way
+      CH07's receipts are tiered: `cohaera.content_scan` reports on the
+      *scanner*, can only lower a confidence, and can never build a finding. The
+      ceiling E09 names is untouched and the entry says so.
 - [ ] **6. Obtain external efficacy evidence that means something.** The one
       external run evaluated no checks. Needs an independently authored,
       properly instrumented corpus with agent, tool-family, task and
       organisation holdouts — and the detector frozen before adaptive testing.
       **Large.**
+
+      **The internal corpus has no content channel, found while building E09's
+      scan and worth more than that entry.** Its 216 injection-marked records
+      carry no `tool_result` at all, and all 7,156 captured results in it are
+      the literal string `ok`. So the corpus cannot exercise anything that reads
+      content: it returned zero false positives *and* zero true positives from
+      the local scan, and neither number means anything. **CH03's content story
+      is untested by the evaluation that gates this repository's claims.**
 - [ ] **7. Build the Exabeam proof, not another architecture document.** One
       captured pipeline end to end: off-host collector, signed evidence, Cohaera
       verdict, Exabeam parser, timeline, risk enrichment, case. Measure ingest
@@ -61,7 +81,7 @@ Conducted against `5cca159`. Four findings were P0; all four are merged.
       a recorded GitHub review, and the ruleset requires zero approvals, no
       code-owner review and no last-push approval. **Owner: repository admin —
       see section D.** **Small.**
-- [ ] **9. Split the trust kernel before adding to it.** `checks.py` is 3,052
+- [ ] **9. Split the trust kernel before adding to it.** `checks.py` is 3,220
       lines and `evidence.py` is 3,013. The decision not to split was taken when
       they totalled about 4,700, and the ordering defect above crossed those
       module boundaries. Characterization tests first, then separate integrity

@@ -252,6 +252,12 @@ class Limits:
     max_user_message_chars: int = 64_000
     max_injection_markers: int = 200
     max_marker_chars: int = 256
+    # How much captured tool output `content_scan` reads. Attacker-chosen
+    # length against Cohaera's own regexes, so it is bounded like every other
+    # attacker-chosen quantity. Scanning stops here rather than rejecting the
+    # record: the module can only ever LOWER a confidence, so a marker past the
+    # bound costs Cohaera a remark it would have made, never a wrong one.
+    max_scanned_result_chars: int = 65_536
 
     # ---- evidence emitted into the verdict ------------------------------
     # Bounds the OUTPUT, which is the amplification vector the review's

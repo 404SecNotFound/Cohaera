@@ -40,7 +40,7 @@ sandbox this revision was written in — so each entry cites an ID and a title,
 says so on its face, and asserts only what its fixture measures against this
 tree. Nothing below paraphrases a result, a number or an author.
 
-Four more — E03, E11, E13 and E16 — have had half of their impact removed. For
+Five more — E03, E09, E11, E13 and E16 — have had half of their impact removed. For
 E13 that half is now substantial rather than cosmetic: on a stream carrying
 `cohaera.integrity:1`, deleting or modifying a record is **detected and
 localised** instead of noticed by accident. The attack is not closed, because
@@ -111,7 +111,7 @@ same distinction without splitting the counts four ways.
 | E06 | `half_closed` | T0 | CH02 | Emit no final response | none | Free | Partial, coverage sees it |
 | E07 | `working` | T0 | CH03 | Act first, read untrusted content second | none | Free | No |
 | E08 | `half_closed` | T0 | CH03 | Split read and act across two sessions | none | Free | Partial |
-| E09 | `working` | T0 | CH03 | Stay below observra's five regexes | none | Free | Yes, scan locally |
+| E09 | `half_closed` | T0 | CH03 | Stay below observra's five regexes | **captured results** | Free | Half closed *only where results are captured*; the blind spot is reported, the ceiling stands |
 | E10 | `working` | T0 | CH04 | Act before the threshold trips | none | Free | Yes |
 | E11 | `half_closed` | T1 | CH05 | Fabricate a terminal event | none | Emitter access | Half closed, CH07 catches a fabricated *failure* |
 | E12 | `working` | T1 | all | Fragment session_id on call boundaries | none | Emitter access | No |
@@ -226,8 +226,59 @@ recorded upstream, it has nothing to order. It therefore inherits every blind
 spot of observra's five-regex scanner, which is only ever applied to user input
 in the first place (see [FINDINGS.md](FINDINGS.md) F-01). That ceiling is low.
 
-**Fixable here:** scan `tool_result` inside Cohaera when `capture_tool_data` is
-on, rather than depending on upstream markers.
+**HALF CLOSED, 21 August 2026, and the split matters more than the closure.**
+
+This entry used to end "**Fixable here:** scan `tool_result` inside Cohaera".
+Finding F-16 had already refused precisely that, on the grounds that a detector
+generating its own taint evidence would be grading its own work. Two documents
+in this repository gave opposite instructions for two revisions and nothing
+noticed, because the contradiction was in the *reasoning* rather than in a
+count — and counts are the only thing here that anything recomputes.
+
+Both statements turn out to be right about different things, and the resolution
+is the tiering CH07's receipts already got. An upstream scanner answer is
+evidence about content, produced where the content arrived. A local pass is
+evidence about **the scanner** — whether its answer covered what was in front of
+it. So [`src/cohaera/content_scan.py`](src/cohaera/content_scan.py) scans, and
+what it produces is barred by construction from behaving like a marker:
+
+- it never makes `scanner_marked` true, so **no CH03 finding is ever built on
+  it** and Cohaera never decides on its own regexes that a session is tainted;
+- it never moves CH03 off `not_evaluated`, because a second opinion about
+  content nobody scanned is not a scanner;
+- it can **only lower a confidence or add a remedy**, never raise one. There is
+  no content an attacker can supply that buys a session a cleaner report.
+
+What that closes is the half an operator can act on. A session whose reads
+returned pages of override text used to report exactly what one returning a
+postcode reported. It now says `UNSCANNED_CONTENT_CARRIES_MARKERS`, or — where
+a scanner examined the call and called it clean — `SCANNER_ANSWER_CONTRADICTED_BY_CONTENT`,
+and names the calls. The second is E09 itself, made visible: text below the five
+regexes, with the disagreement recorded against the scanner rather than the
+session.
+
+**What is not closed is the ceiling**, and it cannot be closed here. Cohaera's
+patterns are patterns too. An attacker who stays below observra's five regexes
+and below Cohaera's five is in exactly the position E09 describes, with one more
+list to evade and no reason to think that is hard. The contradiction penalty is
+halved rather than total for the same reason: a disagreement between two regex
+lists may be Cohaera's error.
+
+**Two things this has NOT been measured against, stated because the temptation
+to imply otherwise is the whole reason this file exists.**
+
+The evaluation corpus cannot exercise it in either direction. Its 216
+injection-marked records carry no `tool_result` at all, and all 7,156 captured
+results in it are the literal string `ok`. So the corpus produced zero false
+positives from this module and zero true ones, and neither number means
+anything. **The corpus has no content channel, which also means CH03's content
+story is untested by it** — a gap worth more than this entry.
+
+And nothing here has been run against an independently authored corpus. The
+patterns were written by the same person as the detector, which is the standing
+argument of *The Attacker Moves Second* applied to the fix rather than the
+attack. Until that changes, the honest description of this module is "a second
+regex list, whose disagreements are worth a look".
 
 ---
 
@@ -1299,7 +1350,7 @@ regression tests.
 | CH05 | Orphan terminal events were constructed with `result="success"` and never flagged. | An irreversible action appearing from nowhere was invisible | **Fixed.** `orphan_end` state, reported by CH05. |
 
 The review's C-05 finding, no executable test suite, was accurate at revision
-`45d3bf8`. There are now 1074 tests: unit, hostile-input, content conformance and
+`45d3bf8`. There are now 1117 tests: unit, hostile-input, content conformance and
 34 evasion characterizations, plus a seeded fuzz smoke test in CI.
 
 ### What is still open from the third review
