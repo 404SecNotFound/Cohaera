@@ -149,6 +149,11 @@ GATES: tuple[Gate, ...] = (
                 "git diff --exit-code -- eval/EVALUATION-CARD.md "
                 "eval/evaluation-card.json eval/corpus/sample.jsonl "
                 "eval/corpus/sample.labels.jsonl")),
+    Gate("demo", "tests", "The demo still demonstrates what it claims",
+         "A demo is shown to people and re-run by nobody. If the phantom "
+         "guardrail stops being caught, the story is wrong in front of an "
+         "audience rather than in CI.",
+         [sys.executable, "-m", "pytest", "tests/test_demo.py", "-q"]),
     Gate("lab", "sigma validation and conformance",
          "The local lab still produces what is committed",
          "THE SECOND GATE PYTEST CANNOT SEE. The manifest records coverage "

@@ -24,7 +24,7 @@ python -m pip install -e ".[dev,content]" build
 python tools/verify.py
 ```
 
-That replays **every gate CI runs** — 15 of them — and prints which passed,
+That replays **every gate CI runs** — 16 of them — and prints which passed,
 which failed, and which could not run. It takes about four minutes cold.
 `--fast` skips the slow ones; `--only lab readme-facts` runs a subset; `--list`
 prints each gate and why it exists.
@@ -32,7 +32,7 @@ prints each gate and why it exists.
 **`pytest` alone is not the build, and believing otherwise has cost this project
 two red pipelines.** Both were generated artefacts going stale — the evaluation
 card quotes the evasion count, the lab manifest records coverage states — and no
-unit test can see either. 12 of the 15 gates are things `pytest` does not
+unit test can see either. 12 of the 16 gates are things `pytest` does not
 run.
 
 **A gate that cannot run reports `not_evaluated`, and the run does not come out
