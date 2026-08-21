@@ -432,8 +432,12 @@ sequence rather than proceeding on hope.
 - [ ] Resolve the #5 / #87 contradiction by reading the current
       `plugin/docs/logging.md`
 - [ ] Correct `docs/EXABEAM-STACK.md` for Observra 1.1.1
-- [ ] Remove the first-mover tamper-evidence claim wherever it appears, and drop
-      the EU AI Act evidentiary-bar argument (§3.3)
+- [x] Remove the first-mover tamper-evidence claim wherever it appears — **done.**
+      It turned out the repository never made it: `POSITIONING.md` had already
+      retracted "nobody does this" and `docs/PRIOR-ART.md` already documented
+      DeTT&CT and CardinalOps. The claim came from the external gap analysis and
+      from this document repeating it. The narrowed claim now stands in both
+- [ ] Drop the EU AI Act evidentiary-bar argument (§3.3, §3.4)
 
 **Exit criterion:** the position is written down and the corrections are made.
 **Blocks:** everything.

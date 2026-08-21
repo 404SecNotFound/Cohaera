@@ -327,6 +327,23 @@ The idea that evidence quality is a *multiplier on confidence* rather than a
 separate report is DeTT&CT's, and this project reached it independently and
 later, which is not the same as reaching it first.
 
+### MITRE CTID, Summiting the Pyramid
+
+**Unread; reported by commissioned research, 22 August 2026.** The Center for
+Threat-Informed Defense's v4 work is reported to carry *telemetry confidence
+scores* for how well a log source supports detecting a given technique, minimum
+telemetry requirements for ambiguous techniques, and machine-readable `stp.*`
+robustness tags carried on Sigma rules.
+
+If that is accurate it is the closest thing in this file to a machine-readable
+statement about evidence adequacy travelling with a detection. The difference is
+when it is decided: `stp.*` is an **authoring-time** judgement about a rule's
+source-to-technique fit and its robustness against evasion, and it assumes the
+telemetry arrived. Cohaera's contract is a **runtime** statement about one
+session. Those are different claims and the second does not supersede the first.
+
+Read it before repeating this characterisation.
+
 ### CardinalOps, State of SIEM
 
 **Unread.** The annual report is cited here for one claim only — that a
@@ -565,6 +582,50 @@ file is not written by the party whose behaviour is in question. If SEP-3140 or
 a successor lands, the right move for this project is to consume it, not to
 compete with it.
 
+### Signed and hash-chained agent telemetry — **Unread, six projects**
+
+Two commissioned research briefs went looking for open-source projects shipping
+tamper-evident agent telemetry. Both found some. **Neither found the other's**,
+and that non-overlap is the most useful thing either returned: the space is
+fragmented, nothing in it is canonical, and no single search enumerates it.
+
+Reported, none read here:
+
+| Project | Reported to ship |
+|---|---|
+| `obsvr-dev/obsvr-sdk` | HMAC-SHA256 chain over session, sequence number, previous signature and content; a verify CLI; optional server countersignature; a daily Ed25519-signed Merkle root anchored off-host; **signed gap markers** on queue overflow |
+| `RightNow-AI/openfang` | Merkle hash-chain audit trail, SHA-256 previous-hash linkage per action, Ed25519-signed agent manifests |
+| `@merchantguard/agentguard-cb` | Ed25519-signed, SHA-256 hash-chained audit log, with an offline-verifiable evidence pack |
+| `phionyx-core` | Signed, hash-chained, offline-checkable evidence receipt per governed turn |
+| `maco144/merkle-audit` | SHA-256 chain plus MMR root per tool call |
+| `Ascendral/codebot-ai` | SHA-256 hash-chained audit log per tool call |
+
+**`obsvr-sdk` is not Exabeam's Observra.** The names are close enough to merge by
+accident and the two are unrelated; a citation that conflates them is wrong.
+
+**One of these is better than Cohaera at something specific.** `obsvr-sdk`'s
+*signed gap markers* emit a signed record when the queue overflows, instead of
+leaving a consumer to infer loss from a hole in the sequence. Cohaera infers.
+Observra has no equivalent either — grepped against `c4d036b`. This belongs on
+the roadmap rather than in a comparison table.
+
+**What survives as a claim, and it is narrower than the one it replaces.** An
+external gap analysis asserted that nobody ships tamper-evident agent telemetry
+and that the first mover would set the standard regulators cite. That is false
+twice over: the six rows above, and the regulatory half is addressed in
+[BLUEPRINT-2026-08](BLUEPRINT-2026-08.md) §3.4. What is left is checkable:
+
+> No **mainstream observability platform** ships event integrity — OTel GenAI
+> conventions, Langfuse, Arize Phoenix, OpenLLMetry, Helicone, AgentOps and
+> LangSmith are all reported to lack chaining, signing and attestation. And **no
+> single project combines signed hash-chained events, per-agent attestation
+> keys, and evidence export.**
+
+Cohaera does not combine all three either. It has the first, it has key roles
+and rotation in a trust store rather than per-agent attestation, and it has no
+evidence-pack export at all. The narrowed claim is a description of an open
+position, not of an occupied one.
+
 ### Auditable Agents and From Agent Traces to Trust — **Unread**
 
 Two 2026 papers were reported as directly on point and could not be fetched:
@@ -650,6 +711,12 @@ new the moment OCSF adds a per-analytic coverage construct to sit next to
 `verdict_id: Insufficient Data`, or OpenTelemetry's GenAI conventions add an
 equivalent to their agent spans, and the correct response at that point is to
 map onto whichever of them lands rather than to defend this vocabulary.
+
+A 2025 Theseus.fi master's thesis, *Detection Surface Index* — **unread,
+reported** — is said to conclude that no unified model chains coverage,
+degradation and weighting into a single score. If so it is independent evidence
+that the gap is recognised and unfilled, which is a weaker and more useful thing
+than novelty: somebody else named the problem first.
 
 Everything else in this repository that looks like an idea is in this file,
 under somebody else's name.
