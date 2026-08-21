@@ -5,7 +5,7 @@
 
 # Documentation map
 
-26 documents, about 102,000 words. This page exists so you never have to
+27 documents, about 106,000 words. This page exists so you never have to
 guess which one answers your question.
 
 Each row says what question the document answers, not what it contains.
@@ -15,6 +15,7 @@ Each row says what question the document answers, not what it contains.
 | Document | The question it answers |
 |---|---|
 | [README](../README.md) | What is this, what does it measure, and how do I run it? |
+| [BLUEPRINT-2026-08](BLUEPRINT-2026-08.md) | Two external strategy documents arrived and recommend opposite things. What in them is true, what is already done, which position wins, and what gets built in what order? |
 | [OUTSTANDING](OUTSTANDING.md) | Everything is merged and green — so what is actually left, who owns it, and what should be done first? |
 | [POSITIONING](../POSITIONING.md) | What layer is this, what is it *not*, and what language does the project refuse to use about its own results? |
 | [evaluation card](../eval/EVALUATION-CARD.md) | How well does it actually work, and on what? Generated, never hand-written. |
