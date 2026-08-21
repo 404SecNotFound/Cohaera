@@ -65,7 +65,13 @@ from cohaera.cli import (
     _write_reject_log_atomic,
     main,
 )
-from cohaera.evidence import RECEIPT_SCHEMA, TrustStore, TrustStoreError, arg_digest
+from cohaera.evidence import (
+    RECEIPT_SCHEMA,
+    SessionIntegrity,
+    TrustStore,
+    TrustStoreError,
+    arg_digest,
+)
 from cohaera.identity import (
     KIND_ISOLATED_ANON,
     KIND_SCOPED_ANON,
@@ -2660,14 +2666,66 @@ def _integrity(stream, seq):
     chain, and the fixture did not have one, so the tests were asserting the
     doctrine over evidence that could not support it.
 
-    The chain values here are synthetic and unverified, which is the honest
-    level for these tests: they are about ORDERING, and ordering requires the
-    sidecar to be chained, not to be signed. A stream that is chained and
-    unsigned is a real and documented state -- see `evidence_status`'s
-    `chained_unsigned`.
+    The chain values here are synthetic and unverified. That used to be
+    described as "the honest level for these tests: they are about ORDERING,
+    and ordering requires the sidecar to be chained, not to be signed".
+
+    That sentence was the defect, written down. Chained-and-unsigned is indeed
+    a real deployment state -- but treating a sequence from one as AUTHORITATIVE
+    hands the producer the ordering, because writing `prev` and `chain` costs an
+    attacker exactly what writing `seq` costs. Measured: two arbitrary hex
+    strings suppressed a critical CH04 finding. See
+    `test_an_unverified_sequence_no_longer_outranks_the_clock`.
+
+    So this fixture is now the UNTRUSTED case, and `_attested` supplies the
+    trusted one. Tests that are about a sequence winning must say whose
+    signature made it worth winning with.
     """
     return {"scheme": "cohaera.integrity:1", "stream_id": stream, "seq": seq,
             "prev": f"{seq:064x}", "chain": f"{seq + 1:064x}"}
+
+
+def _attested(session, *ranges, upto=None):
+    """Attach the audit a stream with a VERIFIED signature would produce.
+
+    Not a forgery of producer evidence: `SessionIntegrity` is Cohaera's own
+    conclusion after checking chains and signatures against the trust store, so
+    constructing one directly is how a unit test says "assume verification
+    already succeeded" without carrying a keypair into every ordering test.
+
+    `upto` bounds how far the signature reached, which is the interesting knob:
+    a stream signed to seq 100 says nothing about seq 101, and a test that
+    wants to prove ordering stops at the attestation boundary sets it.
+    """
+    spans = [{"stream_id": s, "first_seq": lo, "last_seq": hi,
+              "verified_to": hi if upto is None else upto}
+             for s, lo, hi in ranges]
+    session.integrity = SessionIntegrity(
+        with_integrity=len(session.events),
+        signatures_verified=1,
+        streams={s for s, _, _ in ranges},
+        signature_ranges=spans)
+    return session
+
+
+def _unsigned(session, *ranges):
+    """The audit a CHAINED BUT UNSIGNED stream produces.
+
+    Distinct from passing no audit at all, and the distinction is the whole
+    point: a session with `integrity=None` means verification never ran, and a
+    test built that way passes the moment ordering consults the audit for any
+    reason. It cannot tell "the signature did not cover this" from "nobody
+    looked". This says the verifier looked, found the stream, and found no
+    signature over it -- `verified_to: None`.
+    """
+    session.integrity = SessionIntegrity(
+        with_integrity=len(session.events),
+        signatures_verified=0,
+        streams={s for s, _, _ in ranges},
+        signature_ranges=[{"stream_id": s, "first_seq": lo,
+                           "last_seq": hi, "verified_to": None}
+                          for s, lo, hi in ranges])
+    return session
 
 
 def _unchained_integrity(stream, seq):
@@ -2745,8 +2803,9 @@ def test_r11_a_signed_sequence_settles_a_tie_the_clock_cannot():
     """The point of the whole change. Same timestamp on both records, and the
     collector sequence says which came first -- so the finding survives a
     producer that flattens its clock."""
-    s = sess(_policy_at(5.0, _integrity("stream-1", 10)),
-             *_call_at(5.0, _integrity("stream-1", 11)))
+    s = _attested(sess(_policy_at(5.0, _integrity("stream-1", 10)),
+                       *_call_at(5.0, _integrity("stream-1", 11))),
+                  ("stream-1", 0, 1000))
 
     assert [f.check for f in ch04_guardrail_overrun(s)] == [
         "CH04_guardrail_bypass_completed"]
@@ -2757,8 +2816,9 @@ def test_r11_the_sequence_outranks_the_clock_rather_than_supplementing_it():
     """A LOWER sequence with a LATER timestamp is not afterwards. If the clock
     could still win here, moving the timestamp would still move the verdict and
     the sequence would be decoration."""
-    s = sess(_policy_at(5.0, _integrity("stream-1", 99)),
-             *_call_at(500.0, _integrity("stream-1", 98)))
+    s = _attested(sess(_policy_at(5.0, _integrity("stream-1", 99)),
+                       *_call_at(500.0, _integrity("stream-1", 98))),
+                  ("stream-1", 0, 1000))
 
     assert ch04_guardrail_overrun(s) == []
     assert R_ORDER_INDETERMINATE not in _ch04_contract(s)["reasons"], (
@@ -3069,14 +3129,100 @@ def test_the_sequence_still_outranks_the_clock():
     """R11's own property, which this must not undo: a later timestamp with a
     lower sequence is not afterwards, or the clock is still the thing an
     attacker moves."""
-    session = sess(
+    session = _attested(sess(
         _seq_ev("tool_end", 10, 9, tool_name="fetch", 
                 data={"has_injection_patterns": True}),
         _seq_ev("tool_start", 20, 3, tool_name="send_email", span_id="X",
                 data={"reversible": False}),
         _seq_ev("tool_end", 21, 4, tool_name="send_email", span_id="X",
-                data={"reversible": False}))
+                data={"reversible": False})),
+                        (_SEQ_STREAM, 0, 1000))
     assert ch03_untrusted_to_consequential(session) == []
+
+
+def test_an_unverified_sequence_no_longer_outranks_the_clock():
+    """The P0 this pairs with, stated as the attack it is.
+
+    A producer that wants a guardrail overrun to vanish does not need a key, a
+    collector, or any access at all. It needs two hex strings. `prev` and
+    `chain` cost exactly what `seq` costs to write, and while `chained` meant
+    "present" rather than "verified", writing them promoted the producer's own
+    sequence above the wall clock -- so a call the clock puts plainly AFTER a
+    control was reported as before it, and CH04 said nothing.
+
+    Four rows, one variable. The clock says AFTER in every one of them, so any
+    row that produces no finding was decided by the sequence alone.
+    """
+    def build(control_seq, call_seq, *, chain):
+        def integ(seq):
+            if seq is None:
+                return None
+            base = {"scheme": "cohaera.integrity:1", "stream_id": "st9",
+                    "seq": seq}
+            return base | ({"prev": "ab" * 32, "chain": "cd" * 32}
+                           if chain else {})
+        built = sess(_policy_at(100.0, integ(control_seq)),
+                     *_call_at(200.0, integ(call_seq)))
+        # Scored against a verifier that RAN and found no signature, not
+        # against no verifier at all -- otherwise every row below passes
+        # through the "no audit" branch and this test proves nothing about
+        # what verification decided. Mutating `sequence_verified` to return
+        # True caught exactly that hole in an earlier draft of this test.
+        return _unsigned(built, ("st9", 0, 100))
+
+    # No sidecar at all: the clock is the only instrument, and it fires.
+    assert ch04_guardrail_overrun(build(None, None, chain=False))
+
+    # A sequence agreeing with the clock changes nothing.
+    assert ch04_guardrail_overrun(build(1, 5, chain=True))
+
+    # THE DEFECT. A sequence contradicting the clock, chained with arbitrary
+    # hex and signed by nobody, used to return [] here.
+    assert ch04_guardrail_overrun(build(9, 5, chain=True)), (
+        "an unsigned, unverified sequence suppressed a critical finding; two "
+        "arbitrary hex strings must not outrank the clock")
+
+    # Same contradiction with `prev`/`chain` absent, which already fired
+    # before this fix. It is here so the row above cannot be made to pass by
+    # breaking sequence ordering altogether.
+    assert ch04_guardrail_overrun(build(9, 5, chain=False))
+
+
+def test_a_verified_sequence_still_outranks_the_clock():
+    """And the property that must survive: attested, the sequence still wins.
+
+    Without this, the fix above could be 'ignore sequences', which would delete
+    the R-11 remedy and the E23b remedy with it.
+    """
+    def integ(seq):
+        return {"scheme": "cohaera.integrity:1", "stream_id": "st9", "seq": seq,
+                "prev": "ab" * 32, "chain": "cd" * 32}
+
+    settled = _attested(
+        sess(_policy_at(100.0, integ(9)), *_call_at(200.0, integ(5))),
+        ("st9", 0, 100))
+    assert ch04_guardrail_overrun(settled) == [], (
+        "a verified sequence says the call ran before the control, and that "
+        "is a real answer the clock cannot overturn")
+
+
+def test_a_sequence_past_the_attestation_boundary_is_not_verified():
+    """`verified_to` is a boundary, not a flag.
+
+    A stream signed to seq 100 says nothing about seq 101. R-05 already made
+    this argument for `signature_covers_final`; ordering has to honour the same
+    boundary or a signature over the first record vouches for the whole stream.
+    """
+    def integ(seq):
+        return {"scheme": "cohaera.integrity:1", "stream_id": "st9", "seq": seq,
+                "prev": "ab" * 32, "chain": "cd" * 32}
+
+    beyond = _attested(
+        sess(_policy_at(100.0, integ(9)), *_call_at(200.0, integ(5))),
+        ("st9", 0, 100), upto=4)
+    assert ch04_guardrail_overrun(beyond), (
+        "the control sits at seq 9, past a signature that reached only seq 4, "
+        "so the sequence must not settle the order")
 
 
 def test_a_tie_against_every_reference_is_still_indeterminate():
@@ -3144,25 +3290,27 @@ def _unclocked(etype, seq, **kw):
 
 
 def test_a_marker_with_an_unreadable_clock_is_still_ordered_by_its_sequence():
-    session = sess(
+    session = _attested(sess(
         _unclocked("tool_end", 1, tool_name="fetch",
                    data={"has_injection_patterns": True}),
         _seq_ev("tool_start", 60, 5, tool_name="send_email", span_id="X",
                 data={"reversible": False}),
         _seq_ev("tool_end", 61, 6, tool_name="send_email", span_id="X",
-                data={"reversible": False}))
+                data={"reversible": False})),
+                        (_SEQ_STREAM, 0, 1000))
     assert ch03_untrusted_to_consequential(session), (
         "one malformed timestamp on the only marked read emptied CH03")
 
 
 def test_a_control_with_an_unreadable_clock_is_still_a_control_that_fired():
-    session = sess(
+    session = _attested(sess(
         _unclocked("cost_threshold_exceeded", 1,
                    data={"session_cost_usd": 0.9, "threshold_usd": 0.5}),
         _seq_ev("tool_start", 60, 5, tool_name="send_email", span_id="X",
                 data={"reversible": False}),
         _seq_ev("tool_end", 61, 6, tool_name="send_email", span_id="X",
-                data={"reversible": False}))
+                data={"reversible": False})),
+                        (_SEQ_STREAM, 0, 1000))
     findings = ch04_guardrail_overrun(session)
     assert findings, "every firing had a bad clock, so CH04 returned nothing"
     assert findings[0].evidence["policy_event_first_ts"] is None, (
