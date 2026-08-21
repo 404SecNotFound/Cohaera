@@ -2335,6 +2335,38 @@ class SessionIntegrity:
                    and r["verified_to"] >= r["last_seq"]
                    for r in self.signature_ranges)
 
+    def sequence_verified(self, stream_id: str | None, seq: int | None) -> bool:
+        """Is this exact collector position covered by a signature that VERIFIED?
+
+        F-03 fixed ``attested`` for precisely this confusion and left the
+        ordering path still carrying it. ``Integrity.chained`` asks whether
+        ``prev`` and ``chain`` are PRESENT, which is a question about shape --
+        and a producer writes both fields as easily as it writes ``seq``.
+        Ordering treated that shape as authoritative and let it OUTRANK the
+        wall clock, so two arbitrary hex strings with no signature anywhere
+        suppressed a critical CH04 finding. Measured, not theorised: the
+        reproduction is in tests/test_hostile.py.
+
+        This asks the other question -- did a signature this deployment trusts
+        actually reach this record. A position past ``verified_to``, in a
+        stream nothing signed, or in a session whose ledger is inadmissible, is
+        not covered.
+
+        An uncovered position is then treated as ABSENT rather than as weak
+        evidence, which is the rule the rest of this module already follows.
+        That matters for what the fix does NOT do: it does not make ordering
+        indeterminate on unsigned streams, which would delete CH03 and CH04
+        from every deployment that has not adopted signing. It removes the
+        producer's ability to OVERRIDE the clock with an unverifiable number,
+        leaving exactly the instrument an unsigned deployment always had.
+        """
+        if stream_id is None or seq is None or self.inadmissible:
+            return False
+        return any(r["stream_id"] == stream_id
+                   and r["verified_to"] is not None
+                   and seq <= r["verified_to"]
+                   for r in self.signature_ranges)
+
     @property
     def signature_coverage(self) -> float:
         """Share of this session's attested records a signature actually reaches.

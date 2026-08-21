@@ -1163,8 +1163,7 @@ class Session:
             return index
         return self._cached("approvals_by_span", build)
 
-    @staticmethod
-    def _observed_before(record: Event, call: ToolCall) -> bool | None:
+    def _observed_before(self, record: Event, call: ToolCall) -> bool | None:
         """Did this approval record arrive before the call started? F-02.
 
         Sequence first, for the reason every other ordering decision here uses
@@ -1172,12 +1171,26 @@ class Session:
         and the signature over its head, and a wall clock is a number the
         producer chooses. Clock only as a fallback, and ``None`` when neither
         can answer -- which is not permission. See ``covering_approval``.
+
+        The premise in that first paragraph is a CONDITIONAL and was being read
+        as a fact. A position is covered by the chain and the signature only
+        where a signature actually verified over it; ``chained`` asks whether
+        ``prev`` and ``chain`` are present, which a producer arranges for free.
+        So a late approval carrying an invented sequence preceded the call it
+        was meant to authorise. Now the position has to be attested, and where
+        it is not, the sequence is treated as absent and the clock answers --
+        weak, producer-chosen, and no longer OVERRIDDEN by something weaker
+        still wearing the shape of a chain.
         """
         integrity = record.integrity
+        audit = self.integrity
         if (integrity is not None and integrity.chained
                 and integrity.seq is not None
                 and call.start_seq is not None
-                and integrity.stream_id == call.start_stream):
+                and integrity.stream_id == call.start_stream
+                and audit is not None
+                and audit.sequence_verified(integrity.stream_id, integrity.seq)
+                and audit.sequence_verified(call.start_stream, call.start_seq)):
             return integrity.seq < call.start_seq
         started = call.started_at
         if started is None or not record.timestamp_valid:

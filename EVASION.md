@@ -127,7 +127,7 @@ same distinction without splitting the counts four ways.
 | E21 | `closed` | T1 | CH06 | Strip the integrity sidecar from the record you edited | **signed stream** | — | **CLOSED** *on a signed stream only*; with none, nothing to strip and nothing closed |
 | E22 | `half_closed` | T2 | CH06 | Delete the seen-stream ledger, then replay the stream | `--seen-streams` in use | Write access to one local file | Half closed, the ledger is unsigned by necessity |
 | E22b | `working` | T2 | CH06 | Replay the stream to a *different* Cohaera host | `--seen-streams` in use | A second collector | Open, the ledger is per-host |
-| E23 | `half_closed` | T0 | CH03, CH04 | Stamp the consequential call on the control's own tick | no collector sequence | Free, one field | Half closed, coverage sees it |
+| E23 | `half_closed` | T0 | CH03, CH04 | Stamp the consequential call on the control's own tick | no *verified* collector sequence | Free, one field | Half closed, coverage sees it |
 | E24 | `working` | T0 | CH04, CH07 | Fabricate the policy event that explains away a call that failed | none | Free, one event | Needs the control named in the manifest, signed by a second key |
 | E25 | `working` | T0 | CH04 | Change the tool definition between approval and invocation | approvals in use | Free, an MCP rug pull | Yes, a tool-definition digest in `cohaera.approval:1` |
 | E26 | `working` | T0 | CH04 | Replay one approval across calls and across sessions | approvals in use | Free, one field | Yes, a nonce, a mandatory window and an issuer signature |
@@ -364,14 +364,29 @@ the check's coverage confidence, and named by `EVENT_ORDER_INDETERMINATE` in
 the contract. A session where every consequential call shares the control's
 tick now reports CH04 confidence 0.0 instead of looking clean.
 
-**Closed outright where the collector signs.** Inside one `stream_id` the
-`cohaera.integrity:1` sequence is covered by the hash chain and by the
-signature over its head, so it cannot be reordered without breaking a
-verification Cohaera already performs. Where both records carry one, the
-sequence decides and the clock is not consulted at all — a call with a *later*
-timestamp and a *lower* sequence is not afterwards. Emitting the integrity
-sidecar therefore closes this completely, which makes it the second concrete
-thing that sidecar buys after CH07.
+**Closed outright where the collector signs — and the emphasis on *signs* is
+a correction.** Inside one `stream_id` the `cohaera.integrity:1` sequence is
+covered by the hash chain and by the signature over its head, so it cannot be
+reordered without breaking a verification Cohaera already performs. Where both
+records sit under a signature that verified, the sequence decides and the clock
+is not consulted at all — a call with a *later* timestamp and a *lower*
+sequence is not afterwards.
+
+This paragraph used to end "emitting the integrity sidecar therefore closes
+this completely", and that sentence was wrong in a way that mattered. Emitting
+the sidecar is free to an attacker: `prev` and `chain` cost exactly what `seq`
+costs to write, and the code accepted their PRESENCE as the thing that made a
+sequence authoritative. So the remedy for E23 was itself an evasion — a
+producer that stamped the tie *and* attached two arbitrary hex strings got its
+own ordering believed and suppressed the finding outright, which is worse than
+the tie it was meant to remedy. Measured, not theorised; see
+`test_an_unverified_sequence_no_longer_outranks_the_clock`.
+
+Ordering now requires the position to be covered by a signature that verified,
+and a sequence past `verified_to` does not count. **The remedy is therefore
+conditional on signing, not on emitting**, and a chained-unsigned deployment
+gets the half-closed state above rather than the closed one — which is what the
+heading always said and the body did not.
 
 Sequences are compared only within a stream. Two collectors number
 independently, so seq 11 on one is not after seq 10 on another, and a
@@ -1284,7 +1299,7 @@ regression tests.
 | CH05 | Orphan terminal events were constructed with `result="success"` and never flagged. | An irreversible action appearing from nowhere was invisible | **Fixed.** `orphan_end` state, reported by CH05. |
 
 The review's C-05 finding, no executable test suite, was accurate at revision
-`45d3bf8`. There are now 1071 tests: unit, hostile-input, content conformance and
+`45d3bf8`. There are now 1074 tests: unit, hostile-input, content conformance and
 34 evasion characterizations, plus a seeded fuzz smoke test in CI.
 
 ### What is still open from the third review

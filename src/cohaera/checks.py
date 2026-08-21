@@ -540,7 +540,8 @@ ORDER_NOT_AFTER = "not_after"
 ORDER_INDETERMINATE = "indeterminate"
 
 
-def _ordering(call: ToolCall, event: Event) -> str:
+def _ordering(call: ToolCall, event: Event,
+              audit: SessionIntegrity | None = None) -> str:
     """Did ``call`` start after ``event``, and can that be established at all?
 
     COH-R11. CH03 and CH04 each answered this with a single comparison against
@@ -570,16 +571,25 @@ def _ordering(call: ToolCall, event: Event) -> str:
     when it is strictly unequal, and INDETERMINATE otherwise -- reported, never
     silently resolved.
     """
-    # F-03. `chained` throughout: a stream id and a sequence with no `prev`
-    # and no `chain` are two numbers the producer wrote, and this function is
-    # exactly where letting them win hands the producer the ordering CH03 and
-    # CH04 rest on. call.start_seq is already gated the same way in the model.
+    # F-03 gated this on `chained`, which asks whether `prev` and `chain` are
+    # PRESENT. Presence is shape, and a producer writes shape. Two arbitrary
+    # hex strings therefore outranked the clock and suppressed a critical
+    # finding -- reproduced in tests/test_hostile.py. The sequence now has to
+    # be covered by a signature that VERIFIED, on BOTH sides: an ordering is a
+    # comparison between two positions and is only as attested as its weaker
+    # end. Unverified, the sequence is treated as absent and the clock decides,
+    # which is exactly what a stream carrying no sidecar at all already did.
     _sidecar = event.integrity
-    _chained = _sidecar is not None and _sidecar.chained
+    _trusted = (
+        audit is not None
+        and _sidecar is not None and _sidecar.chained
+        and audit.sequence_verified(_sidecar.stream_id, _sidecar.seq)
+        and audit.sequence_verified(call.start_stream, call.start_seq))
     seq_a = call.start_seq
-    seq_b = _sidecar.seq if _sidecar is not None and _chained else None
+    seq_b = _sidecar.seq if _trusted and _sidecar is not None else None
     stream_a = call.start_stream
-    stream_b = _sidecar.stream_id if _sidecar is not None and _chained else None
+    stream_b = (_sidecar.stream_id
+                if _trusted and _sidecar is not None else None)
     if (seq_a is not None and seq_b is not None
             and stream_a is not None and stream_a == stream_b):
         if seq_a == seq_b:
@@ -621,9 +631,12 @@ class _References:
     excludes at most one stream from that comparison: its own.
     """
 
-    __slots__ = ("_best", "_next", "count", "earliest_ts", "min_seq", "unclocked")
+    __slots__ = ("_audit", "_best", "_next", "count", "earliest_ts",
+                 "min_seq", "unclocked")
 
-    def __init__(self, events: Iterable[Event]) -> None:
+    def __init__(self, events: Iterable[Event],
+                 audit: SessionIntegrity | None = None) -> None:
+        self._audit = audit
         self.min_seq: dict[str, int] = {}
         self._best: tuple[float, str | None] | None = None
         self._next: tuple[float, str | None] | None = None
@@ -633,9 +646,15 @@ class _References:
         for event in events:
             self.count += 1
             integrity = event.integrity
-            chained = integrity is not None and integrity.chained
-            stream = integrity.stream_id if integrity is not None and chained else None
-            seq = integrity.seq if integrity is not None and chained else None
+            # Verified, not merely shaped. See `_ordering` and
+            # SessionIntegrity.sequence_verified for why presence is not enough.
+            trusted = (integrity is not None and integrity.chained
+                       and audit is not None
+                       and audit.sequence_verified(integrity.stream_id,
+                                                   integrity.seq))
+            stream = (integrity.stream_id
+                      if trusted and integrity is not None else None)
+            seq = integrity.seq if trusted and integrity is not None else None
             if stream is not None and seq is not None:
                 low = self.min_seq.get(stream)
                 if low is None or seq < low:
@@ -677,6 +696,12 @@ class _References:
         """
         tie = False
         stream, seq = call.start_stream, call.start_seq
+        if not (self._audit is not None
+                and self._audit.sequence_verified(stream, seq)):
+            # The call's own position is unattested, so it neither indexes into
+            # min_seq nor earns the clock exclusion below. Dropping it here
+            # rather than at each use keeps the two decisions from drifting.
+            stream = seq = None
         if stream is not None and seq is not None:
             low = self.min_seq.get(stream)
             if low is not None:
@@ -962,7 +987,8 @@ def ch03_untrusted_to_consequential(session: Session,
     # clock-earliest one. Picking a single reference by wall clock while
     # deciding the order by sequence is what made this check lose findings it
     # had produced before R11; see _References.
-    markers_ref = _References(marker_events)
+    audit = session.integrity   # verified-sequence oracle; see _ordering
+    markers_ref = _References(marker_events, audit)
     first_marker = markers_ref.earliest_ts
     verdicts = [(c, markers_ref.verdict(c))
                 for c in session.consequential_calls]
@@ -1065,7 +1091,8 @@ def unordered_after_marker(session: Session) -> list[ToolCall]:
     marker_events = [e for e in session.events if scanner_marked(e.data)]
     if not marker_events:
         return []
-    markers_ref = _References(marker_events)
+    audit = session.integrity   # verified-sequence oracle; see _ordering
+    markers_ref = _References(marker_events, audit)
     return [c for c in session.consequential_calls
             if markers_ref.verdict(c) == ORDER_INDETERMINATE]
 
@@ -1257,6 +1284,7 @@ def ch04_guardrail_overrun(session: Session,
     by_type: dict[str, list[Event]] = {}
     earliest: dict[str, Any] = {}
     counts: Counter[str] = Counter()
+    audit = session.integrity   # verified-sequence oracle; see _ordering
     unusable_clock = 0
     for e in session.events:
         if e.event_type not in POLICY_EVENTS:
@@ -1299,7 +1327,7 @@ def ch04_guardrail_overrun(session: Session,
         # the cheapest evasion in the file, one field of the producer's own
         # choosing. It is now the shared three-valued ordering, and a tie with
         # no collector sequence to break it is reported rather than resolved.
-        policy_ref = _References(by_type[etype])
+        policy_ref = _References(by_type[etype], audit)
         ordering = [(c, policy_ref.verdict(c)) for c in consequential]
         cand = [c for c, o in ordering if o == ORDER_AFTER]
         unordered = [c for c, o in ordering if o == ORDER_INDETERMINATE]
@@ -1484,13 +1512,15 @@ def unordered_after_policy(session: Session) -> list[ToolCall]:
     that used to fire falls silent with no trace. That silence is now a
     reported blind spot rather than a clean session.
     """
+    audit = session.integrity   # verified-sequence oracle; see _ordering
     out: list[ToolCall] = []
     seen: set[int] = set()
     for e in session.events:
         if e.event_type not in POLICY_EVENTS or not e.timestamp_valid:
             continue
         for c in session.consequential_calls:
-            if id(c) not in seen and _ordering(c, e) == ORDER_INDETERMINATE:
+            if (id(c) not in seen
+                    and _ordering(c, e, audit) == ORDER_INDETERMINATE):
                 seen.add(id(c))
                 out.append(c)
     return out
