@@ -327,6 +327,27 @@ The idea that evidence quality is a *multiplier on confidence* rather than a
 separate report is DeTT&CT's, and this project reached it independently and
 later, which is not the same as reaching it first.
 
+### Exabeam Outcomes Navigator
+
+**Unread; reported by commissioned research, 22 August 2026.** Reported to
+provide source-to-detection coverage validation, log-quality and parsing
+analysis, rule-activity insight, and "prescriptive scoring."
+
+**This is the closest system any of the three research passes found, and it
+belongs to Exabeam.** That is worth stating plainly rather than burying: the
+nearest neighbour to this project is a commercial product owned by the
+organisation this project is positioned alongside.
+
+What could not be located publicly: a score schema, an API object, a failure
+taxonomy, or any per-check "could not evaluate" payload. So the reported
+difference is the same one that separates every entry in §1 — coverage and
+detection quality assessed as posture, rather than a machine-readable evidentiary
+grade attached to an individual verdict. **That difference is unverified**, rests
+on a marketing page, and should be checked before anyone repeats it.
+
+If Outcomes Navigator does emit a per-detection evidence grade, §8's third claim
+is wrong and this file should say so.
+
 ### MITRE CTID, Summiting the Pyramid
 
 **Unread; reported by commissioned research, 22 August 2026.** The Center for
@@ -584,10 +605,11 @@ compete with it.
 
 ### Signed and hash-chained agent telemetry — **Unread, six projects**
 
-Two commissioned research briefs went looking for open-source projects shipping
-tamper-evident agent telemetry. Both found some. **Neither found the other's**,
-and that non-overlap is the most useful thing either returned: the space is
-fragmented, nothing in it is canonical, and no single search enumerates it.
+**Three** commissioned research briefs went looking for open-source projects
+shipping tamper-evident agent telemetry. All three found some. **The three lists
+are pairwise disjoint** — no project appears in more than one — and that is the
+most useful thing any of them returned: the space is fragmented, nothing in it is
+canonical, and no single search enumerates it. Assume this table is incomplete.
 
 Reported, none read here:
 
@@ -599,6 +621,9 @@ Reported, none read here:
 | `phionyx-core` | Signed, hash-chained, offline-checkable evidence receipt per governed turn |
 | `maco144/merkle-audit` | SHA-256 chain plus MMR root per tool call |
 | `Ascendral/codebot-ai` | SHA-256 hash-chained audit log per tool call |
+| Tamra Agent Ledger | Gap-free SHA-256 chain over LLM, tool, retrieval, approval and session events; **Ed25519-signed checkpoints** rather than per-event signatures; a `.tamrapatra` evidence bundle verifiable offline; on Maven Central. Key is ledger- or operator-scoped, not per-agent |
+| Microsoft Agent Governance Toolkit | **A distinct Ed25519 key pair per agent** via `AgentIdentity.create()`, previous-hash chaining and Merkle roots. Microsoft's own SOC 2 self-assessment reports **three of its four audit-chain implementations have integrity defects** and recommends only `MerkleAuditChain`; the signing example is labelled learning/prototyping |
+| Gate OC Audit | SHA-256 hash-chained sessions, prompts and tool invocations in SQLite, with verification, NDJSON/CSV export and optional external anchoring. No per-event signatures or per-agent keys documented |
 
 **`obsvr-sdk` is not Exabeam's Observra.** The names are close enough to merge by
 accident and the two are unrelated; a citation that conflates them is wrong.

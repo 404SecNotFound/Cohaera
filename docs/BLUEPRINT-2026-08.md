@@ -416,6 +416,177 @@ cannot be excluded.
 
 ---
 
+## 3.5 Third brief — and the workstream it deflates
+
+A third brief, the most careful of the three. It corrects the first two on four
+points, and its most important claim was checkable against a repository already
+cloned here.
+
+### Verified first-hand: Observra #117 does not say what any of us said it said
+
+Brief 3 claims Observra **already registers an atexit handler**. Checked against
+`open-agent-ai-security/observra` at `c4d036b`:
+
+| | |
+|---|---|
+| `core/worker.py:106` | `atexit.register(self._shutdown)` |
+| `core/worker.py:251` | a **public** `shutdown()` delegating to `_shutdown()`, "so external callers don't reach into private internals" |
+| `core/worker.py:259+` | the handler sends a shutdown sentinel, joins the worker thread with a **5-second timeout**, then flushes and closes storage |
+| `__init__.py` | no top-level `shutdown` / `flush` export |
+
+**Brief 3 is right and the other two are wrong.** What #117 asks for is an
+*exported top-level function*, so a custom host does not have to call
+`observra._worker._shutdown()`. It is an ergonomics and API-stability request.
+The drain already happens on ordinary interpreter exit.
+
+**Consequence for the plan.** "Final audit events are lost at exit" was cited as
+justification for a workstream. The real residual risk is narrower: abrupt
+termination that bypasses `atexit` (SIGKILL, hard crash), and a worker thread
+that fails to finish inside the five-second join — which logs a warning rather
+than dropping silently. That is worth handling in Phase 3, and it is **not** the
+open wound the summaries implied.
+
+This is the second time a one-line issue summary has survived two research
+passes and failed on contact with the source.
+
+### Also verified first-hand: the schema conflict is real
+
+Observra's canonical field is `timestamp: float` (`core/events.py:206`, validated
+positive). Agent Sensor's public examples query **`ts`**. Agent Sensor's landing
+page says it emits "the same open schema defined by the Observra Open Source
+Library."
+
+**Those cannot all be true.** Either the Sensor documentation is wrong or the
+event model differs. Since Agent Sensor is closed-source and publishes no binding
+schema, **a consumer cannot assume Observra-envelope compatibility.** Phase 7's
+spike must establish this before any ingestion code is written.
+
+### The fixture count, now three-way
+
+| | Count |
+|---|---|
+| Brief 1 | 19 |
+| Brief 2 | 21 |
+| Brief 3 | 19 |
+| **Counted here at `d5b8625`** | **20** |
+
+`a01–a11` (11) + `b01–b04` (4) + `c01–c02` (2) + `d01–d03` (3) = 20. All three
+briefs enumerated those exact ranges. **Three independent research efforts, one
+`ls | wc -l`, three wrong answers.**
+
+### Where brief 3 corrects briefs 1 and 2 on the issues
+
+- **Socxen #3's deny-list was materially fixed.** Both earlier briefs reported a
+  17-tool snippet-only list requiring hand-sync. The 2026-08-13 comment reports
+  expansion to **68 rule spellings and namespaces with CI invariant tests** for
+  missing or extra entries. The thread also carries a **correction to its own
+  body**: an active Claude Code permission configuration *is* a hard,
+  harness-enforced gate. The surviving weakness is narrower — the configuration
+  is opt-in, and `--dangerously-skip-permissions` disables it.
+- **Socxen #5 is stale as summarised, and the §3.3 contradiction resolves.**
+  Since v0.6.0 the bridge writes rotating JSONL by default and records every
+  bridged call with identifiers, dispositions, timing and guardrail firings. It
+  is #87 that is current and #5 whose one-line summary is out of date. Remaining
+  gaps: approval state, verdict and confidence, **fail-open logging**, verified
+  terminal report creation, and the manual-MCP path.
+- **Socxen #6 is partially fixed.** Twenty tools are internally documented and
+  tested for name and count drift; `list_tools()` remains a pass-through and
+  there is still no live description digest or diff.
+
+### One finding that lands close to home
+
+Brief 3 reports that Socxen's **saved evaluation records carry tool-call names
+and arguments but not the corresponding tool-result bodies**, and that a
+2026-08-19 residual report states exact per-trial detail could not be recovered
+from earlier dated reports.
+
+That is this repository's own corpus pathology, in somebody else's artifacts,
+and it sharpens the framing again. Brief 3's version is the best of the three:
+
+> The pathology is not representative of the *benchmarks* — AgentDojo,
+> InjecAgent and SCAM all carry real content. It is representative of a
+> **result-level** problem: labels and aggregate outcomes survive the export
+> while the observation content needed to test a detector does not.
+
+**MCPSecBench** is the clearest published case: `data.json` carries attack name,
+prompt and evaluator instruction, but not the tool output supposedly containing
+the indirect injection. So the honest statement is not "we are the outlier" and
+not "everyone does this" — it is that **executable benchmarks tend to be fine and
+their published exports frequently are not.**
+
+Brief 3 also correctly notes it could not verify the 7,156 figure, because that
+is our own unpublished measurement.
+
+### Tamper-evidence: three more, still no overlap, and the narrowed claim holds
+
+Brief 3 found **Tamra Agent Ledger**, **Microsoft's Agent Governance Toolkit**
+and **Gate OC Audit** — none of which appeared in briefs 1 or 2. Across three
+briefs the counterexample lists are **pairwise disjoint**, which by now is the
+finding rather than an anecdote.
+
+Two matter:
+
+- **Tamra** is the strongest yet: gap-free SHA-256 chain over LLM, tool,
+  retrieval, approval and session events; Ed25519-signed **checkpoints**; a
+  `.tamrapatra` evidence bundle with offline verification; published on Maven
+  Central. Limits: checkpoints are signed rather than individual events, and the
+  key is ledger- or operator-scoped rather than per-agent.
+- **Microsoft's toolkit** is the only one reported to create a **distinct Ed25519
+  key pair per agent**. But Microsoft's own SOC 2 self-assessment says **three of
+  its four audit-chain implementations have integrity defects** and recommends
+  relying only on `MerkleAuditChain`, and the example is labelled
+  learning/prototyping rather than a production contract.
+
+**Brief 3 reached the narrowed claim independently**, which is the strongest
+support it has: no single reviewed project combines automatic agent telemetry,
+per-event signatures under pinned per-agent keys, hash chaining, and a mature
+portable evidence pack. The swap made in `POSITIONING.md` and
+`docs/PRIOR-ART.md` stands.
+
+### Prior art: the closest system is Exabeam's own
+
+**Exabeam Outcomes Navigator** — source-to-detection coverage validation,
+log-quality and parsing analysis, rule-activity insight, and "prescriptive
+scoring." Brief 3 calls it conceptually the closest thing to Cohaera it found,
+and notes no public score schema, API object, failure taxonomy or per-check
+"could not evaluate" payload could be located.
+
+**This is strategically the single most important row in any of the three
+briefs.** The nearest neighbour to this project is a product belonging to the
+organisation it is being positioned toward. That is an argument for the sidecar
+framing and against the category-ownership one, and it needs to be understood
+before any conversation rather than during one.
+
+Brief 3 also names **Elastic rule-execution status** (machine-readable
+`partial failure` / `failed`, with messages like *no matching index*) and
+**Microsoft Sentinel `SentinelHealth`** records. Both are already characterised
+correctly in `docs/PRIOR-ART.md` §1 and §8 — the repository was ahead of the
+brief here, as it was on DeTT&CT and CardinalOps.
+
+### EU AI Act, third pass
+
+Brief 3 confirms brief 2's Digital Omnibus correction against the 2026-07-27
+consolidation and adds two precise points: **"agentic AI" is not a substantive
+category in the Act** — it appears in Annex XIV as a conformity-assessment
+classification code — and Article 12's only attribution provision concerns human
+verifiers for certain remote-biometric systems. Three briefs now agree: **no
+compliance argument gets built on this.**
+
+### LogRhythm, third pass and strongest yet
+
+Verified through release **7.25.0.1067 (2026-08-17)**: no Agent Sensor, Observra,
+Socxen, Claude or MCP material; the August patch addresses AIE regex processing
+only. The ExabeamLabs content repository does carry Gemini Enterprise agent-request
+parsers — but identifies itself as the **New-Scale** content library.
+
+New and useful: **LogRhythm 7.25 added a synchronization service** copying
+New-Scale case summaries, risk, assignment and status into LogRhythm alarms. So a
+New-Scale agent-security case *can* surface in LogRhythm — but the detection and
+analytics ran in New-Scale. **Relay, not native content.** The gap holds, and the
+relay is the integration seam worth designing against.
+
+---
+
 ## 4. Phases
 
 Sequenced so the cheapest disconfirming evidence arrives first. **Every phase
