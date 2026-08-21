@@ -44,6 +44,8 @@ CONTENT_README = REPO / "content" / "README.md"
 DOC_MAP = REPO / "docs" / "README.md"
 EVAL_README = REPO / "eval" / "README.md"
 THREAT_MODEL = REPO / "docs" / "THREAT-MODEL.md"
+EXABEAM_STACK = REPO / "docs" / "EXABEAM-STACK.md"
+REVIEW_RESPONSE = REPO / "REVIEW-RESPONSE.md"
 EXTERNAL_RESULTS = REPO / "docs" / "EXTERNAL-RESULTS.md"
 EXTERNAL_RUN = REPO / "eval" / "external" / "runs" / "stepshield-2026-08-20"
 CHANGELOG = REPO / "CHANGELOG.md"
@@ -890,6 +892,47 @@ CLAIMS = (
     Claim("CONTRIBUTING verify gates restated", CONTRIBUTING,
           re.compile(r"\d+ of the (\d+) gates are things"),
           count_verify_gates),
+    # The manager-facing documents. These were the eleventh instance of the
+    # underived-number defect and the most costly place for it: EXABEAM-STACK.md
+    # is written to be read by somebody deciding whether this is serious, and it
+    # said 22 constructed / 20 working against a catalogue of 28 / 26, plus
+    # "no external validation" after the external run had happened.
+    # REVIEW-RESPONSE.md said "thirteen Sigma rules" against 14 -- spelled as a
+    # word, which is why no checker could read it and the widened spelled-count
+    # test could not either; its word list started at "fifteen".
+    #
+    # Every externally presented number is claimed here now. The rule the
+    # project keeps relearning is that a counted sentence copied into a new
+    # document arrives unchecked by default.
+    Claim("exabeam stack constructed evasions", EXABEAM_STACK,
+          re.compile(r"\| (\d+) constructed, \*\*\d+ still work"),
+          count_constructed_evasions),
+    Claim("exabeam stack working evasions", EXABEAM_STACK,
+          re.compile(r"\| \d+ constructed, \*\*(\d+) still work"),
+          count_working_evasions),
+    Claim("exabeam stack working evasions restated", EXABEAM_STACK,
+          re.compile(r"base rate, (\d+) of \d+\n?catalogued evasions"),
+          count_working_evasions),
+    Claim("exabeam stack constructed evasions restated", EXABEAM_STACK,
+          re.compile(r"base rate, \d+ of (\d+)\n?catalogued evasions"),
+          count_constructed_evasions),
+    Claim("exabeam stack catalogue size", EXABEAM_STACK,
+          re.compile(r"is (\d+) constructed evasions whose tests pass"),
+          count_constructed_evasions),
+    Claim("content README rules handed to an engineer", CONTENT_README,
+          re.compile(r"hands a deploying engineer (\d+) rules"),
+          count_sigma_rules),
+    Claim("content README statements", CONTENT_README,
+          re.compile(r"invalidates all (\d+) statements"), count_sigma_rules),
+    Claim("content README rules with material fp", CONTENT_README,
+          re.compile(r"Five of the (\d+) have a false positive"),
+          count_sigma_rules),
+    Claim("review response sigma rules", REVIEW_RESPONSE,
+          re.compile(r"evaluation card and (\d+) Sigma rules downstream"),
+          count_sigma_rules),
+    Claim("review response sigma rules restated", REVIEW_RESPONSE,
+          re.compile(r"SIEM integration\.\*\* (\d+) Sigma rules validate"),
+          count_sigma_rules),
 )
 
 

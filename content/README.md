@@ -21,7 +21,7 @@ against the attacks it is responsible for. Three checks fire on **zero** benign
 sessions across every confounder built specifically to trip them. Four produce
 essentially all of the corpus's **420.4 false positives per 1,000 benign
 sessions**. Shipping those seven behind one sentence — "Sigma content pack, 14
-rules, validated" — hands a deploying engineer fourteen rules that look alike
+rules, validated" — hands a deploying engineer 14 rules that look alike
 and behave nothing alike.
 
 So every rule now declares a **deployment tier**, and the tier is derived from
@@ -214,7 +214,7 @@ after the numbers improve is a decision, not a derivation.
 
 **A regenerated corpus is an out-of-cycle review of the whole pack.** Every tier
 in this directory is a statement about one measurement; replacing the
-measurement invalidates all fourteen statements at once. The digest assertion in
+measurement invalidates all 14 statements at once. The digest assertion in
 `tests/test_content.py` makes that impossible to skip.
 
 ---
@@ -410,7 +410,7 @@ None of the four tell you what the pack will do on your traffic, and the third
 section of this file says why that is structural rather than an oversight.
 
 **Read the `falsepositives` blocks before deploying any of them.** They are not
-boilerplate. Five of the fourteen have a false positive rate that is material
+boilerplate. Five of the 14 have a false positive rate that is material
 enough to state plainly, and four of those five are why the `hunt` tier exists:
 
 - **CH02** (`hunt`) uses lexical matching. An agent that says "I have emailed the
