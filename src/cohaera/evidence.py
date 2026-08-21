@@ -296,6 +296,46 @@ BOUND_SPAN_ONLY = "bound_span_only"    # span and tool matched; args unverifiabl
 BOUND_ARG_MISMATCH = "arg_mismatch"    # span matched, arguments did NOT
 BOUND_NONE = "unbound"                 # names no call in this session
 
+
+# ---------------------------------------------------------------------------
+# How much an effect receipt is WORTH, which is a different axis from BOUND_*.
+#
+# Binding asks "does this receipt name THIS call?". These ask "did the authority
+# actually issue it?". CH07 conflated the two: a receipt binding exactly was
+# treated as proof the effect occurred, and the finding said so in as many
+# words -- "an identifier minted by the system the action happened to, from a
+# namespace the agent does not control". Nothing establishes either clause.
+# `authority` is a producer-written string, and a producer that writes the
+# record writes the receipt inside it.
+#
+# The tiers are named in full because two of them are NOT REACHABLE today and
+# the gap is the point. cohaera.receipt:1 carries no signature and the trust
+# store has no role for receipt authorities, so nothing can currently climb
+# past BOUND. Naming the ceiling is how the schema gap stays visible instead of
+# being rediscovered by the next reviewer.
+# ---------------------------------------------------------------------------
+
+RECEIPT_CLAIMED = "claimed"
+"""Parsed, and that is all. The authority is a string the producer chose."""
+
+RECEIPT_BOUND = "bound"
+"""The binding names this exact call. Still issued by nobody in particular:
+binding proves the receipt is ABOUT this call, never that it is genuine."""
+
+RECEIPT_AUTHENTICATED = "authenticated"
+"""The authority attested it -- a signature over the receipt, verified against
+a key the operator declared for that authority. NOT REACHABLE: the schema has
+no signature field and the trust store has no receipt role."""
+
+RECEIPT_RECONCILED = "reconciled"
+"""Confirmed against the authority itself: the identifier was looked up and it
+exists. NOT REACHABLE, and out of scope for a detector that reads a stream."""
+
+RECEIPT_AUTHENTIC = frozenset({RECEIPT_AUTHENTICATED, RECEIPT_RECONCILED})
+"""The tiers that support a high-confidence accusation. Empty in practice
+today, which is the honest state and is asserted by test."""
+
+
 # R-01/R-10. ``BOUND_SPAN_ONLY`` used to sit in this set, and that single line
 # was the difference between a mechanism and a decoration. A span-only binding
 # says an identifier was presented for a call with this span and this name; it

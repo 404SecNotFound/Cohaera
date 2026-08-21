@@ -62,6 +62,7 @@ from cohaera.checks import (
     EVIDENCE_VERIFIED_COMPLETE,
     EVIDENCE_VERIFIED_PREFIX,
     R_RECEIPT_NOT_ARGUMENT_BOUND,
+    _receipt_trust_of,
     ch04_guardrail_overrun,
     ch06_evidence_integrity,
     ch07_effect_contradiction,
@@ -119,6 +120,7 @@ from cohaera.evidence import (
     R_STREAM_REPLAYED,
     R_STREAM_SKIPPED_RECORDS,
     R_UNSIGNED,
+    RECEIPT_AUTHENTIC,
     RECEIPT_SCHEMA,
     ROLE_COLLECTOR,
     ROLE_POLICY,
@@ -1158,12 +1160,72 @@ def _receipt(**kw) -> dict:
 
 
 def test_a_reported_failure_with_a_bound_receipt_is_a_detection():
-    """The only check here that catches a lying emitter rather than routing
-    around one: two fields of the same record disagree, and one of them is not
-    the agent's to choose."""
+    """Two fields of the same record disagree, and that is worth reporting.
+
+    This docstring used to end "and one of them is not the agent's to choose",
+    and asserted `critical` on the strength of it. Both were wrong. `authority`
+    is a producer-written string and cohaera.receipt:1 carries no signature, so
+    a producer that writes the record writes the receipt inside it -- an
+    invented authority and an invented identifier produced a critical finding.
+    See `test_an_invented_authority_cannot_manufacture_a_critical_finding`.
+
+    The contradiction is still real and still worth an analyst's time. It is
+    `high` for an egress call rather than `critical`, because `critical` here
+    means "an effect provably occurred" and nothing available proves it.
+    """
     findings = ch07_effect_contradiction(_call_session("failure", _receipt()))
     assert [f.check for f in findings] == [CH07_CONTRADICTED]
-    assert findings[0].severity == "critical"
+    assert findings[0].severity == "high"
+    assert findings[0].evidence["receipt_trust"] == "bound"
+    assert findings[0].evidence["receipt_authenticated"] is False
+
+
+def test_an_invented_authority_cannot_manufacture_a_critical_finding():
+    """The P0 this pairs with, stated as the attack it is.
+
+    CH07 said its finding "does not depend on the stream being honest -- it is
+    evidence that the stream is not", and issued `critical` on the strength of
+    an `authority` field. That field is a string. cohaera.receipt:1 has no
+    signature and the trust store has no receipt role, so a producer that
+    writes the record writes the receipt inside it, and the one check that
+    claimed independence from the producer was reading producer input.
+
+    A receipt naming an authority that does not exist, an identifier in no
+    namespace, and a binding that matches perfectly, must not reach `critical`.
+    """
+    invented = _receipt()
+    invented = {**invented, "authority": "i-invented-this-authority",
+                "identifier": "<anything-i-like@evil>"}
+    findings = ch07_effect_contradiction(_call_session("failure", invented))
+
+    assert [f.check for f in findings] == [CH07_CONTRADICTED], (
+        "the contradiction is still real and must still be reported")
+    assert findings[0].severity != "critical", (
+        "an unauthenticated receipt cannot support 'an effect provably "
+        "occurred', which is what critical means here")
+    assert findings[0].evidence["receipt_authenticated"] is False
+
+    # And the claim itself, because a severity cap with the old prose beside it
+    # is still telling an analyst the identifier came from somewhere it did not.
+    detail = findings[0].detail
+    assert "NOT authenticated" in detail
+    assert "not as proof an action took effect" in detail
+    assert "namespace the agent does not control" not in detail
+
+
+def test_no_receipt_can_currently_be_authenticated():
+    """The ceiling, asserted rather than left in a comment.
+
+    RECEIPT_AUTHENTICATED and RECEIPT_RECONCILED are defined and unreachable:
+    there is no signature field to verify and no role to verify it against.
+    This test is what turns that from a claim in a docstring into something
+    that fails the day the schema gains a signature and the tiers are not
+    wired up to read it.
+    """
+    call = _call_session("failure", _receipt()).tool_calls[0]
+    assert _receipt_trust_of(call) not in RECEIPT_AUTHENTIC, (
+        "a receipt climbed past 'bound'; if receipts can now be "
+        "authenticated, _receipt_severity must be reviewed with this test")
 
 
 def test_a_reported_success_with_a_receipt_is_not_a_finding():
