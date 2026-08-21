@@ -45,6 +45,7 @@ DOC_MAP = REPO / "docs" / "README.md"
 EVAL_README = REPO / "eval" / "README.md"
 THREAT_MODEL = REPO / "docs" / "THREAT-MODEL.md"
 EXABEAM_STACK = REPO / "docs" / "EXABEAM-STACK.md"
+OUTSTANDING = REPO / "docs" / "OUTSTANDING.md"
 REVIEW_RESPONSE = REPO / "REVIEW-RESPONSE.md"
 EXTERNAL_RESULTS = REPO / "docs" / "EXTERNAL-RESULTS.md"
 EXTERNAL_RUN = REPO / "eval" / "external" / "runs" / "stepshield-2026-08-20"
@@ -577,6 +578,62 @@ def _learn(population: str, field: str):
     return truth
 
 
+# ---------------------------------------------------------------------------
+# docs/OUTSTANDING.md
+#
+# A page listing what is left is a page made almost entirely of counts, and a
+# count nothing derives is the defect this file exists to prevent. Eleven
+# instances so far, every one correct on the day it was typed. So the numbers
+# on that page come from the files they describe, and the page's own status
+# lists are CHECKBOXES rather than totals -- a checklist cannot disagree with
+# itself the way "6 of 10 remain" can.
+# ---------------------------------------------------------------------------
+
+
+def _evasion_status_and_tier() -> list[tuple[str, str]]:
+    """(status, tier) for every catalogued evasion, from the table itself.
+
+    Named apart from `_evasion_rows`, which already exists and returns a dict
+    keyed by id. Defining a second `_evasion_rows` silently replaced the first
+    and broke `count_working_evasions` -- a collision the module is big enough
+    to hide and small enough to have avoided.
+    """
+    text = EVASION.read_text(encoding="utf-8")
+    return re.findall(r"^\| E\d+ \| `([a-z_]+)` \| (T\d) ", text, re.M)
+
+
+def count_t0_working() -> str:
+    """Free evasions that work outright. The cheapest thing an attacker has."""
+    return str(sum(1 for status, tier in _evasion_status_and_tier()
+                   if tier == "T0" and status == "working"))
+
+
+def count_t0_open() -> str:
+    """Free evasions not closed -- working OR half closed.
+
+    The review that prompted the outstanding list said "19 T0 evasions", and
+    this is the number it meant. Reading it as `working` alone gives 14 and
+    makes the backlog look like it shrank when nothing had changed.
+    """
+    return str(sum(1 for status, tier in _evasion_status_and_tier()
+                   if tier == "T0" and status in ("working", "half_closed")))
+
+
+def count_roadmap_open() -> str:
+    return str(len(re.findall(r"^- \[ \]", README.read_text(encoding="utf-8"), re.M)))
+
+
+def count_role_review_open() -> str:
+    """Findings in the three role reviews still marked Open or Recorded."""
+    text = (REPO / "docs" / "REVIEWS-2026-08.md").read_text(encoding="utf-8")
+    return str(len(re.findall(r"\| \*\*(?:Open|Recorded)", text)))
+
+
+def kernel_lines(name: str) -> str:
+    path = REPO / "src" / "cohaera" / name
+    return f"{len(path.read_text(encoding='utf-8').splitlines()):,}"
+
+
 CLAIMS = (
     Claim("README tests passing", README,
           re.compile(r"Tests, (\d+) passing across unit"), count_tests),
@@ -919,6 +976,36 @@ CLAIMS = (
     Claim("exabeam stack catalogue size", EXABEAM_STACK,
           re.compile(r"is (\d+) constructed evasions whose tests pass"),
           count_constructed_evasions),
+    # docs/OUTSTANDING.md. A backlog page is almost entirely counts, so every
+    # one of them is read out of the file it describes.
+    Claim("outstanding t0 open", OUTSTANDING,
+          re.compile(r"derived\.\*\* (\d+) free evasions"), count_t0_open),
+    Claim("outstanding roadmap items", OUTSTANDING,
+          re.compile(r"free evasions, (\d+) roadmap items"), count_roadmap_open),
+    Claim("outstanding role review findings", OUTSTANDING,
+          re.compile(r"roadmap items, (\d+) role\s+review findings"),
+          count_role_review_open),
+    Claim("outstanding checks lines", OUTSTANDING,
+          re.compile(r"([\d,]+) lines in `checks\.py`"),
+          lambda: kernel_lines("checks.py")),
+    Claim("outstanding t0 open restated", OUTSTANDING,
+          re.compile(r"catalogue\.\*\* (\d+) are"),
+          count_t0_open),
+    Claim("outstanding t0 working", OUTSTANDING,
+          re.compile(r"of which (\d+) work outright"), count_t0_working),
+    Claim("outstanding roadmap restated", OUTSTANDING,
+          re.compile(r"(\d+) unchecked items in the README"), count_roadmap_open),
+    Claim("outstanding role review restated", OUTSTANDING,
+          re.compile(r"(\d+) findings from \[REVIEWS-2026-08"), count_role_review_open),
+    Claim("outstanding checks lines restated", OUTSTANDING,
+          re.compile(r"`checks\.py` is ([\d,]+)"),
+          lambda: kernel_lines("checks.py")),
+    Claim("outstanding evidence lines", OUTSTANDING,
+          re.compile(r"`evidence\.py` is ([\d,]+)\."),
+          lambda: kernel_lines("evidence.py")),
+    Claim("outstanding t0 final", OUTSTANDING,
+          re.compile(r"\*\*A5, the free evasions\.\*\* (\d+) attacks"),
+          count_t0_open),
     Claim("content README rules handed to an engineer", CONTENT_README,
           re.compile(r"hands a deploying engineer (\d+) rules"),
           count_sigma_rules),
@@ -934,6 +1021,7 @@ CLAIMS = (
           re.compile(r"SIEM integration\.\*\* (\d+) Sigma rules validate"),
           count_sigma_rules),
 )
+
 
 
 
