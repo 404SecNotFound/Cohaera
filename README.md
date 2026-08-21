@@ -22,15 +22,67 @@
 
 ---
 
-## What this is, in one screen
+## What this is, in plain terms
 
-Cohaera reads agent telemetry and answers a question most detection layers skip:
-**is the record trustworthy enough to draw a conclusion from?** It verifies
-collector signatures and chain continuity, checks that approvals and provider
-receipts bind to the exact call they claim, and — when it cannot establish
-something — says which check could not run and why, instead of reporting clean.
+Companies are giving AI agents real permissions. Agents that close security
+alerts, issue refunds, deploy code, send email. To know what an agent did, you
+read its logs.
 
-It is **pre-alpha research software**. Read the numbers before the prose:
+**Those logs are written by the agent itself.**
+
+The standard way to attack an agent is to hide instructions inside something it
+reads — a support ticket, a web page, a PDF. No malware, no exploit. And if it
+works, the software that misbehaved is the same software writing the record of
+what happened.
+
+So when your alerts stay quiet, you cannot tell these apart:
+
+- nothing bad happened
+- **the evidence needed to check was never there**
+
+Both look like a clean dashboard. One of them is a false negative wearing a
+green tick.
+
+### What Cohaera does
+
+It reads agent logs and grades the evidence *before* anything draws a conclusion
+from it. Two questions, deliberately kept apart:
+
+| | |
+|---|---|
+| **Did something suspicious happen?** | Seven checks — see [The checks](#the-checks) |
+| **How much of this could I actually check?** | Per check: `evaluated`, `degraded`, or **`not_evaluated`** — always with a reason |
+
+**The second question is the product.** A check that lacks the evidence to run
+is *forbidden* from returning "clean". It has to say it could not look.
+
+If you have run a SIEM: this is log-source health, moved down a level. Not "is
+the source up" but "**can this specific detection actually run on the evidence
+that arrived?**" — answered per session, per check, with a machine-readable
+reason code.
+
+### See it in one second
+
+```bash
+python demo/phantom-guardrail/run.py
+```
+
+An AI agent closes a security alert and tells its human that a data-loss policy
+blocked a file export. Every statement it makes is true except one: **that
+policy does not exist.** The export failed on a network error, and the agent
+invented the control that explains it away.
+
+The demo scores the same log file twice. Without the operator's list of real
+controls, Cohaera reports what it cannot check. With it, it names the phantom.
+[What the demo shows and what it refuses to claim](demo/phantom-guardrail/README.md).
+
+---
+
+## Read the numbers before the prose
+
+**Pre-alpha research software.** Every figure below is recomputed from the
+evaluation card on each commit and fails CI if it drifts — which is itself the
+argument being made.
 
 | | |
 |---|---|
@@ -38,19 +90,29 @@ It is **pre-alpha research software**. Read the numbers before the prose:
 | Target-attributable recall | 100% on the headline cell |
 | False positives | **420.4 per 1,000 benign sessions** |
 | Projected precision at 0.1% attack prevalence | **0.238%** |
-| Known ways to defeat it | 22 catalogued, 20 still working, each with a test |
+| Ways to defeat it | **28** catalogued, of which **26** still work — each with a test |
 | External validation | **None.** No live SIEM, no independent labels, no second reviewer |
 
 That false-positive rate is not a typo and it is not buried. At a realistic base
 rate almost every alert this produces is benign. The checks that fire cleanly
-are the evidence-integrity ones; the behavioural ones are noisy and
+are the evidence-integrity ones; the behavioural ones are noisy, and
 [the card says exactly which and why](eval/EVALUATION-CARD.md).
+
+There is a file here called [EVASION.md](EVASION.md) whose entire job is to
+break this one. 28 constructed evasions, 26 of them still working, each backed
+by a test that **passes when the evasion succeeds**. Read it before you trust
+anything else — including the entry for the one that was closed.
+Closing it cost 36 new false positives, and the entry says so.
+
+> The first principle is that you must not fool yourself, and you are the
+> easiest person to fool.
 
 ### Where to start
 
 | If you are… | Read |
 |---|---|
-| Deciding whether the thinking is any good | [The night watchman](#the-night-watchman) below, then [EVASION.md](EVASION.md) — the catalogue of ways to beat it |
+| New to this, and want the idea | The demo above, then [The problem in one page](#the-problem-in-one-page) |
+| Deciding whether the thinking is any good | [EVASION.md](EVASION.md) — the catalogue of ways to beat it |
 | Evaluating it as a detection layer | [POSITIONING.md](POSITIONING.md), then the [evaluation card](eval/EVALUATION-CARD.md) |
 | Trying to run it | [Quick start](#quick-start) — about two minutes |
 | Auditing the security claims | [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) and [docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md) |
@@ -61,129 +123,64 @@ are the evidence-integrity ones; the behavioural ones are noisy and
 
 ## The pitch
 
-Two versions, for when somebody asks what this is and you have a lift ride to
-answer in. Every number below is derived from the evaluation card by
-`tools/readme_facts.py` and fails CI if it drifts, which is itself the argument.
+For when somebody asks what this is and you have a lift ride to answer in.
 
 **Fifteen seconds.**
 
-> Agent telemetry is becoming a security data source. Several projects are now
-> building agent records that are worth believing; almost nothing grades the
-> records a deployment already has. Cohaera grades the evidence before anything
-> correlates on it — verified, partially verified, or inadmissible. And when a
-> check cannot run, it says *not evaluated* with a reason code instead of
-> reporting clean. Silence is not safety.
+> Agent telemetry is becoming a security data source, and it is written by the
+> thing being monitored. Cohaera grades that evidence before anything correlates
+> on it — verified, partially verified, or inadmissible. When a check cannot
+> run, it says *not evaluated* with a reason instead of reporting clean.
+> Silence is not safety.
 
 **Forty-five seconds, for a detection team.**
 
-> Every agent framework now emits logs, and SIEMs are starting to ingest them.
-> But those logs are written by the thing being monitored: an agent can truncate
-> its own transcript, replay a stale approval, or claim a tool call it never
-> made. Cohaera is an evidence-quality layer that sits in front of correlation.
-> It verifies signature chains, binds tool arguments to what actually executed,
-> and extracts correlation-ready features from agent and MCP evidence.
+> Every agent framework now emits logs and SIEMs are starting to ingest them.
+> But an agent can truncate its own transcript, replay a stale approval, or
+> claim a tool call it never made. Cohaera is an evidence-quality layer in front
+> of correlation: it verifies signature chains, binds tool arguments to what
+> actually executed, and hands correlation-ready features to whatever does the
+> behavioural analytics.
 >
-> The part that matters most is the coverage contract. A check that lacks the
+> The part that matters is the coverage contract. A check that lacks the
 > evidence to run is *forbidden* from returning clean — it returns
 > `not_evaluated` with a machine-readable reason. That is the failure mode this
 > was built against: a green dashboard that means "we did not look."
 >
-> And it grades itself by the same rule. The repository ships an evaluation card,
-> regenerated on every commit with CI failing on any diff, and it leads with the
-> number most detection projects bury — 420.4 false positives per 1,000 benign
+> And it grades itself by the same rule. The evaluation card is regenerated on
+> every commit with CI failing on any diff, and it leads with the number most
+> detection projects bury — 420.4 false positives per 1,000 benign
 > sessions, and 0.238% precision at a 0.1% attack base rate. 28 evasions
-> constructed, 26 still working, every one of them a permanent test. It is
-> pre-alpha, the corpus is synthetic and its author wrote the detector too, and
-> nobody outside this repository has validated any of it. All of which is on the
-> first screen rather than discovered later.
+> constructed, 26 still working, every one a permanent test. It is pre-alpha,
+> the corpus is synthetic, its author wrote the detector too, and nobody outside
+> this repository has validated any of it. All on the first screen rather than
+> discovered later.
 
-**The honest framing, if you only keep one line.** The measurement discipline is
-the artefact here, not the detector. A detection release that reports only
-recall is a marketing document. Everything above is an argument about what a
-security research output should look like, made by building one that has to live
-with it.
+**If you only keep one line.** The measurement discipline is the artefact here,
+not the detector. A detection release that reports only recall is a marketing
+document.
 
 ---
 
-## The night watchman
+## Where this sits
 
-Imagine a night watchman. Very diligent. Every time something happens in the
-building he writes a note and drops it in a box. "Door opened." "Alarm sounded."
-"Van left the loading bay." He never misses anything.
-
-But he has one problem. He has no memory. Each note is written by a man who has
-just woken up: he looks at the one thing in front of him, decides whether it is
-alarming *by itself*, writes it down, and forgets.
-
-So he catches "the alarm sounded," because that is alarming on its own. He can
-never catch "the alarm sounded, **and then** the van left," because noticing that
-means holding two notes at the same time, and nobody in the building is doing
-that.
-
-That is agent telemetry today. The rule function is literally
-`evaluate_rules(event_type, data)`. One event, one dictionary, then gone. Nine
-rules ship upstream and every one of them asks a question about one note.
-
-Here is the part that makes this a finding rather than a complaint. **On the side
-of the box, somebody wrote instructions.** The upstream parser file declares
-correlation keys, with this description: *"Use session_id to group all events in
-a conversation."* Somebody knew the story lives across the notes. They wrote it
-down. Nothing in the system ever picks up the box and sorts it.
-
-**Cohaera is the person who reads the box.**
-
-That is the whole idea. It is not clever. It is the sort of thing that looks
-obvious once someone says it out loud, which is usually a good sign rather than
-a bad one.
-
-When we picked up the upstream project's own demo box and sorted it, we found:
-the cost guardrail went off at `t=915.750`, and eight seconds later the agent
-sent an email it could not take back. Both notes were in the box the whole time.
-Nobody had put them next to each other.
-
-**Now the part that matters more than the finding.** This shows the detector
-*fires*. It does not show the detector is *good*. Those are completely different
-claims and it is very easy to confuse them, especially when the thing you built
-has just done something impressive. Twelve clean sessions producing zero alerts
-sounds like a false positive rate of zero; it is not, because the baseline was
-fitted on those same twelve near-identical sessions. That is a smoke test wearing
-a lab coat.
-
-So there is a file in this repository called [EVASION.md](EVASION.md) whose
-entire job is to break this one. 28 constructed evasions, 26 of them still
-working, each backed by a test that passes when the evasion succeeds. Read it
-before you trust anything else here — including the entry for the one that has
-been closed, which cost 36 new false positives and says so.
-
-> The first principle is that you must not fool yourself, and you are the
-> easiest person to fool.
-
-### One correction to the story above
-
-The box is real and nobody is reading it. That part holds.
-
-What does not hold is the conclusion this project drew from it for its first
-year: that reading the box is the *missing layer*. It is not missing any more.
-Exabeam's [Agent Behavior Analytics](https://www.exabeam.com/capabilities/agent-behavior-analytics/)
+Reading agent logs as a correlated whole is no longer a missing layer. Exabeam's
+[Agent Behavior Analytics](https://www.exabeam.com/capabilities/agent-behavior-analytics/)
 baselines agent behaviour, tracks first-time actions and role drift, covers MCP
-activity, and correlates agents with the users and entities around them. Sold
-to that audience, "somebody should read the box" is a description of their
-product.
+activity, and correlates agents with the users around them.
 
-The gap that has *not* closed is one layer down, and it is the more interesting
-one. Whoever reads the box is trusting that the notes are the notes the
-watchman wrote. In agent telemetry the watchman usually runs inside the process
-he is watching.
+The gap that has **not** closed is one layer down. Whoever reads those logs is
+trusting that the records are the records the agent's instrumentation actually
+wrote — and that instrumentation usually runs inside the process being watched.
 
-**So: Cohaera's job is not to be the reader. It is to make the notes worth
-reading — and to say so out loud when they are not.** Signed collector chains,
-exact call binding, provider receipts that can falsify a claimed failure,
-replay and fork memory, and a coverage contract on every check that cannot run.
-Those become inputs to a behavioural engine rather than a competitor to one.
+**So Cohaera's job is not to be the reader. It is to make the record worth
+reading, and to say so out loud when it is not.** Signed collector chains, exact
+call binding, provider receipts that can falsify a claimed failure, replay and
+fork memory, and a coverage contract on every check that cannot run. Those are
+inputs to a behavioural engine, not a competitor to one.
 
-[**POSITIONING.md**](POSITIONING.md) has the layer table, the claim language
-this project holds itself to, and the honest statement of what is not
-validated.
+[**POSITIONING.md**](POSITIONING.md) has the layer table, the claim language this
+project holds itself to, and the honest statement of what is not validated.
 
 ---
 

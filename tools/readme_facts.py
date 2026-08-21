@@ -722,6 +722,17 @@ CLAIMS = (
     # \s+ rather than a literal space: these sentences are hard-wrapped prose and
     # a claim that stops matching when somebody rewraps a paragraph is a claim
     # that silently stops being checked.
+    # The summary table on the first screen. This read "22 catalogued, 20 still
+    # working" for several revisions after the catalogue reached 28 and 26 --
+    # ungated, in the one table a reader sees before anything else, and found by
+    # an external reviewer rather than by this module. Twelfth hand-typed count
+    # to ship. Both halves are derived now.
+    Claim("README summary-table catalogued evasions", README,
+          re.compile(r"Ways to defeat it \| \*\*(\d+)\*\* catalogued"),
+          count_constructed_evasions),
+    Claim("README summary-table working evasions", README,
+          re.compile(r"catalogued, of which \*\*(\d+)\*\* still work"),
+          count_working_evasions),
     Claim("README working evasions", README,
           re.compile(r"(\d+) of them still\s+working"), count_working_evasions),
     # COH-R19 again, in the file that is most about being honest. This sentence
@@ -748,7 +759,7 @@ CLAIMS = (
           re.compile(r"the\s+false positive rate is ([\d.]+)%"),
           card_family_holdout_fpr_pct),
     Claim("README E02 confounder cost", README,
-          re.compile(r"which cost (\d+) new false positives"),
+          re.compile(r"cost (\d+) new false positives"),
           card_e02_confounder_cost),
     Claim("README family_holdout recall", README,
           re.compile(r"recall drops to ([\d.]+)%"), card_family_holdout_recall_pct),
