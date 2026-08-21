@@ -763,13 +763,13 @@
           "coverage_completeness": 0.557,
           "evidence_status": "verified_complete",
           "finding_count": 1,
-          "max_severity": "high",
+          "max_severity": "medium",
           "schema": "cohaera:0.3",
           "session_id": "lab-04-contradiction",
           "triggered_rules": [
             "CH07_reported_failure_with_effect_receipt"
           ],
-          "verdict_id": "46f5f07b4df3b3a61e39666671d88e3d"
+          "verdict_id": "e740f5549c6b74276abfbeb5776a06e2"
         }
       ],
       "why": "Agent reports failure; an exactly bound provider receipt says otherwise."
