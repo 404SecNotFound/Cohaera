@@ -131,11 +131,22 @@ which section 4 does.
 Worth stating because it is a positioning asset, not a defect:
 
 - **#2, "tamper-evident, hash-chained, signed telemetry — nobody in the OSS space
-  has this, first mover sets the standard."** Cohaera has had it for months.
-  `cohaera.integrity:1` is a signed hash chain with verified-to boundaries, a
-  trust store, key rotation and revocation. The gap analysis identifies the single
-  highest-value unclaimed position in the market and does not notice that this
-  repository already occupies it.
+  has this, first mover sets the standard."** ~~Cohaera has had it for months and
+  the gap analysis does not notice.~~ **Corrected 22 August 2026 by commissioned
+  research: the position is NOT unclaimed.** `obsvr-dev/obsvr-sdk` documents an
+  HMAC-SHA256 chain over `session`, `seq_no`, `prev_sig` and content, a
+  `obsvr-verify` CLI, optional server countersignature, and a daily Ed25519-signed
+  Merkle root anchored off-host. Cohaera's `cohaera.integrity:1` is real and is
+  not first. Do not make the first-mover claim.
+
+  Note the name collision: `obsvr-sdk` is **not** Exabeam's Observra. They must
+  not be merged without a source citation, and the research explicitly flags this.
+
+  One thing obsvr-sdk has that Cohaera does not, and it is the better design:
+  **signed gap markers.** When its queue overflows or ingest rejects a record, it
+  emits a signed marker saying so, rather than leaving the consumer to infer loss
+  from a sequence hole. Cohaera should adopt this. Observra has no equivalent —
+  verified by grep against `c4d036b`.
 - **#13, "BAS-for-agents — no public efficacy benchmark exists; we become the
   benchmark."** `EVASION.md` is 28 constructed evasions, each with an executable
   test that passes *while the evasion works*, tiered by attacker capability. That
@@ -197,6 +208,75 @@ content), #13 (BAS harness). See section 2.2.
 
 ---
 
+## 3.3 What the commissioned research returned (22 August 2026)
+
+A research brief was issued against the open questions in §1.2. Results below,
+split by whether they **confirm**, **disprove** or **complicate** the plan. Two
+entries disprove claims made earlier in this document.
+
+### Disproved — stop making these claims
+
+| Claim | Status |
+|---|---|
+| "Nobody in OSS ships tamper-evident agent telemetry" | **FALSE.** `obsvr-dev/obsvr-sdk` does, with signed gap markers and off-host Merkle anchoring. Still true of *Observra* and *Agent Sensor* as published |
+| "Corpus blindness is probably common — a publishable methodology finding" | **LARGELY FALSE, and it inverts.** InjecAgent (1,054 cases) and AgentDojo carry naturalistic tool output with injections spliced in; they were *built* to avoid exactly this. **Cohaera's corpus is the outlier, not the norm.** Not a contribution — a defect the field already solved |
+| The EU AI Act sets an evidentiary bar for agent logs | **OVERSTATED.** GPAI Articles 53 and 55 require technical documentation, downstream information, a copyright policy, a training-data summary, and serious-incident reporting "without undue delay". They do **not** require automatic event logs, retention periods, or per-action attributability. Those are **high-risk system** duties (Arts. 12, 19, 26). The six-month and ten-year figures in circulation come from the Code of Practice and commentary, not the Regulation |
+
+### Confirmed — these hold
+
+- **The LogRhythm gap is real.** No public LogRhythm SIEM parser, KB module or AIE
+  rule exists for Agent Sensor, Observra or agent-security detection. Agent content
+  is New-Scale only. *Caveat: the LogRhythm KB is customer-gated, so absence from
+  public documentation is not proof none shipped privately.* Integration point
+  identified: LogRhythm Intelligence AIE 1603/1604 correlate Exabeam Cases via Open
+  Collector.
+- **No peer grades evidence quality per detection.** Closest three are NIST OSCAL
+  assessment results, SCAP result states, and SIEM log-source health. None answers
+  "could *this* detection run on the evidence that arrived".
+- **Agent Sensor is binary-only**, with `~/.agent-sensor/events.jsonl`, a webhook
+  sink with bearer auth, a `dlq.jsonl`, cursor inspection and Prometheus metrics.
+
+### Complicates — plan changes required
+
+- **Socxen is NOT a usable external corpus.** Its `security/redteam/attacks/`
+  holds **19 `*.attack.json` recipes** — input payloads plus `must_not` assertions
+  — and dated markdown trial reports. **There is no published bundle of recorded
+  tool-level traces.** The risk flagged in §6 is now confirmed, and the flagship
+  demonstration's corpus dependency fails as specified.
+- **Observra #117 is an RFE, not a proven bug.** It requests a public
+  `shutdown()`/`flush()` so the worker can be drained without touching the private
+  `observra._worker._shutdown()`. It does **not** report measured event loss. One
+  maintainer comment, no patch. "Events are lost at exit" is a reasonable inference
+  from the design and must not be cited as a demonstrated defect.
+- **Socxen #6's poisoned tool descriptions are Exabeam's own metadata**, not
+  Socxen-authored. Socxen can pin and inventory them; it cannot rewrite them. That
+  changes who the remedy is addressed to.
+- **Socxen #5 and #87 contradict each other** on whether a structured action log
+  exists. #5 (July) says none; #87 (August) cites `plugin/docs/logging.md`. Both
+  are open. Resolve before building on either.
+- **Agent Sensor exposes no drop-count field to a consumer.** Metrics are a
+  Prometheus endpoint; cursor state is a local debug CLI. Neither rides on the
+  forwarded event.
+- **Observra's `drop_count` is a process-local API, not a stream field.**
+  `get_metrics()` returns `drop_count`, `queue_depth`, write latency percentiles and
+  backend write success/failure — but a sidecar reading JSONL receives none of it.
+  The coverage hook is real and requires the **producer** to emit it. This is a
+  correction to §1.1, which implied a consumer could simply read it.
+- **Unresolved conflict:** Agent Sensor is described both as emitting the Observra
+  schema and as normalising to Exabeam CIM, with no published mapping. A consumer
+  cannot treat the two as identical.
+
+### Prior art to cite rather than rediscover
+
+**SCAP result states are the closest existing precedent for `not_evaluated`** —
+`pass`, `fail`, `error`, `notchecked`, `notapplicable`, `informational`. `notchecked`
+has meant "the probe could not run" in deployed compliance tooling for two decades.
+This *strengthens* the position rather than threatening it: the primitive is proven,
+and nobody has carried it into agent security. Cite it in `POSITIONING.md` and the
+prior-work section.
+
+---
+
 ## 4. Phases
 
 Sequenced so the cheapest disconfirming evidence arrives first. **Every phase
@@ -207,11 +287,16 @@ sequence rather than proceeding on hope.
 
 - [ ] Decide between the sidecar position and the category-ownership position
 - [ ] If sidecar: record the decision and its reasoning in `POSITIONING.md`
-- [ ] Read Observra #117 and Socxen #87, #6, #3, #5 and confirm they say what the
-      strategy document claims
+- [x] Read Observra #117 and Socxen #87, #6, #3, #5 — **done, see §3.3.** All five
+      open. #117 is an RFE rather than a measured defect; #5 and #87 contradict each
+      other on whether a structured log exists
+- [ ] Resolve the #5 / #87 contradiction by reading the current
+      `plugin/docs/logging.md`
 - [ ] Correct `docs/EXABEAM-STACK.md` for Observra 1.1.1
+- [ ] Remove the first-mover tamper-evidence claim wherever it appears, and drop
+      the EU AI Act evidentiary-bar argument (§3.3)
 
-**Exit criterion:** the position is written down and the four issues are read.
+**Exit criterion:** the position is written down and the corrections are made.
 **Blocks:** everything.
 
 ### Phase 1 — Close the free evasions *(code, small, well understood)*
@@ -289,11 +374,20 @@ runtime status.
 - [ ] Re-measure CH03 with a content channel that exists
 - [ ] Only then report a content-scanning number
 
+- [ ] Evaluate against **InjecAgent** (1,054 cases, templated but real hostile
+      tool bodies) and **AgentDojo** (stateful environments, tools return real
+      object text). Both are externally authored and both carry the content
+      channel this corpus lacks
+
 **Exit criterion:** CH03's content path has a measured result rather than a
 vacuous zero.
-**Why this is here and not in either document:** neither found it. It was found
-building E09's scan, and it means **CH03's content story is currently untested by
-the evaluation that gates this repository's claims.**
+**Why this is here, and the framing has changed.** It was found building E09's
+scan and it does mean CH03's content story is untested by the evaluation gating
+this repository's claims. What it is **not** is a novel finding about the field:
+the commissioned research established that the flagship benches carry real tool
+content precisely because IPI evaluation is vacuous without it. **This repository
+is behind the established practice, not ahead of it**, and the remedy is to adopt
+corpora that already solved it rather than to publish the observation.
 
 ### Phase 7 — Agent Sensor *(gated spike first)*
 
@@ -322,7 +416,8 @@ valid outcome**, not a failure.
 ### Phase 9 — External evidence *(the thing that changes what can be claimed)*
 
 - [ ] Independently authored, instrumented corpus with agent, tool-family, task and
-      organisation holdouts
+      organisation holdouts. **Named candidates, verified to carry tool content:**
+      InjecAgent and AgentDojo. Socxen is **not** one — see §3.3
 - [ ] Freeze the detector before adaptive testing
 - [ ] Independent labels
 - [ ] Publish misses and not-evaluated outcomes alongside hits
@@ -356,7 +451,8 @@ is fully specified in the strategy document.
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| Socxen has no usable red-team corpus | **High** — flagship demo depends on it | Verify in Phase 0, before Phase 6 planning |
+| ~~Socxen has no usable red-team corpus~~ **CONFIRMED: it has none** | **High** — the flagship demo's corpus dependency fails as specified | Use InjecAgent / AgentDojo for evaluation; keep Socxen for the *narrative* demo only, with fixtures we author |
+| First-mover tamper-evidence claim is false | Medium — credibility, if repeated to a reviewer who knows obsvr-sdk | Remove the claim; run an honest differential against obsvr-sdk |
 | No Exabeam New-Scale access | **High** — Phase 10 blocked | Treat as destination, not commitment |
 | Agent Sensor is binaries-only | Medium | Gated spike, Phase 7 |
 | Observra 1.x schema breaks | Medium | Pin to major; compatibility tests |
