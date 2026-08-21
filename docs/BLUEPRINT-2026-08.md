@@ -277,6 +277,145 @@ prior-work section.
 
 ---
 
+## 3.4 Second brief, first-hand checks, and where the two disagree
+
+A second, more thorough brief arrived the same day. It **corrects the first in
+four places and corrects this document in three.** Where the two disagreed on a
+countable fact, the fact was counted here rather than arbitrated.
+
+### Counted first-hand, because both briefs got it wrong
+
+Cloned `open-agent-ai-security/socxen` at **`d5b8625`**:
+
+| | Brief 1 | Brief 2 | **Counted** |
+|---|---|---|---|
+| Attack fixtures | 19 | 21 | **20** |
+| Replayable trace files (`.jsonl`) | "none found" | "NOT FOUND" | **0 — confirmed** |
+| Grading result documents | "dated markdown" | 15 | **15** |
+
+Both briefs enumerated the identical ranges — `a01–a11`, `b01–b04`, `c01–c02`,
+`d01–d03` — which sum to 20, and then both miscounted their own list in opposite
+directions. **Two independent research efforts, one countable number, two wrong
+answers, one shell command to settle it.** That is precisely the defect class
+`tools/readme_facts.py` exists for, arriving from outside the repository.
+
+**Socxen is settled.** `security/redteam/attacks/*.attack.json` carry
+`id`, `attack_class`, `technique`, `backend`, `input.payload` and
+`expected.must_not`. No `event_type`, no `tool_start`, no recorded tool call
+anywhere in the repository. It is a **behavioural test corpus for Socxen the
+agent**, and it is genuinely that — not a telemetry corpus a third party can
+replay through a detector. Both readings in the briefs are defensible; only one
+is useful to us, and it is the pessimistic one.
+
+### Where brief 2 corrects brief 1 — and this document
+
+**Tamper-evidence: the disproof is broader, but a narrowed claim survives and is
+worth more than the original.**
+
+Brief 1 found `obsvr-dev/obsvr-sdk`. Brief 2 found five *different* projects and
+did not find obsvr-sdk: OpenFang (Merkle chain, Ed25519-signed agent manifests),
+MerchantGuard AgentGuard CB (Ed25519-signed chain **plus** offline-verifiable
+evidence-pack export), Phionyx Core (signed hash-chained evidence receipts),
+`maco144/merkle-audit`, and `Ascendral/codebot-ai`. **No overlap between the two
+briefs' counterexamples**, which is itself the finding: the space is fragmented,
+nothing is canonical, and no search finds all of it.
+
+The claim that survives, and it should replace the first-mover language
+everywhere:
+
+> No mainstream observability platform ships event integrity — OTel GenAI
+> conventions, Langfuse, Arize Phoenix, OpenLLMetry, Helicone, AgentOps and
+> LangSmith all lack chaining, signing and attestation. And **no single project
+> combines signed hash-chained events, per-agent attestation keys, and evidence
+> export.**
+
+That is narrower, defensible, and checkable. It is also a roadmap: the
+combination is the unclaimed position, not any one component.
+
+**Prior art: the closest analogue is DeTT&CT, not SCAP or OSCAL.**
+
+Brief 1 offered OSCAL, SCAP result states and SIEM log-source health. Brief 2
+offers three much closer:
+
+- **DeTT&CT** (Rabobank-CDC) scores data-source quality 1–5 on device
+  completeness, field completeness, timeliness, consistency and retention, and
+  visibility 0–4, against ATT&CK techniques. *Differs:* manual analyst-entered
+  YAML; the unit graded is the technique or data source, not a verdict; it
+  measures posture, not per-evaluation sufficiency.
+- **MITRE CTID "Summiting the Pyramid" v4** — telemetry-confidence scores for
+  log-source-to-technique fit, with machine-readable `stp.*` Sigma tags.
+  *Differs:* an authoring-time judgement that assumes the telemetry exists.
+- **CardinalOps Detection Posture Management** — audits SIEM rules for missing
+  fields and stale sources. *Differs:* binary broken/working, proprietary.
+
+**Cite DeTT&CT rather than SCAP.** SCAP's `notchecked` remains a fair precedent
+for the *vocabulary*, but DeTT&CT is the closest thing to the *idea* and a
+reader who knows the field will raise it. Brief 2 also surfaces a 2025
+Theseus.fi thesis ("Detection Surface Index") concluding that **no unified model
+chains coverage → degradation → weighting into one score** — independent
+evidence that the gap is recognised and unfilled.
+
+**EU AI Act: the high-risk dates moved, and brief 1 flagged this as disputed.**
+
+Regulation (EU) **2026/1744** ("Digital Omnibus on AI", OJ 24 July 2026, in force
+27 July 2026) amends Article 113: Chapter III Sections 1–3 apply from
+**2 December 2027** (Annex III) and **2 August 2028** (Annex I). Brief 1 treated
+the Omnibus as provisional commentary and said to await a published amending act;
+brief 2 reports it verified from EUR-Lex as enacted. **Chapter V (GPAI) is
+unchanged and applicable since 2 August 2025.**
+
+Both briefs agree on the only part that matters here: **no GPAI provision
+mentions agents, tool calls, or runtime behavioural logging.** Article 54(3)(b)'s
+ten years is the sole hard Chapter V retention period and it attaches to
+*documentation*. Article 12's logging duty is high-risk-only and now not
+applicable until December 2027 at the earliest. Do not build a compliance
+argument on it.
+
+**Corpus blindness: there IS a published analogue, and it is by design.**
+
+Brief 2 read raw files across nine corpora. InjecAgent, AgentDojo, AgentHarm,
+BIPIA, LLMail-Inject (461,640 submissions), Lakera PINT and WASP all carry real
+content. But **Agent Security Bench (ICLR 2025) does not**: its tool corpus is
+spec-only, its "Expected Achievements" are canned strings, and success is a
+substring match against simulated output — verified from raw
+`all_normal_tools.jsonl`.
+
+So the position is: content-vacuous labelled records are **the exception**, this
+repository's corpus is still the outlier, and the honest framing is neither
+"novel finding" (§3.3 was right to kill that) nor "unique defect". One published
+benchmark shares the structural property deliberately. ToolEmu's runtime
+synthesis carries related placeholder fragility.
+
+**LogRhythm: confirmed far more strongly than before.**
+
+Brief 2 read LogRhythm SIEM release notes 7.20–7.24 (April 2025 – April 2026).
+Post-merger AI work is AI Engine performance fixes, an AIE Admin API, and
+parsers for Salesforce, Tenable, O365, Box, Defender, Mimecast, Keeper and
+Trend. **No OpenAI, Copilot, Gemini, Claude or MCP parser exists.** The
+`LRI`-prefixed AIE rules are **relays** — they alarm on New-Scale detections
+ingested via the Exabeam Case Beat, not native detection content. LogRhythm
+Intelligence (795 models, 1,800 rules) targets human users and hosts and runs on
+New-Scale Fusion, so it is hybrid rather than self-hosted.
+
+Every agentic release — January 2026 ABA and MCP, April 2026 ChatGPT/Copilot/
+Gemini expansion, July 2026's fifty new detections and the Observra/Praxen
+open-sourcing — is New-Scale only. **The gap is real and it is wide.** The
+standing caveat holds: the LogRhythm KB is customer-gated, so a private module
+cannot be excluded.
+
+### Still unresolved after both briefs
+
+- **Agent Sensor's schema is "referenced open, not published."** Both briefs
+  looked; neither retrieved a schema artifact or a full field list. Brief 2 adds
+  that the DLQ with `replay-dlq` means failed deliveries are *recoverable rather
+  than silently dropped*, which weakens the loss argument for that path.
+- **Socxen #5 versus #87** on whether a structured action log now exists. Brief 2
+  did not resolve it either.
+- **Whether obsvr-sdk and the five brief-2 projects overlap in approach**, and
+  how any of them compares to `cohaera.integrity:1` on the specifics.
+
+---
+
 ## 4. Phases
 
 Sequenced so the cheapest disconfirming evidence arrives first. **Every phase
@@ -451,7 +590,7 @@ is fully specified in the strategy document.
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| ~~Socxen has no usable red-team corpus~~ **CONFIRMED: it has none** | **High** — the flagship demo's corpus dependency fails as specified | Use InjecAgent / AgentDojo for evaluation; keep Socxen for the *narrative* demo only, with fixtures we author |
+| ~~Socxen has no usable red-team corpus~~ **SETTLED: 20 attack recipes, 0 traces** (counted at `d5b8625`) | **High** — the flagship demo's corpus dependency fails as specified | Use InjecAgent / AgentDojo for evaluation; keep Socxen for the *narrative* demo only, with fixtures we author |
 | First-mover tamper-evidence claim is false | Medium — credibility, if repeated to a reviewer who knows obsvr-sdk | Remove the claim; run an honest differential against obsvr-sdk |
 | No Exabeam New-Scale access | **High** — Phase 10 blocked | Treat as destination, not commitment |
 | Agent Sensor is binaries-only | Medium | Gated spike, Phase 7 |
