@@ -587,6 +587,150 @@ relay is the integration seam worth designing against.
 
 ---
 
+## 3.6 Fourth brief — the one that stopped where it was told
+
+Issued against the questions §3.5 left open. Its most valuable property is that
+it **declined two of them** rather than filling the gap with inference.
+
+### Agent Sensor: stopped, correctly
+
+No `LICENSE`, `LICENSE.md` or `COPYING` in the distribution repository (command
+given), and the published binaries are macOS and Windows only — no Linux
+artifact. With no licence the brief treated execution as not permitted and
+stopped, which is what it was asked to do.
+
+**So the `ts` versus `timestamp` conflict is still unresolved**, and Phase 7's
+gate stands. What the brief adds is a warning worth keeping: *"prior briefs that
+printed a schema without a captured event were guessing."*
+
+### Outcomes Navigator: §8's claim survives, but only the narrow one
+
+Coverage is *"how well your environment is configured"*, 0–100, recalculated at
+least daily. The nearest per-detection construct is the Correlation Rules
+**"satisfied"** bit — all required fields actively parsed in the past 30 days.
+
+**Rule-level windowed field presence is not a verdict**, and the brief's own
+illustration is the sharpest framing anyone has produced for what Cohaera does
+differently: *a rule can be satisfied all month and still fire on a truncated
+tool body; a rule can be unsatisfied because a parser was quiet for thirty days
+while today's event is complete.*
+
+Consequence for `docs/PRIOR-ART.md` §8, now applied: **"nobody scores whether a
+rule has the fields it needs" would be false** — Outcomes Navigator does that,
+and did it first. What survives is a grade attached to an *individual verdict*.
+
+### Tamra could not be found
+
+Brief 3 reported "Tamra Agent Ledger" with specifics — signed checkpoints, a
+`.tamrapatra` bundle, Maven Central. **A second independent search found no such
+project**, returning an unrelated coin and an unrelated EDR instead. It is marked
+NOT FOUND in prior art rather than deleted, because a specific claim that fails a
+second search is itself information. Two real `agentledger` repositories were
+found in its place and recorded.
+
+This is the cost of citing unread sources on one brief's word, and the entry now
+says so.
+
+### The census: 15–25, and the disjoint lists were a method failure
+
+The fourth brief names the pattern directly: three pairwise-disjoint lists is *a
+method failure, not a nine-project universe*. Its estimate is **roughly 15 to 25**
+public implementations and drafts, offered as an estimate because its registry
+scrape was bot-blocked. Recorded in prior art with that caveat attached.
+
+### obsvr-sdk's gap markers, specified — and where Cohaera is already better
+
+The design, worth copying:
+
+- queue overflow emits a **signed gap marker in the current session**;
+- ingest rejection, permanent failure or retry exhaustion starts a **new
+  session** whose sequence-1 marker names the reason and the count, because the
+  missing signed event cannot honestly continue the old chain;
+- the marker is a **first-class chained event**, not an inferred sequence hole;
+- `obsvr-verify` exit code **3 = valid but incomplete**, with `--allow-gaps`
+  mapping 3 to 0; semantics pinned by a conformance fixture.
+
+Two honest limits the brief supplies. The marker is itself in-memory work, so
+process death before delivery leaves only local counters — **the same hole
+Cohaera has**, just declared when the process lives long enough to declare it.
+And obsvr-sdk's offline verify cannot detect truncation: *"removing a valid
+suffix leaves a shorter valid chain."*
+
+**That last point is a place Cohaera is ahead**, and it should be said as
+carefully as the places it is behind: CH06 with `--seen-streams` detects a
+truncated tail, because the ledger remembers how far the stream previously
+reached. Adopt the marker state machine; do not adopt the verifier's blind spot.
+
+### Consumer side: there is no third-party contract
+
+**ABA.** Native collectors, Observra libraries, and custom-agent sidecars
+*"currently in active development"*. The Context Management APIs add enrichment
+tables, not event streams. **No documented contract exists for "send this JSON
+and ABA will treat it as agent context."** A third party emitting Observra-shaped
+JSONL to a collector is inference, not a published allow-list. That materially
+weakens Phase 3's downstream half and should be resolved before it is built.
+
+**LogRhythm — and the one actionable finding.** 7.25's Sync Service keeps case
+status, assignee, risk and MITRE alignment aligned between LogRhythm SIEM and
+New-Scale. Case sync, not agent telemetry, exactly as §3.5 concluded.
+
+But custom **MPE rules can leave the gated KB**: the Client Console Rule Builder
+exports and imports rule files, and Community Shareables is a distribution
+channel. Constraints to design against: importer and exporter console versions
+must match, the importing KB version must be at least the exporting one,
+imported rules land in Development and need promotion, and system rules are
+overwritten on KB update. **AIE packs have no documented out-of-band
+distribution format** beyond importing a LogRhythm-authored module.
+
+So the LogRhythm play is buildable on the MPE side and blocked on the AIE side,
+which is a sharper statement than "the gap is real."
+
+### Corpus conversion, costed
+
+- **InjecAgent** — static JSONL, no runtime. Convert each case to one synthetic
+  session. Estimated **half a day to a day**. Vacuous on timing; useful for
+  content checks, which is exactly what CH03 lacks.
+- **AgentDojo** — executes tools and holds real return bodies in
+  `ChatToolResultMessage`. No exporter shaped like `tool_start`/`tool_end`, so it
+  needs a thin tracer around the execution loop. Estimated **two to four days**,
+  and it is the one worth having.
+- **SCAM** — advertises a raw JSON download; schema unchecked.
+
+Explicit warning: **do not treat official result CSVs as telemetry.** They carry
+utility and attack-success bits, not observations.
+
+### Approval prior art, read — and it validates the E26 design
+
+- **Vercel `experimental_toolApprovalSecret`** binds tool name, tool call id and
+  canonical input under HMAC-SHA256. **No nonce, no expiry, no approver
+  identity.** The tool call id is client-minted, which is a spoofing surface, and
+  the default path is unsigned.
+- **aiAuthZ** binds user id, session id, a hash of the message content, a
+  single-use nonce and a timestamp with a 300-second window — but it authenticates
+  **the human message, not the tool call**, and its HMAC is not third-party
+  non-repudiable.
+
+**Neither is a complete single-use signed approval over (tool, arguments,
+expiry, approver).** Cohaera's E26 work — an Ed25519 issuer signature over a
+signing input covering span, tool, argument digest, nonce and a mandatory
+expiry — is not behind either of them, and the two failure modes they document
+are the two it avoided: a shared long-lived HMAC with no time bound, and
+authenticating the wrong object.
+
+### SEP-3140 versus SEP-1766
+
+Verified here by cloning the spec repository at `4e67bdc`: `seps/` holds 43
+documents and contains **neither**. `docs/PRIOR-ART.md` was already careful —
+it recorded reading 3140 from a pull request's head ref, which is consistent —
+and it now says the merged tree was checked.
+
+The new fact is **SEP-1766**, reported as the *tool-definition digest* proposal:
+a SHA-256 digest per `tools/list` entry, client MAY pin, mismatch SHOULD warn or
+block. **That is E25's remedy, proposed upstream.** Read it before building E25's
+fix; if it lands, the digest an approval must bind already exists.
+
+---
+
 ## 4. Phases
 
 Sequenced so the cheapest disconfirming evidence arrives first. **Every phase

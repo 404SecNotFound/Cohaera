@@ -338,15 +338,30 @@ belongs to Exabeam.** That is worth stating plainly rather than burying: the
 nearest neighbour to this project is a commercial product owned by the
 organisation this project is positioned alongside.
 
-What could not be located publicly: a score schema, an API object, a failure
-taxonomy, or any per-check "could not evaluate" payload. So the reported
-difference is the same one that separates every entry in §1 — coverage and
-detection quality assessed as posture, rather than a machine-readable evidentiary
-grade attached to an individual verdict. **That difference is unverified**, rests
-on a marketing page, and should be checked before anyone repeats it.
+**Checked properly, 22 August 2026, and §8's third claim survives — narrowly.**
 
-If Outcomes Navigator does emit a per-detection evidence grade, §8's third claim
-is wrong and this file should say so.
+Coverage is defined as "how well your environment is configured", scored 0–100
+from the amount and quality of data received and parsed, recalculated at least
+daily. The nearest thing to a per-detection signal is the Correlation Rules
+**"satisfied"** bit: a rule is satisfied when *all required fields were actively
+parsed in the past 30 days* and mapped to the use case, and the documentation is
+explicit that *"a rule triggers only if it can evaluate all required fields; if
+the rule only evaluates some fields the rule doesn't trigger and, by definition,
+doesn't have coverage."*
+
+**That is rule-level windowed field presence, and it is not a verdict.** The
+distinction cuts both ways: a rule can be *satisfied* all month and still fire on
+a truncated tool body, and a rule can be *unsatisfied* because a parser was quiet
+for thirty days while today's event is complete. Cohaera's contract is a
+statement about **this session's evidence**, decided at scoring time.
+
+So §8 has to be careful about what it claims. **"Nobody scores whether a rule has
+the fields it needs" would be false — Outcomes Navigator does exactly that, and
+did it first.** What survives is narrower: a machine-readable grade attached to an
+*individual verdict* saying the evidence was insufficient. No public score schema,
+API object or failure taxonomy for that could be located, and Exabeam's published
+Open API surface covers Cloud Connectors, Context Management and Remediation
+rather than Outcomes Navigator. A New-Scale-internal API remains unchecked.
 
 ### MITRE CTID, Summiting the Pyramid
 
@@ -568,6 +583,13 @@ request's own status metadata could not be read — the GitHub API is not
 reachable from this environment — so nothing is asserted here about its
 sponsorship or review state beyond what the checked-in document says.
 
+**Confirmed still a proposal, 22 August 2026.** Cloned
+`modelcontextprotocol/modelcontextprotocol` at `4e67bdc`: the `seps/` tree holds
+43 documents and contains **neither** 3140 nor 1766. Reading a SEP from a pull
+request's head ref and finding no such file in the merged tree are consistent
+facts, and this entry always said which of the two it did. Nothing below has
+been adopted.
+
 **This retires the novelty of Cohaera's capability manifest, and the concession
 should be made without hedging.** SEP-3140 proposes a JWS-signed capability
 manifest bound to a discoverable publisher identity, carrying a
@@ -609,7 +631,20 @@ compete with it.
 shipping tamper-evident agent telemetry. All three found some. **The three lists
 are pairwise disjoint** — no project appears in more than one — and that is the
 most useful thing any of them returned: the space is fragmented, nothing in it is
-canonical, and no single search enumerates it. Assume this table is incomplete.
+canonical, and no single search enumerates it.
+
+**A fourth brief named that for what it is:** *a method failure, not a
+nine-project universe*. It estimates the real space at **roughly 15 to 25**
+public implementations and drafts doing some of {hash chain, per-event or
+checkpoint signature, offline verify}, once IETF drafts and near-misses are
+counted — and says so as an estimate, because its registry scrape was
+bot-blocked.
+
+**Assume this table is incomplete and assume it stays incomplete** until
+somebody runs a census with written inclusion criteria. The operative lesson:
+*"we uniquely do tamper-evident agent logs" is not defensible; "we combine a
+signed chain, per-agent keys, portable evidence and signed gap markers" still
+is.*
 
 Reported, none read here:
 
@@ -621,7 +656,9 @@ Reported, none read here:
 | `phionyx-core` | Signed, hash-chained, offline-checkable evidence receipt per governed turn |
 | `maco144/merkle-audit` | SHA-256 chain plus MMR root per tool call |
 | `Ascendral/codebot-ai` | SHA-256 hash-chained audit log per tool call |
-| Tamra Agent Ledger | Gap-free SHA-256 chain over LLM, tool, retrieval, approval and session events; **Ed25519-signed checkpoints** rather than per-event signatures; a `.tamrapatra` evidence bundle verifiable offline; on Maven Central. Key is ledger- or operator-scoped, not per-agent |
+| ~~Tamra Agent Ledger~~ **NOT FOUND** | Reported by one brief with specifics — signed checkpoints, a `.tamrapatra` bundle, Maven Central. **A second, independent search could not locate any such project**; the name returned an unrelated coin, an unrelated EDR, and two `agentledger` repositories. Treat as unverified and do not cite it. Recorded rather than deleted, because a claim that failed a second search is itself information |
+| `substrateagnostic/agentledger` | Reported: Ed25519 per-entry signatures over RFC 8785 canonical JSON, SHA-256 previous-hash chain, **per-agent** keys, and a `produce` bundle with a hash manifest. Reported as the closest thing to all three legs in one tree |
+| `dembovvski/agentledger` | Reported: every receipt Ed25519-signed, SHA-256 `prev_hash`, `agent_id` is the Ed25519 public key, JSONL receipts with an offline CLI |
 | Microsoft Agent Governance Toolkit | **A distinct Ed25519 key pair per agent** via `AgentIdentity.create()`, previous-hash chaining and Merkle roots. Microsoft's own SOC 2 self-assessment reports **three of its four audit-chain implementations have integrity defects** and recommends only `MerkleAuditChain`; the signing example is labelled learning/prototyping |
 | Gate OC Audit | SHA-256 hash-chained sessions, prompts and tool invocations in SQLite, with verification, NDJSON/CSV export and optional external anchoring. No per-event signatures or per-agent keys documented |
 
@@ -650,6 +687,25 @@ Cohaera does not combine all three either. It has the first, it has key roles
 and rotation in a trust store rather than per-agent attestation, and it has no
 evidence-pack export at all. The narrowed claim is a description of an open
 position, not of an occupied one.
+
+### MCP SEP-1766 — **Unread**
+
+Reported by commissioned research as the MCP proposal that actually addresses
+**tool-definition pinning**: a SHA-256 digest on each `tools/list` entry, which a
+client MAY pin, with a mismatch that SHOULD warn or block. Reported as a GitHub
+issue at status *Proposed* rather than a merged SEP, and confirmed absent from
+the `seps/` tree above.
+
+**This is EVASION.md E25's remedy, proposed upstream by somebody else.** E25 is
+the MCP rug pull: an approval binds the tool name and the arguments, and the
+tool's *definition* changes underneath it. If SEP-1766 lands, the digest an
+approval would need to bind already exists in the protocol, and Cohaera's job
+becomes consuming it rather than inventing one. **Read it before building E25's
+fix.**
+
+Adjacent and non-protocol: FastMCP documents an application-specific fingerprint
+recipe, and `@socialneuron/mcp-server` ships a `tools.lock.json`. Conventions,
+not standards.
 
 ### Auditable Agents and From Agent Traces to Trust — **Unread**
 
