@@ -358,8 +358,39 @@ def test_no_count_is_spelled_as_a_word_where_a_checker_cannot_read_it():
     evaluation card said "seventeen ways" while the file listed twenty-two.
     Both survived a fact checker that reads digits.
     """
-    words = ("fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
-             "twenty-one", "twenty-two")
+    # GENERATED, not typed. This was a hand-maintained tuple running
+    # "fifteen" through "twenty-two", and REVIEW-RESPONSE.md then said
+    # "thirteen Sigma rules" against a pack of 14 and sailed through -- the
+    # eleventh instance of R-20, caught by a human reviewer rather than by the
+    # test built to catch exactly it. The word list was itself an undetected
+    # hand-maintained count, which is the defect the test exists to prevent,
+    # sitting inside the test.
+    #
+    # The floor is ten: below it the words are too common in ordinary prose
+    # ("one of", "two ways") to separate a quantity from a sentence. The
+    # ceiling is generous because a catalogue only grows.
+    _UNITS = ("", "one", "two", "three", "four", "five", "six", "seven",
+              "eight", "nine")
+    _TEENS = ("ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+              "sixteen", "seventeen", "eighteen", "nineteen")
+    _TENS = ("twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+             "eighty", "ninety")
+    words = tuple(_TEENS) + tuple(
+        f"{tens}-{unit}" if unit else tens
+        for tens in _TENS for unit in _UNITS)
+
+    # A spelled number is only a DRIFT RISK when it counts something this
+    # repository tracks. Flagging every one of them produced 43 hits, nearly
+    # all prose -- "forty minutes", "sixty-four bytes", "twelve months" -- and
+    # a test that cries wolf 40 times gets an exemption list bolted to it until
+    # it means nothing, which is how the original narrow list came to exist.
+    #
+    # So the trigger is the word NEXT TO a countable this project derives.
+    # Review-finding counts are deliberately absent: "twenty-one findings" is a
+    # fact about a review that happened, fixed forever, and not a quantity that
+    # can drift.
+    countable = (r"rules?|evasions?|tests?|documents?|checks?|gates?|"
+                 r"Sigma|statements?")
 
     # Covering three files was the mistake. R-20 happened a third time in
     # docs/README.md ("Sixteen documents, about 57,000 words" against 19 and
@@ -387,6 +418,13 @@ def test_no_count_is_spelled_as_a_word_where_a_checker_cannot_read_it():
         # Describes a defect ("assembling the same session eighteen times"),
         # not a quantity that can drift.
         ("eval/README.md", "eighteen"),
+        # Both are facts about reviews that HAPPENED. Eleven denial-of-service
+        # defects were found and closed; twelve regression tests were written
+        # for one specific fix. Neither is a live quantity -- a future review
+        # finding a twelfth defect does not make "eleven" wrong, it makes it
+        # a different sentence about a different review.
+        ("EVASION.md", "eleven"),
+        ("EVASION.md", "twelve"),
     }
 
     tracked = subprocess.run(["git", "ls-files", "*.md"], cwd=REPO,
@@ -396,9 +434,13 @@ def test_no_count_is_spelled_as_a_word_where_a_checker_cannot_read_it():
     for rel in tracked:
         text = (REPO / rel).read_text(encoding="utf-8").lower()
         for word in words:
-            if re.search(rf"\b{re.escape(word)}\b", text):
-                if (rel, word) not in allowed:
-                    offenders.append(f"{rel}: {word!r}")
+            # The word, then at most a few words of slack, then a countable.
+            # Slack rather than adjacency because the real cases read "fourteen
+            # Sigma rules", "twenty-two constructed evasions" and "the other
+            # sixteen still do not ... tests".
+            if re.search(rf"\b{re.escape(word)}\b[^.\n]{{0,40}}?\b(?:{countable})\b",
+                         text) and (rel, word) not in allowed:
+                offenders.append(f"{rel}: {word!r}")
     assert not offenders, (
         "counts spelled as words cannot be checked and have now drifted five "
         "times:\n  " + "\n  ".join(sorted(offenders))
