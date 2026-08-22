@@ -199,6 +199,102 @@ def test_ruleset_targets_main_and_is_active():
     assert ruleset["conditions"]["ref_name"]["include"] == ["refs/heads/main"]
 
 
+def _pull_request_params() -> dict:
+    for rule in load_ruleset()["rules"]:
+        if rule["type"] == "pull_request":
+            return rule["parameters"]
+    pytest.fail("no pull_request rule in the ruleset")
+
+
+def test_a8_independent_approval_is_required():
+    """Item A8. Two P0 trust-kernel fixes merged with no recorded approval.
+
+    Three settings, not one, and the third is the one people forget:
+
+    ``required_approving_review_count``
+        Somebody other than the author said yes.
+    ``require_code_owner_review``
+        ...and it was somebody who owns the touched path, rather than whoever
+        was nearest. CODEOWNERS calls out the schema firewall, the evidence
+        layer and the published numbers individually for exactly this reason.
+    ``require_last_push_approval``
+        ...and they said yes to WHAT LANDED. Without it an approval survives a
+        subsequent push, so the reviewed diff and the merged diff can differ,
+        which is the failure mode a review process is supposed to remove.
+    """
+    params = _pull_request_params()
+    assert params["required_approving_review_count"] >= 1, (
+        "A8: main can be merged with no approval from anybody")
+    assert params["require_code_owner_review"] is True, (
+        "A8: any approval counts, including from somebody who owns none of "
+        "the touched paths")
+    assert params["require_last_push_approval"] is True, (
+        "A8: an approval survives a later push, so the reviewed diff and the "
+        "merged diff need not be the same diff")
+
+
+def test_code_owner_review_has_a_codeowners_file_to_read():
+    """A control that is switched on and enforces nothing.
+
+    ``require_code_owner_review`` asks GitHub to require approval from the
+    owners of the touched paths. With no CODEOWNERS file, or one that matches
+    nothing, there ARE no owners -- and GitHub requires approval from nobody.
+    The setting reads as on in the ruleset and in every screenshot of it, and
+    it gates nothing at all.
+
+    This repository's whole argument is that a check which silently cannot run
+    is a false negative wearing a green tick. That applies to its own controls.
+    """
+    if not _pull_request_params()["require_code_owner_review"]:
+        pytest.skip("code-owner review is off, so there is nothing to back")
+
+    codeowners = REPO / ".github" / "CODEOWNERS"
+    assert codeowners.exists(), (
+        "require_code_owner_review is on and .github/CODEOWNERS does not "
+        "exist, so the rule requires approval from nobody")
+    entries = [line for line in codeowners.read_text(encoding="utf-8").splitlines()
+               if line.strip() and not line.lstrip().startswith("#")]
+    assert entries, "CODEOWNERS is all comments, so it names no owner"
+    assert any(line.split()[0] == "*" for line in entries), (
+        "CODEOWNERS has no '*' rule, so a path it does not list has no owner "
+        "and code-owner review does not gate changes to it")
+
+
+def test_the_bypass_is_declared_rather_than_silent():
+    """The honest half of A8, and the reason this test is not an embarrassment.
+
+    This is a single-maintainer repository and GitHub does not let anyone
+    approve their own pull request. With no bypass, the settings above make
+    main unmergeable rather than well-reviewed -- so the repository admin is a
+    declared bypass actor, and a solo merge is recorded as a bypass in the
+    ruleset audit log rather than passing as a review that happened.
+
+    That is a real weakening and it is written down here rather than left for
+    somebody to discover in the audit log. The distinction the whole project
+    rests on is between a gap that is stated and a gap that is silent; a
+    bypass nobody wrote down would be the second kind.
+
+    WHAT WOULD MAKE THIS TEST DELETABLE: a second person with write access.
+    Then the bypass can go, and this becomes an ordinary two-person review.
+    """
+    ruleset = load_ruleset()
+    params = _pull_request_params()
+    bypass = ruleset.get("bypass_actors", [])
+
+    if params["required_approving_review_count"] == 0:
+        pytest.skip("no approval is required, so a bypass buys nothing")
+
+    assert bypass, (
+        "approvals are required and NOTHING may bypass. On a repository whose "
+        "only code owner is also the only author, that does not mean 'well "
+        "reviewed' -- it means main cannot be merged at all. Either add a "
+        "bypass actor or add a second reviewer.")
+    for actor in bypass:
+        assert actor.get("actor_type"), "a bypass actor with no type"
+        assert actor.get("bypass_mode") in {"always", "pull_request"}, (
+            f"unrecognised bypass_mode {actor.get('bypass_mode')!r}")
+
+
 def test_status_checks_are_strict():
     """Without this, a PR can pass CI against a stale base and merge something
     that was never tested against what it actually lands on."""
