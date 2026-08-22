@@ -59,9 +59,9 @@ themselves, not only by the tests, so the doctrine holds at runtime.
 
 WHAT NO PUBLIC TRACE CORPUS CARRIES
 -----------------------------------
-Both corpora this directory targets -- and, as far as I can find, every public
-agent-trajectory benchmark -- record what the agent DID: a user request, tool
-calls with arguments, tool results or environment feedback, and a final
+All three corpora this directory targets -- and, as far as I can find, every
+public agent-trajectory benchmark -- record what the agent DID: a user request,
+tool calls with arguments, tool results or environment feedback, and a final
 response. None of them record what the surrounding SYSTEM did about it. There
 are no policy decision events, no approval grants bound to call arguments, and
 no receipts from the authority an action actually reached.

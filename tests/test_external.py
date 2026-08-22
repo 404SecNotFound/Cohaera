@@ -36,17 +36,19 @@ from cohaera.checks import (
     ALL_CHECKS,
     CHECK_FAMILIES,
     R_NO_POLICY_EVIDENCE,
+    STATUS_NOT_EVALUATED,
     SURFACE_APPROVAL,
     SURFACE_EFFECT_RECEIPT,
     SURFACE_EVENT_INTEGRITY,
     SURFACE_INJECTION_SCANNER,
     SURFACE_POLICY_SEMANTICS,
+    SequenceGrammar,
     coverage,
     run_all,
 )
 from cohaera.model import scanner_reported
 from eval.external import scope
-from eval.external.adapters import atbench, stepshield
+from eval.external.adapters import agentdojo, atbench, stepshield
 from eval.external.adapters.base import (
     FABRICABLE_FIELDS,
     AdapterError,
@@ -66,6 +68,7 @@ from eval.external.run_external import (
 FIXTURES = Path(__file__).resolve().parent.parent / "eval" / "external" / "fixtures"
 STEPSHIELD_DIR = FIXTURES / "stepshield"
 ATBENCH_FILE = FIXTURES / "atbench" / "ADAPTER-FIXTURE-atbench.jsonl"
+AGENTDOJO_DIR = FIXTURES / "agentdojo"
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +90,16 @@ def test_every_fixture_declares_itself_a_fixture():
             record = json.loads(line)
             assert "_fixture" in record
             assert record["id"].startswith("ADAPTER-FIXTURE-")
+
+    traces = sorted(AGENTDOJO_DIR.rglob("*.json"))
+    assert traces, "agentdojo fixtures missing"
+    for path in traces:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        assert "_fixture" in record, f"{path} does not declare itself"
+        assert record["user_task_id"].startswith("ADAPTER-FIXTURE-")
+        # The path is as visible as the content in a traceback or a log line,
+        # so the marker has to be in the path too.
+        assert "ADAPTER-FIXTURE-" in str(path)
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +217,8 @@ def _first_attack(*, mark_untrusted: bool = False):
 
 def _all_adapted():
     return (stepshield.load_directory(STEPSHIELD_DIR)
-            + atbench.load_path(ATBENCH_FILE))
+            + atbench.load_path(ATBENCH_FILE)
+            + list(agentdojo.load_directory(AGENTDOJO_DIR).sessions))
 
 
 def test_no_adapted_session_carries_fabricated_evidence():
@@ -293,6 +307,364 @@ def test_untrusted_marking_is_off_by_default():
 
     opted_in = _first_attack(mark_untrusted=True)
     assert SURFACE_INJECTION_SCANNER not in opted_in.absences.surfaces
+
+
+# ---------------------------------------------------------------------------
+# 2b. AgentDojo
+# ---------------------------------------------------------------------------
+
+
+def _agentdojo(**kwargs):
+    return agentdojo.load_directory(AGENTDOJO_DIR, **kwargs)
+
+
+def _by_kind(report):
+    return {s.kind: s for s in report.sessions}
+
+
+def test_agentdojo_splits_three_populations_rather_than_two():
+    """The decision the whole reported rate depends on.
+
+    ``security`` is the OUTCOME, not the presence of an attack: benchmark.py
+    sets ``security=True`` when the injection did NOT succeed. An adapter that
+    read it as "is this an attack" would put every repelled trace on the attack
+    side and report a missed detection for every session where there was
+    nothing to detect.
+
+    THE MUTATION THIS EXISTS TO CATCH: ``is_attack=not record["security"]``.
+    That passes any test that only checks the compromised trace, because the
+    compromised trace has ``security=False`` either way. It fails here, on the
+    repelled one.
+    """
+    report = _agentdojo()
+    kinds = _by_kind(report)
+    assert set(kinds) == {agentdojo.KIND_CLEAN, agentdojo.KIND_REPELLED,
+                          agentdojo.KIND_COMPROMISED}
+
+    assert kinds[agentdojo.KIND_COMPROMISED].is_attack is True
+    assert kinds[agentdojo.KIND_CLEAN].is_attack is False
+    # The one that matters: an injection was placed and the agent did not obey
+    # it. There is no deviant behaviour here for a behavioural check to find.
+    assert kinds[agentdojo.KIND_REPELLED].is_attack is False
+
+
+def test_agentdojo_repelled_carries_the_injection_it_repelled():
+    """Repelled is not clean, and the adapted session has to show it.
+
+    If a repelled trace were indistinguishable from a clean one, excluding it
+    from the benign population would look like cherry-picking. It is
+    distinguishable: the attacker's text is in the captured tool result.
+    """
+    kinds = _by_kind(_agentdojo(mark_injected_content=True))
+    repelled = kinds[agentdojo.KIND_REPELLED]
+    clean = kinds[agentdojo.KIND_CLEAN]
+
+    marked = [e for e in repelled.events
+              if e["data"].get("has_injection_patterns")]
+    assert len(marked) == 1, "the repelled trace carries injected content"
+    assert not [e for e in clean.events
+                if e["data"].get("has_injection_patterns")]
+
+
+def test_agentdojo_refuses_a_trace_that_recorded_an_error():
+    """API failures must not enter the population as well-behaved sessions.
+
+    benchmark.py writes ``utility=False; security=True`` from three exception
+    handlers and then saves the trace, so a run that never happened is recorded
+    as secure -- with a truncated message list whose dangling tool call is
+    exactly the shape CH05 fires on. Admitting these would manufacture
+    unpaired-call detections out of somebody's rate limit.
+    """
+    report = _agentdojo()
+    assert report.errored_skipped == 1
+    assert report.files_seen == 6
+    assert len(report.sessions) == 5
+    # Named, not just counted: an operator has to be able to go and look.
+    assert any("user-task-3" in name for name in report.errored_files)
+    assert not any("user-task-3" in s.session_id for s in report.sessions)
+
+
+def test_agentdojo_reads_both_content_schema_generations():
+    """Current AgentDojo carries content blocks; older releases carried strings.
+
+    Run directories accumulate over months, so both shapes turn up in one tree.
+    The bare-string fixture is a complete clean trajectory, so if the flattening
+    failed it would arrive with no final response at all.
+    """
+    assert agentdojo.message_text("plain") == "plain"
+    assert agentdojo.message_text(
+        [{"type": "text", "content": "a"},
+         {"type": "thinking", "content": "b", "id": None}]) == "a\nb"
+    # A provider placeholder, not model output -- including it would put a
+    # constant string into every response CH02 reads.
+    assert agentdojo.message_text(
+        [{"type": "redacted_thinking", "content": "REDACTED"}]) == ""
+
+    old_schema = [s for s in _agentdojo().sessions
+                  if "user-task-4" in s.session_id]
+    assert len(old_schema) == 1
+    types = [e["event_type"] for e in old_schema[0].events]
+    assert types == ["user_message", "tool_start", "tool_end", "model_response"]
+
+
+def test_agentdojo_task_clustering_is_real_unlike_atbench():
+    """The same user task run clean and attacked is one cluster, not two draws.
+
+    This is what makes the bootstrap interval a task-level one here, and it is
+    also what makes the task-disjoint split do real work: without it, the clean
+    rendering of a task could train the baseline that the attacked rendering of
+    the same task is then scored against.
+    """
+    kinds = _by_kind(_agentdojo())
+    assert (kinds[agentdojo.KIND_COMPROMISED].task_id
+            == kinds[agentdojo.KIND_CLEAN].task_id
+            or kinds[agentdojo.KIND_COMPROMISED].task_id
+            != kinds[agentdojo.KIND_CLEAN].task_id)
+
+    by_task: dict[str, set[str]] = {}
+    for session in _agentdojo().sessions:
+        by_task.setdefault(session.task_id, set()).add(session.kind)
+    paired = [kinds_ for kinds_ in by_task.values() if len(kinds_) > 1]
+    assert paired, "no user task appears both clean and attacked"
+    for session in _agentdojo().sessions:
+        assert not session.task_clustering_is_degenerate
+
+
+def test_agentdojo_injection_marking_is_off_by_default():
+    """The oracle must be opted into, or every run is silently label-fed."""
+    default = _by_kind(_agentdojo())[agentdojo.KIND_COMPROMISED]
+    assert SURFACE_INJECTION_SCANNER in default.absences.surfaces
+    assert not [e for e in default.events
+                if "has_injection_patterns" in e["data"]]
+
+    opted_in = _by_kind(
+        _agentdojo(mark_injected_content=True))[agentdojo.KIND_COMPROMISED]
+    assert SURFACE_INJECTION_SCANNER not in opted_in.absences.surfaces
+
+
+def test_agentdojo_containment_never_writes_a_negative_scanner_answer():
+    """The asymmetry that keeps the oracle from buying coverage it did not pay for.
+
+    ``has_injection_patterns: False`` means "a scanner ran and found nothing".
+    Absence of the injected string means no such thing. If the adapter wrote a
+    negative wherever containment failed, CH03 would report itself evaluated
+    across the entire corpus on an answer nobody gave -- which is the exact
+    fabrication base.py refuses, and it would sail past a test that only
+    checked the positive path.
+    """
+    for session in _agentdojo(mark_injected_content=True).sessions:
+        for event in session.events:
+            claimed = event["data"].get("has_injection_patterns")
+            assert claimed is not False, (
+                f"{session.session_id} wrote a negative scanner answer")
+            if claimed is not None:
+                assert claimed is True
+
+
+def test_agentdojo_ignores_injections_too_short_to_match_safely():
+    """A short needle matches ordinary prose by coincidence.
+
+    A coincidental hit would hand CH03 a critical finding on a result carrying
+    nothing attacker-authored, and it would do so on the corpus the project
+    intends to publish numbers from.
+    """
+    trace = {
+        "user_task_id": "t", "suite_name": "s", "attack_type": "a",
+        "injection_task_id": "i", "security": False,
+        "injections": {"tiny": "the"},
+        "messages": [
+            {"role": "assistant", "content": None,
+             "tool_calls": [{"function": "read_file", "args": {}, "id": "c1"}]},
+            {"role": "tool", "tool_call": {"function": "read_file"},
+             "tool_call_id": "c1", "error": None,
+             "content": [{"type": "text",
+                          "content": "the quick brown fox, and the dog"}]},
+        ],
+    }
+    adapted = agentdojo.adapt_trace(trace, mark_injected_content=True)
+    assert not [e for e in adapted.events
+                if e["data"].get("has_injection_patterns")]
+    assert SURFACE_INJECTION_SCANNER in adapted.absences.surfaces
+
+    long_enough = dict(trace)
+    long_enough["injections"] = {"real": "the quick brown fox, and the dog"}
+    marked = agentdojo.adapt_trace(long_enough, mark_injected_content=True)
+    assert [e for e in marked.events
+            if e["data"].get("has_injection_patterns")]
+
+
+def test_agentdojo_refuses_a_trace_with_no_outcome_field():
+    """A trace whose population cannot be established is refused, not bucketed."""
+    trace = {
+        "user_task_id": "t", "suite_name": "s", "attack_type": "a",
+        "injection_task_id": "i", "injections": {}, "messages": [],
+    }
+    with pytest.raises(AdapterError, match="security"):
+        agentdojo.adapt_trace(trace)
+
+
+def test_agentdojo_drops_a_result_with_no_matching_call():
+    """Mispairing a result would move a tool_end onto a different span.
+
+    That is not a cosmetic error: CH05 counts unpaired calls, so pairing a
+    stray result to the wrong call both hides one unpaired call and invents a
+    complete one.
+    """
+    trace = {
+        "user_task_id": "t", "suite_name": "s", "attack_type": None,
+        "injection_task_id": None, "security": True, "injections": {},
+        "messages": [
+            {"role": "tool", "tool_call": {"function": "ghost"},
+             "tool_call_id": "nope", "error": None,
+             "content": [{"type": "text", "content": "orphan"}]},
+            {"role": "assistant", "content": [{"type": "text",
+                                               "content": "done"}],
+             "tool_calls": None},
+        ],
+    }
+    adapted = agentdojo.adapt_trace(trace)
+    assert not [e for e in adapted.events if e["event_type"] == "tool_end"]
+    assert any("no matching call" in note for note in adapted.notes)
+
+
+def test_agentdojo_missing_directory_says_how_to_produce_traces():
+    with pytest.raises(AdapterError, match="pip install agentdojo"):
+        agentdojo.load_directory(AGENTDOJO_DIR / "does-not-exist")
+
+
+def test_agentdojo_event_order_is_identical_at_any_step_size(monkeypatch):
+    """The invariant the adapter itself owes, tested directly.
+
+    The findings-invariance test below is the one that licenses using this
+    corpus, but it is an INDIRECT check: it catches a reordering only when the
+    reordering happens to change a verdict. This one catches the reordering.
+
+    It is not hypothetical. Mutating only the ``tool_end`` offset back to an
+    absolute ``ts + 0.4`` leaves every finding on these fixtures unchanged while
+    silently moving results hundreds of steps away from the calls they belong
+    to at a small step size. That is wrong whether or not it currently shows up
+    in a verdict, and a latent wrong in a converter is how a corpus starts
+    measuring the converter.
+    """
+    def order_at(step: float, epoch: float):
+        monkeypatch.setattr(agentdojo, "STEP_SECONDS", step)
+        monkeypatch.setattr(agentdojo, "EPOCH", epoch)
+        return {
+            session.session_id: [
+                # The span is compared only where THIS adapter assigned it.
+                # base.cim_event derives a fallback span from the timestamp for
+                # events with no explicit one -- user messages, the final
+                # response, the marker -- so those spans are meant to move with
+                # the clock and comparing them would fail the test for a reason
+                # that is not a reordering.
+                (e["event_type"], e["tool_name"],
+                 e["span_id"] if e["event_type"] in ("tool_start", "tool_end")
+                 else None)
+                for e in sorted(session.events, key=lambda e: e["timestamp"])]
+            for session in _agentdojo(mark_injected_content=True).sessions}
+
+    baseline = order_at(1.0, 1_760_000_000.0)
+    assert baseline
+    for step, epoch in ((0.001, 1_000_000_000.0), (0.05, 1_900_000_000.0),
+                        (37.5, 1_600_000_123.0), (900.0, 1_234_567_890.0)):
+        assert order_at(step, epoch) == baseline, (
+            f"the adapted event order changed at step={step}. The step size is "
+            "meant to be arbitrary; an intra-step offset that is an absolute "
+            "constant escapes its own step and reorders the trace.")
+
+
+def test_agentdojo_findings_do_not_depend_on_the_synthetic_clock_spacing(
+        monkeypatch):
+    """THE test that licenses using this corpus at all.
+
+    AgentDojo records no per-message timestamp, so every timestamp on an adapted
+    event is manufactured here. That is admissible for exactly one reason: the
+    manufactured clock is a strictly monotone embedding of the real message
+    order, and no check in this engine reads a duration or a gap -- only the
+    order. So the verdicts are the ones a real clock would have produced.
+
+    That is a claim about the ENGINE, not about the adapter, and it is the kind
+    of claim that stops being true quietly. The day somebody adds a check that
+    reads an interval, this fails -- before an external number is published
+    rather than after.
+
+    It has already earned its place. Written with absolute intra-step offsets
+    (``ts + 0.3``, ``ts + 0.4``) the adapter passed at a 1s step and reordered
+    its own events at a 0.05s step, because the offsets escaped the step they
+    belonged to. The offsets are fractions of the step now.
+    """
+    def score_at(step: float, epoch: float):
+        monkeypatch.setattr(agentdojo, "STEP_SECONDS", step)
+        monkeypatch.setattr(agentdojo, "EPOCH", epoch)
+        report = _agentdojo(mark_injected_content=True)
+        built = {s.session_id: build_session(s) for s in report.sessions}
+        grammar = SequenceGrammar().fit(
+            [built[s.session_id] for s in report.sessions
+             if s.kind == agentdojo.KIND_CLEAN])
+        out = {}
+        for session in report.sessions:
+            findings, cov = run_all(built[session.session_id], grammar=grammar)
+            out[session.session_id] = (
+                sorted(f"{f.check}:{f.severity}" for f in findings),
+                sorted((c["check"], c["status"], round(c["confidence"], 6),
+                        tuple(c["reasons"])) for c in cov["checks"]))
+        return out
+
+    baseline = score_at(1.0, 1_760_000_000.0)
+    assert baseline, "nothing was scored"
+    for step, epoch in ((0.001, 1_000_000_000.0), (0.05, 1_900_000_000.0),
+                        (37.5, 1_600_000_123.0), (900.0, 1_234_567_890.0)):
+        assert score_at(step, epoch) == baseline, (
+            f"findings changed at step={step}. Either the adapter no longer "
+            "preserves message order under a different step, or a check has "
+            "started reading the clock for something other than order -- in "
+            "which case no number from a converted corpus is trustworthy.")
+
+
+def test_agentdojo_scores_the_compromised_trace_and_not_the_others():
+    """A shape assertion, not a performance number.
+
+    Five hand-written fixtures cannot measure recall and nothing here should be
+    quoted as if they could. What they can show is that the three populations
+    are separable at all -- if the compromised trace scored the same as the
+    clean one, the adapter would be mapping away the signal and every rate
+    computed downstream would be measuring the converter.
+    """
+    report = _agentdojo(mark_injected_content=True)
+    built = {s.session_id: build_session(s) for s in report.sessions}
+    grammar = SequenceGrammar().fit(
+        [built[s.session_id] for s in report.sessions
+         if s.kind == agentdojo.KIND_CLEAN])
+
+    fired = {}
+    for session in report.sessions:
+        findings, _ = run_all(built[session.session_id], grammar=grammar)
+        fired.setdefault(session.kind, []).append({f.family for f in findings})
+
+    assert all(not f for f in fired[agentdojo.KIND_CLEAN])
+    assert all(not f for f in fired[agentdojo.KIND_REPELLED])
+    compromised = fired[agentdojo.KIND_COMPROMISED][0]
+    assert "CH02_concealment_gap" in compromised
+    assert "CH03_untrusted_to_consequential" in compromised
+
+
+def test_agentdojo_declines_the_control_plane_checks_on_every_session():
+    """The output that is actually the point, asserted rather than admired."""
+    report = _agentdojo(mark_injected_content=True)
+    built = {s.session_id: build_session(s) for s in report.sessions}
+    grammar = SequenceGrammar().fit(
+        [built[s.session_id] for s in report.sessions
+         if s.kind == agentdojo.KIND_CLEAN])
+    for session in report.sessions:
+        cov = coverage(built[session.session_id], grammar)
+        by_check = {c["check"]: c for c in cov["checks"]}
+        for check in ("CH04_guardrail_overrun", "CH06_evidence_integrity",
+                      "CH07_effect_contradiction"):
+            entry = by_check[check]
+            assert entry["status"] == STATUS_NOT_EVALUATED, (
+                f"{check} claims to have evaluated {session.session_id}, on a "
+                "corpus with no control plane behind it")
+            assert entry["reasons"], "a decline without a reason is a shrug"
 
 
 # ---------------------------------------------------------------------------

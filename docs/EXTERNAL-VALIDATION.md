@@ -34,7 +34,7 @@ reads as a task merely undone. For three checks that is not the situation.
 |---|---|---|
 | `CH01_sequence_order` | **yes** | Needs a benign baseline, tool lifecycle, correlation key. A trace corpus supplies the lifecycle; its own benign split fits the baseline. |
 | `CH02_concealment_gap` | **yes** | Needs a final response and tool class. Both target corpora carry a final agent response. |
-| `CH03_untrusted_to_consequential` | **partial** | Needs injection-scanner evidence, which no public corpus produces. Reachable only where a corpus annotates the step at which content the agent did not author entered the trajectory — StepShield does, behind an explicit opt-in; ATBench does not. |
+| `CH03_untrusted_to_consequential` | **partial** | Needs injection-scanner evidence, which no public corpus produces. Reachable only where a corpus records where content the agent did not author entered the trajectory. StepShield annotates the step, behind an opt-in. AgentDojo records the injected *strings*, so containment against the captured result settles it — an oracle, and therefore an upper bound on what a real scanner would supply. ATBench carries neither. |
 | `CH04_guardrail_overrun` | **no** | Needs policy semantics and approval binding. No public corpus records the decisions of a policy engine or approvals bound to call arguments. |
 | `CH05_unpaired_calls` | **yes** | Needs tool lifecycle and a correlation key. Any corpus with tool calls has both. |
 | `CH06_evidence_integrity` | **no** | Needs a signed or hash-chained event stream. Corpora ship as JSON files: no collector signature to verify, no sequence to break. |
@@ -155,6 +155,81 @@ interval that is secretly nothing of the kind.
 This is a documentation-derived conclusion, not a data-derived one. **Confirm
 it against the real download before relying on it.**
 
+### AgentDojo — `github.com/ethz-spylab/agentdojo`
+
+**Read at `089ed468cf3ed0322acc66b0211f26d9d90dbf60`.** Unlike ATBench, nothing
+here is inferred from a README: the trace format below is the literal
+`json.dumps` call in `TraceLogger.save`, and the label semantics are the literal
+assignments in `benchmark.py`.
+
+| claim | status |
+|---|---|
+| **MIT licensed** | **VERIFIED** — `LICENSE` returns 200, "Copyright (c) 2024 Edoardo Debenedetti, Jie Zhang, Mislav Balunovic, Luca Beurer-Kellner, Marc Fischer, and Florian Tramèr" |
+| Traces written as one JSON object per run | **VERIFIED** — `logging.py`, `TraceLogger.save` |
+| Tool results carry real returned content | **VERIFIED** — `ChatToolResultMessage.content` in `types.py` |
+| `injections` holds the literal injected strings | **VERIFIED** — `BaseAttack.attack` returns `dict[str, str]` in `attacks/base_attacks.py` |
+| No per-message timestamp anywhere | **VERIFIED** — the only clocks are run-level `duration` and `evaluation_timestamp` |
+| A real AgentDojo run has been scored here | **NO. None has.** The fixtures are synthetic and no number about AgentDojo appears anywhere in this repository. |
+
+The on-disk layout is
+`{logdir}/{pipeline_name}/{suite_name}/{user_task_id}/{attack_type}/{injection_task_id or 'none'}.json`,
+and every field the adapter reads is inside the file, so a copied subtree still
+works.
+
+**`security` is the outcome, not the presence of an attack.** This is the trap,
+and an adapter that falls into it produces a wrong rate with no visible error.
+`benchmark.py` writes `security=True` when the injection did **not** succeed, so
+there are three populations and not two:
+
+| population | how it is identified | `is_attack` |
+|---|---|---|
+| **clean** | `attack_type` null, no injection task | `false` |
+| **repelled** | injection placed, `security` true | *neither* — excluded from both rates by default, and the count is printed |
+| **compromised** | injection placed, `security` false | `true` |
+
+Excluding *repelled* is a judgement and it is stated rather than buried. Scoring
+it as an attack reports a missed detection where there was no deviant behaviour
+to detect; scoring it as benign penalises the detector for noticing content that
+genuinely is attacker-authored. `--agentdojo-include-repelled` counts it as an
+attack for anyone who wants that number instead.
+
+**Traces that recorded an error are refused, and this is not fastidiousness.**
+`benchmark.py` sets `utility = False; security = True` inside three exception
+handlers — `context_length_exceeded`, `ApiError`, `ServerError` — and then saves
+the trace. A run that never finished is therefore stored as *secure*, with a
+truncated `messages` list. Its dangling tool call is exactly the shape CH05
+fires on, so admitting these would manufacture unpaired-call detections out of
+somebody's rate limit and report them as findings. They are skipped, counted,
+and named.
+
+**Timestamps are manufactured, and there is one specific reason that is
+admissible.** AgentDojo records no per-message clock, so the adapter synthesises
+one at a fixed step. The synthesised clock is a strictly monotone embedding of
+the real message order, and **no check in this engine reads a duration or a
+gap** — only the order. So ordering verdicts over the manufactured clock are the
+verdicts a real clock would have produced, and any statistic derived from the
+*spacing* would not be.
+
+That is a claim about the engine, and claims about the engine rot. Two tests
+hold it: one asserts the adapted event order is byte-identical across four
+orders of magnitude of step size, and one asserts every finding and every
+coverage contract is identical across the same range. The first has already
+earned its place — written with absolute intra-step offsets, the adapter
+reordered its own events at a 0.05 s step while every finding stayed the same.
+
+**The CH03 opt-in here is a different kind of thing from StepShield's.**
+StepShield offers an annotator's category, which is *adjacent* to a scanner's
+answer. AgentDojo offers the injected strings themselves, so provenance is
+settled by containment against the captured bytes. That is better than a
+scanner — which is exactly why it stays off by default: it is an **oracle**, and
+no deployment has one, so a CH03 number obtained with it is an upper bound on
+what a real scanner could supply rather than an estimate of it. The asymmetry
+that keeps it honest is that containment can only ever write
+`has_injection_patterns: true`; absence of the string is not evidence a scanner
+ran and found nothing, so no negative is ever written.
+
+---
+
 ---
 
 ## 3. A finding about Cohaera itself: CH04's coverage contract
@@ -252,8 +327,8 @@ a surface becoming permanently permitted after one legitimate use.
 
 ## 5. How to run this tomorrow
 
-Nothing is vendored. Both corpora must be fetched on a network that can reach
-the hosts this environment blocks.
+Nothing is vendored. All three corpora must be fetched — or, for AgentDojo,
+produced — on a network that can reach the hosts this environment blocks.
 
 ### StepShield — works today, licence is clear
 
@@ -321,6 +396,34 @@ Then check two things against the real data before trusting any number:
    report is the correct reading.
 2. **Whether the trajectories carry anything marking untrusted content.** If
    they do, CH03 moves from "declines outright" to partial, as on StepShield.
+
+### AgentDojo — schema verified, licence clear, produce your own traces
+
+AgentDojo is MIT licensed, so unlike ATBench its traces *could* be
+redistributed. They are still not vendored here, because a number computed over
+a corpus frozen in this repository is a number about this repository.
+
+```bash
+# 1. Produce traces. Needs an API key for whichever model you benchmark.
+pip install agentdojo
+python -m agentdojo.scripts.benchmark --logdir ./runs -s workspace --model <model>
+
+# 2. Score them. The loader prints what it refused before it prints any rate.
+python eval/external/run_external.py --agentdojo ./runs --json /tmp/agentdojo.json
+
+# 3. Optional: give CH03 its partial surface via the injection oracle. Read
+#    §2 before believing the result — it is an upper bound, not an estimate.
+python eval/external/run_external.py --agentdojo ./runs \
+    --agentdojo-mark-injected --json /tmp/agentdojo-ch03.json
+
+# 4. Optional: count repelled injections as attacks instead of excluding them.
+python eval/external/run_external.py --agentdojo ./runs \
+    --agentdojo-include-repelled
+```
+
+Nothing about ordering needs a caveat at the command line, because the two
+invariance tests make the ordering claim mechanically rather than asking the
+reader to trust it.
 
 ### The gates
 

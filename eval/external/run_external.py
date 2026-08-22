@@ -57,6 +57,7 @@ import hashlib
 import json
 import sys
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -77,7 +78,7 @@ from cohaera.ingest import assemble  # noqa: E402
 from cohaera.limits import DEFAULT_LIMITS, Limits  # noqa: E402
 from cohaera.model import Event, Session  # noqa: E402
 from eval.external import scope  # noqa: E402
-from eval.external.adapters import atbench, stepshield  # noqa: E402
+from eval.external.adapters import agentdojo, atbench, stepshield  # noqa: E402
 from eval.external.adapters.base import AdaptedSession, AdapterError  # noqa: E402
 from eval.harness import ALERTING_SEVERITIES  # noqa: E402
 from eval.metrics import Outcome, check_attribution, summarise  # noqa: E402
@@ -293,16 +294,60 @@ def scope_audit(cov_report: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def load(args: argparse.Namespace) -> tuple[str, list[AdaptedSession]]:
+def load(args: argparse.Namespace
+         ) -> tuple[str, list[AdaptedSession], dict[str, Any]]:
+    """Adapt the selected corpus, and report what loading it left out.
+
+    The third element exists for AgentDojo and is empty for the other two. Its
+    contents are not decoration: a corpus whose loader silently drops a
+    population reports a rate over a set nobody can name, and AgentDojo's
+    loader drops two -- traces that recorded an error, and, by default, traces
+    where an injection was placed and repelled. Both counts travel with the
+    result and are printed.
+    """
     if args.stepshield:
         return "stepshield", stepshield.load_directory(
             Path(args.stepshield),
-            mark_untrusted_from_labels=args.stepshield_mark_untrusted)
-    return "atbench", atbench.load_path(Path(args.atbench))
+            mark_untrusted_from_labels=args.stepshield_mark_untrusted), {}
+    if args.agentdojo:
+        report = agentdojo.load_directory(
+            Path(args.agentdojo),
+            mark_injected_content=args.agentdojo_mark_injected)
+        sessions = list(report.sessions)
+        notes = report.as_dict()
+
+        # The three-way split, resolved here rather than in the adapter. See
+        # the adapter docstring: `security` is the OUTCOME, so a repelled trace
+        # is an attack that was placed and did not land. Scoring it as an
+        # attack reports a missed detection where there was no deviant
+        # behaviour to detect; scoring it as benign penalises the detector for
+        # noticing content that really is attacker-authored. It is excluded,
+        # and the exclusion is a printed number rather than a silent filter.
+        repelled = [s for s in sessions if s.kind == agentdojo.KIND_REPELLED]
+        notes["repelled_total"] = len(repelled)
+        if args.agentdojo_include_repelled:
+            notes["repelled_policy"] = (
+                "counted as attacks (--agentdojo-include-repelled)")
+            sessions = [
+                s if s.kind != agentdojo.KIND_REPELLED
+                else replace(s, is_attack=True)
+                for s in sessions]
+        else:
+            notes["repelled_policy"] = "excluded from both rates (default)"
+            sessions = [s for s in sessions
+                        if s.kind != agentdojo.KIND_REPELLED]
+        if not sessions:
+            raise AdapterError(
+                "every adapted AgentDojo trace was excluded. With only "
+                f"{notes['repelled_total']} repelled trace(s) and nothing "
+                "else, there is no population to score.")
+        return "agentdojo", sessions, notes
+    return "atbench", atbench.load_path(Path(args.atbench)), {}
 
 
 def run(sessions: list[AdaptedSession], corpus: str,
-        limits: Limits = DEFAULT_LIMITS) -> dict[str, Any]:
+        limits: Limits = DEFAULT_LIMITS,
+        source_report: dict[str, Any] | None = None) -> dict[str, Any]:
     """Fit, score and summarise. The whole measurement, as one dict."""
     train, test = split_tasks(sessions)
     if not test:
@@ -325,6 +370,7 @@ def run(sessions: list[AdaptedSession], corpus: str,
 
     return {
         "corpus": corpus,
+        "source_report": source_report or {},
         "adapted_sessions": len(sessions),
         "train_sessions": len(train),
         "benign_train_sessions": len(benign_train),
@@ -377,6 +423,25 @@ def render(result: dict[str, Any]) -> str:
         f"(task-disjoint)")
     add(f"CH01 baseline fitted: {result['baseline_fitted']} "
         f"(on {result['benign_train_sessions']} benign training sessions)")
+    source = result.get("source_report") or {}
+    if source:
+        add("")
+        add("WHAT LOADING LEFT OUT -- read before the rates")
+        if source.get("files_seen") is not None:
+            add(f"  trace files seen                : {source['files_seen']}")
+        if source.get("errored_skipped"):
+            add(f"  refused, recorded an error      : "
+                f"{source['errored_skipped']}  (a run that never finished is "
+                f"saved as secure)")
+        if source.get("unparsable_skipped"):
+            add(f"  refused, not a trace            : "
+                f"{source['unparsable_skipped']}")
+        if source.get("repelled_total") is not None:
+            add(f"  injection placed and repelled   : "
+                f"{source['repelled_total']}  -- {source['repelled_policy']}")
+        if source.get("kinds"):
+            add("  populations                     : "
+                + ", ".join(f"{k}={v}" for k, v in source["kinds"].items()))
     add("")
 
     head = result["headline"]
@@ -454,6 +519,23 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument(
         "--atbench", metavar="FILE",
         help="ATBench trajectories as a JSON array or JSONL file.")
+    source.add_argument(
+        "--agentdojo", metavar="DIR",
+        help="An AgentDojo run directory, as written by TraceLogger -- "
+             "typically ./runs.")
+    parser.add_argument(
+        "--agentdojo-mark-injected", action="store_true",
+        help="Opt in to treating AgentDojo's recorded injection strings as "
+             "untrusted-content evidence for CH03, by testing whether each "
+             "one is contained in a captured tool result. OFF by default: it "
+             "is an ORACLE no deployment has, so it bounds what a real "
+             "scanner could supply rather than estimating it.")
+    parser.add_argument(
+        "--agentdojo-include-repelled", action="store_true",
+        help="Count traces where an injection was placed and the agent did "
+             "not obey it as attacks. OFF by default, because there is no "
+             "deviant behaviour in them for a behavioural check to find; the "
+             "excluded count is printed either way.")
     parser.add_argument(
         "--stepshield-mark-untrusted", action="store_true",
         help="Opt in to treating StepShield's per-step rogue annotation on "
@@ -465,8 +547,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        corpus, sessions = load(args)
-        result = run(sessions, corpus)
+        corpus, sessions, source_report = load(args)
+        result = run(sessions, corpus, source_report=source_report)
     except AdapterError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
