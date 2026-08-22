@@ -84,9 +84,14 @@ SCOPE: tuple[ScopeEntry, ...] = (
     ScopeEntry(
         CH03_FAMILY, PARTIAL,
         "Needs injection-scanner evidence, which no public corpus produces. It "
-        "is partially reachable only where a corpus annotates the step at which "
-        "content the agent did not author entered the trajectory -- StepShield "
-        "does, behind an explicit opt-in; ATBench does not.",
+        "is partially reachable only where a corpus records where content the "
+        "agent did not author entered the trajectory. StepShield annotates the "
+        "step, behind an explicit opt-in. AgentDojo is stronger and still not "
+        "a scanner: it records the injected STRINGS, so the question is settled "
+        "by containment against the captured result rather than by trusting an "
+        "annotation -- which makes it an oracle, and an upper bound on what a "
+        "real scanner would supply, not an estimate of it. ATBench carries "
+        "neither.",
         frozenset({SURFACE_INJECTION_SCANNER})),
     ScopeEntry(
         CH04_FAMILY, NOT_VALIDATABLE,
