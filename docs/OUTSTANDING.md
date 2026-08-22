@@ -169,16 +169,37 @@ made deliberately rather than as a side effect.
 
 ## D. Blocked on repository access
 
-Neither can be done from an automation session; both need the repository owner.
+Both need the repository owner; neither can be done from an automation session.
+A8 below is now closed as far as one maintainer can close it, and the entry
+states what it still does not buy.
 
 - [ ] **Tag and publish v0.3.0.** Artefacts are built, committed and internally
       consistent — `tools/release_gate.py` passes. The tag push and the release
       API both return 403 through the egress proxy. Run `git tag -a v0.3.0` and
       push from a machine with direct access.
-- [ ] **Require independent approvals** (item A8). `.github/rulesets/main.json`
-      needs `required_approving_review_count`, code-owner review and last-push
-      approval. Applying a ruleset needs admin; the automation token gets 403.
-      Settings → Rules.
+- [x] **Require independent approvals** (item A8). `.github/rulesets/main.json`
+      now sets `required_approving_review_count: 1`, `require_code_owner_review`
+      and `require_last_push_approval`, pinned by `tests/test_ci_config.py`.
+      Applying it live still needs admin; the automation token gets 403, so the
+      committed file is the source of truth and a maintainer syncs it.
+
+      **This entry previously said "two minutes of repository settings", and
+      that was wrong in the direction that bites.** `.github/CODEOWNERS` names
+      one owner, GitHub forbids approving your own pull request, and the live
+      ruleset had an empty bypass list. Setting the three fields alone would
+      not have produced independent review — it would have made `main`
+      permanently unmergeable.
+
+      So the repository admin is a **declared bypass actor**. A solo merge is
+      recorded as a bypass in the ruleset audit log instead of passing as a
+      review that happened. That is a real weakening of A8 and it is written
+      down rather than left in the audit log to be discovered: the whole
+      argument of this project is that a stated gap and a silent one are
+      different objects.
+
+      **A8 is closed as far as one maintainer can close it. What would finish
+      it is a second person with write access** — then the bypass goes and
+      `test_the_bypass_is_declared_rather_than_silent` can be deleted.
 
 ---
 
@@ -207,9 +228,11 @@ judgement call rather than a fix.
 Three things, in this order, and the reasoning is about leverage rather than
 severity:
 
-1. **A8, require independent review.** Two minutes of repository settings, and
-   it changes how everything below it gets reviewed. Two P0 trust-kernel fixes
-   merged today with no recorded approval on either.
+1. ~~**A8, require independent review.**~~ **Done, with a stated limit.** The
+   ruleset requires an approval, code-owner review and last-push approval, and
+   the admin bypass that keeps a single-maintainer repository mergeable is
+   declared in §D rather than implied. It is not two-person review until there
+   is a second person.
 2. **A5, the free evasions.** 19 attacks that need no attacker capability, most
    with cheap remedies. Best security-per-hour on this page.
 3. **A9, split the trust kernel.** Before it grows again. The ordering defect
