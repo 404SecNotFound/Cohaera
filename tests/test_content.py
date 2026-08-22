@@ -503,6 +503,37 @@ def test_every_evidence_number_in_a_rule_matches_the_card(path):
     rule = load_rule(path)
     evidence = rule["custom"]["evidence"]
     family = evidence.get("check")
+
+    # A check ID inside a scored family that the card does not score SEPARATELY.
+    # The card's unit is the coverage family, so a check ID added after the
+    # family was measured inherits numbers that were taken without it. Rather
+    # than quote them -- which is the laundering this module exists to stop --
+    # or drop the family and lose the link, the rule declares the gap. The two
+    # protections that matter are kept: no numeric key may appear, and the rule
+    # may not be production. See the CH05 quarantine for the same doctrine
+    # applied to a family the corpus has no attacks for.
+    unscored = evidence.get("unscored_check_id")
+    if unscored is not None:
+        assert unscored in ALL_CHECKS, (
+            f"{path.name} declares {unscored!r} unscored, and the engine never "
+            f"emits it")
+        assert CHECK_FAMILIES[unscored] == family, (
+            f"{path.name} says {unscored!r} is unscored within {family!r}, but "
+            f"the engine files it under {CHECK_FAMILIES[unscored]!r}")
+        assert selected_checks(rule) == {unscored}, (
+            f"{path.name} claims one unscored check ID but selects "
+            f"{sorted(selected_checks(rule))}; a rule mixing a scored check "
+            f"with an unscored one would report the measured half only")
+        assert rule["custom"]["deployment_tier"] != "production", (
+            f"{path.name} is production on a check ID the card does not score. "
+            f"That is a deployability claim with no measurement behind it.")
+        for key in EVIDENCE_KEYS:
+            assert key not in evidence, (
+                f"{path.name} declares {unscored!r} unscored and still quotes "
+                f"{key}, which can only have come from the family's other "
+                f"checks")
+        return
+
     if family is None:
         assert declared_family(rule) is None, (
             f"{path.name} declares no check but selects "
@@ -594,8 +625,14 @@ def test_the_tiers_partition_the_pack_the_way_the_card_does():
     assert by_tier["production"] == {"CH04_guardrail_overrun",
                                      "CH06_evidence_integrity",
                                      "CH07_effect_contradiction"}
+    # CH04 appears in BOTH tiers, and that is the inventory rather than a leak.
+    # Three of its check IDs are measured at zero benign hits and page; the
+    # fourth, CH04_undeclared_control_cited, is not scored by the card at all
+    # and ships at hunt saying so. A family is not uniformly deployable just
+    # because most of it is.
     assert by_tier["hunt"] == {"CH01_sequence_order", "CH02_concealment_gap",
                                "CH03_untrusted_to_consequential",
+                               "CH04_guardrail_overrun",
                                "CH05_unpaired_calls"}
     assert by_tier["dashboard"] == {None}
     assert set(card_checks()) == set().union(*by_tier.values()) - {None}

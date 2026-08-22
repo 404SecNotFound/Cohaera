@@ -712,6 +712,16 @@ def _add_common(p: argparse._ActionsContainer) -> None:
                         "baseline) carries a signature that verified. Off by default "
                         "because it would break every existing deployment; on, it is "
                         "what turns the signature from an option into a control.")
+    p.add_argument("--seen-approvals", metavar="PATH",
+                   help="Ledger of spent approval nonces, so one approval "
+                        "cannot authorise a second call in a later run "
+                        "(EVASION.md E26). Inherits E22 whole: the file is "
+                        "unsigned by necessity and is per-host.")
+    p.add_argument("--require-signed-approvals", action="store_true",
+                   help="An approval that no issuer signed does not cover a "
+                        "call. OFF by default: turning it on in a deployment "
+                        "that has issued no approval keys makes every "
+                        "authorised action look like a bypass.")
     p.add_argument("--seen-streams", metavar="PATH",
                    help="JSON OBSERVATION ledger of collector streams already "
                         "seen, kept BETWEEN runs. It is what detects a stream "

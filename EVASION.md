@@ -40,7 +40,8 @@ sandbox this revision was written in — so each entry cites an ID and a title,
 says so on its face, and asserts only what its fixture measures against this
 tree. Nothing below paraphrases a result, a number or an author.
 
-Four more — E03, E11, E13 and E16 — have had half of their impact removed. For
+Seven more — E03, E09, E11, E13, E16, E24 and E26 — have had half of their
+impact removed. For
 E13 that half is now substantial rather than cosmetic: on a stream carrying
 `cohaera.integrity:1`, deleting or modifying a record is **detected and
 localised** instead of noticed by accident. The attack is not closed, because
@@ -111,7 +112,7 @@ same distinction without splitting the counts four ways.
 | E06 | `half_closed` | T0 | CH02 | Emit no final response | none | Free | Partial, coverage sees it |
 | E07 | `working` | T0 | CH03 | Act first, read untrusted content second | none | Free | No |
 | E08 | `half_closed` | T0 | CH03 | Split read and act across two sessions | none | Free | Partial |
-| E09 | `working` | T0 | CH03 | Stay below observra's five regexes | none | Free | Yes, scan locally |
+| E09 | `half_closed` | T0 | CH03 | Stay below observra's five regexes | **captured results** | Free | Half closed *only where results are captured*; the blind spot is reported, the ceiling stands |
 | E10 | `working` | T0 | CH04 | Act before the threshold trips | none | Free | Yes |
 | E11 | `half_closed` | T1 | CH05 | Fabricate a terminal event | none | Emitter access | Half closed, CH07 catches a fabricated *failure* |
 | E12 | `working` | T1 | all | Fragment session_id on call boundaries | none | Emitter access | No |
@@ -128,9 +129,9 @@ same distinction without splitting the counts four ways.
 | E22 | `half_closed` | T2 | CH06 | Delete the seen-stream ledger, then replay the stream | `--seen-streams` in use | Write access to one local file | Half closed, the ledger is unsigned by necessity |
 | E22b | `working` | T2 | CH06 | Replay the stream to a *different* Cohaera host | `--seen-streams` in use | A second collector | Open, the ledger is per-host |
 | E23 | `half_closed` | T0 | CH03, CH04 | Stamp the consequential call on the control's own tick | no *verified* collector sequence | Free, one field | Half closed, coverage sees it |
-| E24 | `working` | T0 | CH04, CH07 | Fabricate the policy event that explains away a call that failed | none | Free, one event | Needs the control named in the manifest, signed by a second key |
+| E24 | `half_closed` | T0 | CH04, CH07 | Fabricate the policy event that explains away a call that failed | **declared policies** | Free, one event | Half closed *only where the manifest declares controls*; citing a declared one still works, unsigned |
 | E25 | `working` | T0 | CH04 | Change the tool definition between approval and invocation | approvals in use | Free, an MCP rug pull | Yes, a tool-definition digest in `cohaera.approval:1` |
-| E26 | `working` | T0 | CH04 | Replay one approval across calls and across sessions | approvals in use | Free, one field | Yes, a nonce, a mandatory window and an issuer signature |
+| E26 | `half_closed` | T0 | CH04 | Replay one approval across calls and across sessions | **signed approvals** | Free, one field | Half closed *only where the operator issues approval keys and requires them*; the default deployment is unchanged |
 | E26b | `remedy` | — | — | An **unedited** approval does not cover a second call | — | — | *unplanned win* |
 | E27 | `working` | T0 | CH03 | Launder the taint through a marker-free derived artefact | none | Free | No, the label has to travel with the value |
 | E28 | `working` | T0 | CH03 | Make the durable memory write the consequential call | no manifest entry | Free, the default | Ship a manifest entry for the memory tools |
@@ -226,8 +227,59 @@ recorded upstream, it has nothing to order. It therefore inherits every blind
 spot of observra's five-regex scanner, which is only ever applied to user input
 in the first place (see [FINDINGS.md](FINDINGS.md) F-01). That ceiling is low.
 
-**Fixable here:** scan `tool_result` inside Cohaera when `capture_tool_data` is
-on, rather than depending on upstream markers.
+**HALF CLOSED, 21 August 2026, and the split matters more than the closure.**
+
+This entry used to end "**Fixable here:** scan `tool_result` inside Cohaera".
+Finding F-16 had already refused precisely that, on the grounds that a detector
+generating its own taint evidence would be grading its own work. Two documents
+in this repository gave opposite instructions for two revisions and nothing
+noticed, because the contradiction was in the *reasoning* rather than in a
+count — and counts are the only thing here that anything recomputes.
+
+Both statements turn out to be right about different things, and the resolution
+is the tiering CH07's receipts already got. An upstream scanner answer is
+evidence about content, produced where the content arrived. A local pass is
+evidence about **the scanner** — whether its answer covered what was in front of
+it. So [`src/cohaera/content_scan.py`](src/cohaera/content_scan.py) scans, and
+what it produces is barred by construction from behaving like a marker:
+
+- it never makes `scanner_marked` true, so **no CH03 finding is ever built on
+  it** and Cohaera never decides on its own regexes that a session is tainted;
+- it never moves CH03 off `not_evaluated`, because a second opinion about
+  content nobody scanned is not a scanner;
+- it can **only lower a confidence or add a remedy**, never raise one. There is
+  no content an attacker can supply that buys a session a cleaner report.
+
+What that closes is the half an operator can act on. A session whose reads
+returned pages of override text used to report exactly what one returning a
+postcode reported. It now says `UNSCANNED_CONTENT_CARRIES_MARKERS`, or — where
+a scanner examined the call and called it clean — `SCANNER_ANSWER_CONTRADICTED_BY_CONTENT`,
+and names the calls. The second is E09 itself, made visible: text below the five
+regexes, with the disagreement recorded against the scanner rather than the
+session.
+
+**What is not closed is the ceiling**, and it cannot be closed here. Cohaera's
+patterns are patterns too. An attacker who stays below observra's five regexes
+and below Cohaera's five is in exactly the position E09 describes, with one more
+list to evade and no reason to think that is hard. The contradiction penalty is
+halved rather than total for the same reason: a disagreement between two regex
+lists may be Cohaera's error.
+
+**Two things this has NOT been measured against, stated because the temptation
+to imply otherwise is the whole reason this file exists.**
+
+The evaluation corpus cannot exercise it in either direction. Its 216
+injection-marked records carry no `tool_result` at all, and all 7,156 captured
+results in it are the literal string `ok`. So the corpus produced zero false
+positives from this module and zero true ones, and neither number means
+anything. **The corpus has no content channel, which also means CH03's content
+story is untested by it** — a gap worth more than this entry.
+
+And nothing here has been run against an independently authored corpus. The
+patterns were written by the same person as the detector, which is the standing
+argument of *The Attacker Moves Second* applied to the fix rather than the
+attack. Until that changes, the honest description of this module is "a second
+regex list, whose disagreements are worth a look".
 
 ---
 
@@ -439,15 +491,33 @@ reason:
   there is nothing to contradict. CH07 is the one check in this repository that
   can catch a lying emitter, and it can only catch the lie in one direction.
 
-The gap is the question neither asks: **did this control exist?** A policy event
-is accepted as a control on the strength of its own `policy_id`. An operator
-manifest that declares a different control entirely does not make the
-undeclared one suspicious — it only changes where CH04 would have taken its
-enforcement semantics from, and the coverage code for that
-(`POLICY_ENFORCEMENT_DECLARED_IN_BAND`) is about *semantics*, not about
-*existence*. There is no reason code for an unattributable control, and
-`test_evasion_24_fabricate_the_control_event` asserts that there is not, so the
-assertion fails the day somebody builds one.
+The gap was the question neither asks: **did this control exist?** A policy
+event is accepted as a control on the strength of its own `policy_id`, and an
+operator manifest declaring a different control entirely did not make the
+undeclared one suspicious — it only changed where CH04 took its enforcement
+semantics from. The coverage code for that
+(`POLICY_ENFORCEMENT_DECLARED_IN_BAND`) is about *semantics*, not *existence*.
+
+**HALF CLOSED, 21 August 2026.** `CH04_undeclared_control_cited` now asks it. A
+policy event citing a control the operator's manifest does not declare raises a
+`medium` finding carrying both lists — what was cited, and what was declared.
+
+Three things it deliberately does not do, and each is a place this could have
+overclaimed:
+
+- **It does not fire where the manifest declares no `policies` section.** A
+  manifest that lists tools and stops has not said its control list is
+  complete, and reading that silence as a denial would fire on nearly every
+  deployment. The gate is why the check is usable at all.
+- **It is `medium`, not high.** An out-of-date manifest produces exactly this
+  verdict and Cohaera cannot tell it from the attack. The finding says so on
+  its face.
+- **It is not scored by the evaluation card**, because no corpus session pairs
+  a declared-policies manifest with an outside citation. Its Sigma rule ships
+  at `hunt` and says it is unmeasured, which is the treatment CH05 already gets
+  for the same reason. A new `unscored_check_id` marker in the content pack
+  makes that sayable without quoting the family's numbers as though they
+  covered it.
 
 **Note which direction this runs in, because it is the opposite of E20's.** The
 asymmetry E20 relies on — a producer can suppress a finding but cannot
@@ -462,16 +532,24 @@ as Scapegoats* — agents inventing a policy rationale for an infrastructure
 failure. arXiv:2603.05786, *Proof-of-Guardrail* — falsely advertising that a
 guardrail runs.
 
-**Remedy direction.** Require a policy event to be attributable to a control
-named in the capability manifest's `policies` section, and treat an
-unattributable one as evidence of nothing rather than as a control that fired.
-That is cheap and it is not sufficient on its own, because the same emitter
-writes the tool-call events and the policy events, so an attacker who can
-fabricate one can fabricate a `policy_id` that matches the manifest. What makes
-the attribution mean something is a *second* signing key: policy events signed
-by the control plane, tool-call events signed by the collector, and a verdict
-that says which of the two it has. That is `cohaera.integrity:1`'s trust store
-with one more role in it, which is a smaller change than it sounds.
+**What remains open, and it is the half that matters most.** The attribution
+requirement is built. It is **not sufficient on its own**, and was never going
+to be: the same emitter writes the tool-call events and the policy events, so
+an attacker who can fabricate one can read the manifest and fabricate a
+`policy_id` that matches it. `test_evasion_24_fabricate_the_control_event` now
+runs both shapes and asserts exactly that — the undeclared citation is caught,
+the declared one still evades.
+
+So the cost to the attacker went from "one event" to "one event, naming a
+control the operator declared", which is a raise only against an attacker who
+cannot read the manifest. Do not oversell it.
+
+What makes the attribution mean something is a *second* signing key: policy
+events signed by the control plane, tool-call events signed by the collector,
+and a verdict that says which of the two it has. That is `cohaera.integrity:1`'s
+trust store with one more role in it — but note that `cohaera.policy_signature:1`
+attests a **file**, not an event, so this needs a per-event schema that does not
+exist yet. Smaller than it sounds, and not free.
 
 Backed by `test_evasion_24_fabricate_the_control_event`.
 
@@ -549,13 +627,49 @@ the order the test establishes them:
 Points 2, 3 and 4 compose into the actual attack: one field, no expiry, no
 memory.
 
-**Remedy.** A nonce the verifier records as spent, a mandatory validity window,
-and an issuer signature over the approval body so that rewriting the span
-invalidates it. All three are the shape of work this repository has already done
-once for telemetry, and the third is what makes the first two worth having:
-without a signature the attacker edits the nonce too.
+**HALF CLOSED, 22 August 2026.** All three remedies are built, and which half
+closed is the whole of the entry.
 
-Backed by `test_evasion_26_an_approval_replays_across_calls_and_sessions`.
+`cohaera.approval:1` gained a `nonce` and a detached issuer `signature`, the
+trust store gained an `approval` role so the party that issues approvals is not
+the party that signs telemetry, and there is an `ApprovalLedger` behind
+`--seen-approvals` that remembers spent nonces across runs. Assurance is tiered
+the way receipt trust is — `claimed`, `bound`, `authenticated`, `single_use` —
+and the tier is in every verdict.
+
+Three design points, because each is a place this could have been theatre:
+
+- **The signing input covers the span.** That is the one field this entry
+  rewrites, so the edit that defeats binding also breaks the signature. It is a
+  fixed field list joined by `\x1f`, not canonical JSON, for the reason
+  `capabilities` gives about the manifest: canonicalisation problems are where
+  signature bugs live.
+- **The signature covers `expires_at`, and requires it.** That closes point 4 by
+  construction rather than by a flag — an issuer physically cannot mint a signed
+  approval that never expires.
+- **A nonce is honoured only on an approval whose signature verified.** An
+  attacker who can rewrite the span can rewrite the nonce in the same edit, so
+  single-use on an unsigned approval would be decoration. That invariant
+  survived a mutation run until a test was written specifically for it.
+
+**What has NOT closed is the default, and the default is what an attacker
+meets.** Cohaera does not require signed approvals unless the operator turns on
+`--require-signed-approvals`, because doing so in a deployment that has issued
+no approval keys makes every authorised action look like a bypass. In a stock
+deployment every point above still works exactly as it did. Same shape as E13
+and E21: a status that is true only given a trust anchor almost nobody has
+deployed has to say so on its face, which is what the `Precondition` column
+now does.
+
+**And the ledger inherits E22 whole.** It is a local file that cannot be signed
+by anyone but the host holding it — signing it with the collector key would let
+the monitored side forge its own memory — so deleting it restores the replay,
+and replaying to a second Cohaera host was never covered because the ledger is
+per-host. That is not a new weakness discovered later; it is the known cost of
+the mechanism, stated here at the moment it is introduced.
+
+Backed by `test_evasion_26_an_approval_replays_across_calls_and_sessions` for
+the default, and by `tests/test_approval_trust.py` for the closure.
 
 ## E26b. An unedited approval does not cover a second call
 
@@ -1299,7 +1413,7 @@ regression tests.
 | CH05 | Orphan terminal events were constructed with `result="success"` and never flagged. | An irreversible action appearing from nowhere was invisible | **Fixed.** `orphan_end` state, reported by CH05. |
 
 The review's C-05 finding, no executable test suite, was accurate at revision
-`45d3bf8`. There are now 1074 tests: unit, hostile-input, content conformance and
+`45d3bf8`. There are now 1153 tests: unit, hostile-input, content conformance and
 34 evasion characterizations, plus a seeded fuzz smoke test in CI.
 
 ### What is still open from the third review

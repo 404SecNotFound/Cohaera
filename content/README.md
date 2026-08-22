@@ -4,7 +4,7 @@ Rules and mappings that consume `cohaera_session_verdict` records.
 
 ```
 content/
-  sigma/     14 Sigma rules, tiered: 7 production, 5 hunt, 2 dashboard
+  sigma/     15 Sigma rules, tiered: 7 production, 5 hunt, 2 dashboard
   manifest/  example capability manifest: exact tool ID -> declared effects
   aie/       LogRhythm AIE rule specifications + the build-vs-buy comparison
   parser/    Exabeam field map + notes on observra issue #108
@@ -21,7 +21,7 @@ against the attacks it is responsible for. Three checks fire on **zero** benign
 sessions across every confounder built specifically to trip them. Four produce
 essentially all of the corpus's **420.4 false positives per 1,000 benign
 sessions**. Shipping those seven behind one sentence — "Sigma content pack, 14
-rules, validated" — hands a deploying engineer 14 rules that look alike
+rules, validated" — hands a deploying engineer 15 rules that look alike
 and behave nothing alike.
 
 So every rule now declares a **deployment tier**, and the tier is derived from
@@ -214,7 +214,7 @@ after the numbers improve is a decision, not a derivation.
 
 **A regenerated corpus is an out-of-cycle review of the whole pack.** Every tier
 in this directory is a statement about one measurement; replacing the
-measurement invalidates all 14 statements at once. The digest assertion in
+measurement invalidates all 15 statements at once. The digest assertion in
 `tests/test_content.py` makes that impossible to skip.
 
 ---
@@ -323,6 +323,7 @@ tier, because that is the order somebody enabling them should work in.
 | `cohaera_guardrail_bypass_completed.yml` | `production` | high | CH04 completed, semantics undeclared | No |
 | `cohaera_blocking_control_bypassed.yml` | `production` | high | CH04 declared blocking, no bound approval | No |
 | `cohaera_post_guardrail_attempt.yml` | `production` | informational | CH04 attempted | No |
+| `cohaera_undeclared_control_cited.yml` | `hunt` | medium | CH04 control not in the manifest — **unmeasured**, see above | No |
 | `cohaera_evidence_integrity_failed.yml` | `production` | critical | CH06 | No |
 | `cohaera_reported_failure_with_effect_receipt.yml` | `production` | high | CH07 contradiction | No |
 | `cohaera_effect_receipt_unbound.yml` | `production` | medium | CH07 binding guard | No |
@@ -410,8 +411,8 @@ None of the four tell you what the pack will do on your traffic, and the third
 section of this file says why that is structural rather than an oversight.
 
 **Read the `falsepositives` blocks before deploying any of them.** They are not
-boilerplate. Five of the 14 have a false positive rate that is material
-enough to state plainly, and four of those five are why the `hunt` tier exists:
+boilerplate. 7 of the 15 have a false positive story worth stating plainly, and
+5 of those 7 are why the `hunt` tier exists:
 
 - **CH02** (`hunt`) uses lexical matching. An agent that says "I have emailed the
   report" without naming `send_email` will be flagged. 27.1% target precision,
@@ -427,6 +428,12 @@ enough to state plainly, and four of those five are why the `hunt` tier exists:
 - **CH05** (`hunt`, quarantined) has 48 benign hits, 0.0% precision and no
   labelled attack in the corpus at all. Do not enable it as an alert; see
   [CH05](#ch05-and-why-a-rule-with-00-precision-is-still-in-the-pack).
+- **CH04 undeclared control** (`hunt`, unmeasured) fires whenever a policy event
+  names a control your capability manifest does not list. **An out-of-date
+  manifest is the common case**, and it is indistinguishable in the telemetry
+  from the fabricated-exculpation attack it exists to surface. It has no
+  measured rate at all: no corpus session exercises it. Treat it as a manifest
+  hygiene signal first and a security signal second.
 - **CH04 attempted** (`production`, `informational`) fires on a guardrail that is
   **working**: if your policy layer refuses the call and the refusal surfaces as
   a `tool_error`, this is what it looks like. Its check is measured at zero

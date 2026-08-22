@@ -18,6 +18,139 @@ reports recall is a marketing document.
 
 ## [Unreleased]
 
+### Added
+
+- **Approvals can now be signed, bounded and spent once** — EVASION.md E26, half
+  closed. An approval was previously plain JSON on a stream the agent writes:
+  rewriting one field, `subject.span_id`, moved a real approval onto a call it
+  was never issued for, and nothing recorded it as used or made it expire.
+
+  `cohaera.approval:1` gains a `nonce` and a detached issuer `signature`. The
+  trust store gains an **`approval` role**, so the party issuing approvals is
+  not the party signing telemetry — a deployment where one key does both is
+  exactly the arrangement the signature exists to rule out. `--seen-approvals`
+  keeps a ledger of spent nonces that survives across runs, and
+  `--require-signed-approvals` decides whether an unverified approval still
+  covers a call.
+
+  Assurance is **tiered** the way receipt trust is: `claimed`, `bound`,
+  `authenticated`, `single_use`. Unlike the receipt tiers, the top two are
+  reachable — the schema has a signature field and the store has a role.
+
+  Three design points, each a place this could have been theatre. **The signing
+  input covers the span**, so the edit that defeats binding breaks the
+  signature; it is a fixed field list joined by `\x1f` rather than canonical
+  JSON, because canonicalisation problems are where signature bugs live. **The
+  signature covers and requires `expires_at`**, so an issuer cannot mint an
+  eternal signed approval — that closes the window problem by construction
+  rather than by a flag. And **a nonce counts only on an approval whose
+  signature verified**, because an attacker who can rewrite the span can rewrite
+  the nonce in the same edit; that invariant survived a mutation run until a
+  test was written specifically for it.
+
+  **The default deployment is unchanged, deliberately.** Requiring signatures
+  unconditionally would make every authorised action in every keyless deployment
+  look like a bypass. So E26 is `half_closed` with precondition *signed
+  approvals*, exactly as E13 and E21 are conditional on a signed stream.
+
+  **The ledger inherits E22 whole**, stated here rather than discovered later:
+  it is a local file that cannot be signed by anyone but the host holding it,
+  so deleting it restores the replay, and it is per-host so a second collector
+  never saw it.
+
+  `Limits` gains `max_approval_nonces`, so **every `verdict_id` and
+  `config_hash` changes** again.
+
+
+- **A check that asks whether a cited control ever existed, and E24 half closed**
+  (`CH04_undeclared_control_cited`). A consequential call fails for an ordinary
+  infrastructure reason; the producer emits a policy event attributing the
+  failure to a control; the response cites the policy. The session now carries a
+  documented refusal that nothing refused, and an incident review reading it
+  concludes the guardrails worked.
+
+  Every check was looking elsewhere, each for a good reason. CH04 asks what
+  happened *after* a control fired, and here nothing did. CH07 falsifies a
+  reported failure carrying an effect receipt, and here the failure is genuine
+  with no receipt. **Nothing asked the prior question.** A policy event was
+  accepted as a control on the strength of its own `policy_id`.
+
+  It now raises a `medium` finding carrying both lists — cited and declared.
+  Three deliberate limits: it does not fire where the manifest declares no
+  `policies` section (silence is not a denial, and reading it as one would fire
+  on nearly every deployment); it is `medium` rather than high because an
+  out-of-date manifest produces the identical verdict and Cohaera cannot tell
+  them apart; and it is **not scored by the evaluation card**, because no corpus
+  session pairs a declared-policies manifest with an outside citation.
+
+  **Half of E24 remains open, which is the half that matters.** An attacker who
+  reads the manifest and cites a control that IS declared produces no finding,
+  because nothing signs a policy event —
+  `cohaera.policy_signature:1` attests a file, not an event. The cost went from
+  "one event" to "one event naming a declared control", which raises nothing
+  against an attacker who can read the manifest. `test_evasion_24` now runs both
+  shapes and asserts exactly that.
+
+### Changed
+
+- **The content pack can say a check ID is unmeasured** (`unscored_check_id`).
+  The evaluation card scores per coverage *family*, so a check ID added after
+  its family was measured inherits numbers taken without it. Quoting them is the
+  laundering `test_the_check_a_rule_claims_evidence_for_is_the_one_it_selects_on`
+  exists to stop; dropping the family loses the link. A rule may now declare the
+  gap instead, which bars the `production` tier and forbids every numeric
+  evidence key. `CH04_guardrail_overrun` is consequently the first family to
+  span two deployment tiers, and the inventory test records why.
+
+- **`content/README.md`'s false-positive count is derived.** It read "Five of
+  the 14" over a list of six bullets — defensible only if the dashboard entry
+  was not meant to count, and unknowable to a reader either way. It is now two
+  derived claims over the bullets themselves, which also forced the prose to
+  stop drawing a distinction it never explained. That number is the one telling
+  a deploying engineer what will page them, and nothing recomputed it.
+
+
+- **A second opinion on captured tool output, and E09 half closed with it**
+  (`src/cohaera/content_scan.py`). CH03's detection ceiling is set by the
+  upstream scanner's pattern list, so an attacker who stays below it evades the
+  check entirely — EVASION.md E09, the most important entry in that file.
+
+  E09's remedy line said "scan `tool_result` inside Cohaera". Finding F-16 had
+  already refused exactly that, in a code comment and a passing test, because a
+  detector generating its own taint evidence grades its own work. **Both
+  documents were in the tree, giving opposite instructions, for two revisions.**
+  The drift was in the reasoning rather than in a count, and counts are the only
+  thing this repository recomputes.
+
+  Resolved by tiering the evidence the way CH07's effect receipts are tiered. An
+  upstream answer is evidence about *content*; a local pass is evidence about
+  *the scanner*. The local pass therefore cannot behave like a marker: it never
+  makes `scanner_marked` true, so **no CH03 finding is ever built on it**; it
+  never moves CH03 off `not_evaluated`; and it can only lower a confidence or
+  add a remedy, never raise one. No content buys a session a cleaner report.
+
+  Two new reason codes carry it. `UNSCANNED_CONTENT_CARRIES_MARKERS` — content
+  was captured, nothing upstream examined it, and it matches Cohaera's patterns.
+  `SCANNER_ANSWER_CONTRADICTED_BY_CONTENT` — a scanner examined the call, called
+  it clean, and Cohaera's patterns disagree. The second is E09 made visible, and
+  it costs CH03 half the confidence of the disputed share rather than all of it,
+  because a disagreement between two regex lists may be Cohaera's error.
+
+  **The ceiling is not closed and the entry says so.** An attacker below both
+  pattern lists is where E09 left them, with one more list to evade.
+
+  **Not measured, stated plainly.** The evaluation corpus cannot exercise this
+  in either direction: its 216 injection-marked records carry no `tool_result`,
+  and all 7,156 captured results in it are the literal string `ok`. Zero false
+  positives and zero true positives, neither meaning anything. That the corpus
+  has no content channel at all is the larger finding, and it is now recorded
+  against the external-corpus item in `docs/OUTSTANDING.md`.
+
+  `Limits` gains `max_scanned_result_chars` (64 KiB), so **every `verdict_id`
+  and `config_hash` changes** — the bounds digest binds configuration into
+  verdict identity, and a new bound is a configuration change. A SIEM
+  deduplicating on those IDs will see all-new ones after this release.
+
 ### Fixed
 
 - **CH04's coverage contract, which was inverted.** `coverage()` added

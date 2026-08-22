@@ -56,7 +56,7 @@
               "schema": "cohaera:0.3",
               "session_id": "lab-06-no-manifest",
               "triggered_rules": [],
-              "verdict_id": "24f6696c6aeb1eef3361dad4ec9d1437"
+              "verdict_id": "b435276b1176ececc03adceb853abcbd"
             }
           ]
         },
@@ -112,7 +112,7 @@
               "triggered_rules": [
                 "CH03_untrusted_to_completed_action"
               ],
-              "verdict_id": "4ba77b741c3a9314dd68a3aebb5fa70b"
+              "verdict_id": "42a6f1e6968f7fa6f499614918d89e8f"
             }
           ]
         }
@@ -177,7 +177,7 @@
               "schema": "cohaera:0.3",
               "session_id": "lab-07-chained-unsigned",
               "triggered_rules": [],
-              "verdict_id": "4213a6c89a371377d868cc85ce206145"
+              "verdict_id": "7cef45e1ac69a1a27123a0f08563e5a5"
             }
           ]
         },
@@ -231,7 +231,7 @@
               "schema": "cohaera:0.3",
               "session_id": "lab-07-chained-unsigned",
               "triggered_rules": [],
-              "verdict_id": "3c9913cdb18781644df087b62521d9b2"
+              "verdict_id": "9038f13570e759ca968b9bc4330b3731"
             }
           ]
         }
@@ -295,7 +295,7 @@
               "schema": "cohaera:0.3",
               "session_id": "anon-26ba7747d11429f5d31aa116d4244639-w5952366",
               "triggered_rules": [],
-              "verdict_id": "623c3806d74c78f70907af3cace8c00b"
+              "verdict_id": "146f35e10d80ae47603e379e3c747178"
             }
           ]
         },
@@ -349,7 +349,7 @@
               "schema": "cohaera:0.3",
               "session_id": "anon-319a0ad30aaff85c3aa858811d1b0066-w5952366",
               "triggered_rules": [],
-              "verdict_id": "d20bcdecb304968f3e21e2ce78d52db8"
+              "verdict_id": "73ac18aafe2ad3c0a3ef600d018159f5"
             }
           ]
         }
@@ -424,7 +424,7 @@
           "schema": "cohaera:0.3",
           "session_id": "lab-01-normal",
           "triggered_rules": [],
-          "verdict_id": "1005fbe5279059e399f5e13e9c32de32"
+          "verdict_id": "f1a69de067b4ac6aa554e86da6c81a9a"
         }
       ]
     },
@@ -479,7 +479,7 @@
           "triggered_rules": [
             "CH06_evidence_integrity"
           ],
-          "verdict_id": "cb6a14780b855e66d5a0b4feb61edf28"
+          "verdict_id": "614764b454cdcd8809f9431fd34bb0a1"
         }
       ]
     },
@@ -537,7 +537,7 @@
             "CH02_concealment_gap",
             "CH06_evidence_integrity"
           ],
-          "verdict_id": "14d76a9e98a182f90ded41005daa9138"
+          "verdict_id": "2647716e5c17b8348edb50e8f2d363f2"
         }
       ]
     }
@@ -595,7 +595,7 @@
           "schema": "cohaera:0.3",
           "session_id": "lab-01-normal",
           "triggered_rules": [],
-          "verdict_id": "7258ad428e467a44aa92371572886894"
+          "verdict_id": "a48c71fe55e311dc31cd3d4d18f8c537"
         }
       ],
       "why": "Known agent, expected tool, exactly bound approval, effect completes, response discloses it."
@@ -652,7 +652,7 @@
           "triggered_rules": [
             "CH03_untrusted_to_completed_action"
           ],
-          "verdict_id": "17ae7b30c44ac42cfcf90db7c453d88d"
+          "verdict_id": "a49b7c9741d5def12fa7d1077a73e841"
         }
       ],
       "why": "First-time tool and new destination after untrusted content."
@@ -712,7 +712,7 @@
           "triggered_rules": [
             "CH06_evidence_integrity"
           ],
-          "verdict_id": "4d5f5c069d62378e29811f22c4105562"
+          "verdict_id": "e217fe1e179f8ac3293ede3ba4d02071"
         }
       ],
       "why": "State 1's behaviour, with one record edited after it was signed."
@@ -769,7 +769,7 @@
           "triggered_rules": [
             "CH07_reported_failure_with_effect_receipt"
           ],
-          "verdict_id": "e740f5549c6b74276abfbeb5776a06e2"
+          "verdict_id": "29f6c796b64197eb7c819472521951b0"
         }
       ],
       "why": "Agent reports failure; an exactly bound provider receipt says otherwise."
@@ -826,7 +826,7 @@
           "triggered_rules": [
             "CH07_effect_receipt_partially_bound"
           ],
-          "verdict_id": "043597aaca0ab2d6035b4625c6ebac27"
+          "verdict_id": "6b5ab8951cb325f07cecf0c7dda8b038"
         }
       ],
       "why": "The same claim with an incomplete binding, which must NOT contradict."
@@ -881,7 +881,7 @@
           "schema": "cohaera:0.3",
           "session_id": "lab-05-partial-attestation",
           "triggered_rules": [],
-          "verdict_id": "547ef1d602ad0b3f7ba0b24e21669ab0"
+          "verdict_id": "6b6830974181ddbbff61103e8690e42f"
         }
       ],
       "why": "A long session signed at every fourth record, leaving an unsigned tail."

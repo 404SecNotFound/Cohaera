@@ -22,7 +22,7 @@ import math
 import re
 from collections import deque
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from functools import cached_property
 from typing import Any, ClassVar, cast
 
@@ -696,6 +696,15 @@ class Session:
     # None means no verification was run at all, which is NOT the same as
     # "verification found nothing" and must not be reported as clean.
     integrity: SessionIntegrity | None = field(default=None, compare=False)
+    # E26. Approval assurance needs three things the session cannot derive
+    # from its own events: a key store to verify an issuer signature against,
+    # a ledger to remember spent nonces across runs, and the operator's answer
+    # to "does an unverified approval still cover a call". All three are
+    # operator-supplied and out of band, exactly as `manifest` is, and for the
+    # same reason: the producer must not be able to choose them.
+    trust_store: Any = field(default=None, repr=False, compare=False)
+    approval_ledger: Any = field(default=None, repr=False, compare=False)
+    require_signed_approvals: bool = field(default=False, compare=False)
     _caches: dict[str, tuple[Any, Any]] = field(default_factory=dict, repr=False,
                                                 compare=False)
     _revision: int = field(default=0, repr=False, compare=False)
@@ -1279,8 +1288,56 @@ class Session:
                 continue
             if m.observed_before_call is not True:
                 continue
+            # E26. The fifth condition, and the one that makes the other four
+            # worth having. Everything above establishes that the approval is
+            # ABOUT this call; none of it establishes that the approval is
+            # genuine, because until an issuer signed it every field was
+            # producer-written. Where the operator has said signed approvals
+            # are required, an unverified one does not cover.
+            #
+            # OFF BY DEFAULT, deliberately. Turning it on unconditionally would
+            # stop every deployed approval covering anything and fire CH04 on
+            # every authorised action in the world. The tier is always in the
+            # verdict; whether it gates is the operator's call.
+            if self.require_signed_approvals and not self.assured(m.approval):
+                continue
             return m
         return None
+
+    def assured(self, approval: Approval) -> bool:
+        """Has this approval been verified, and its nonce not already spent?
+
+        The ledger is consulted only for an approval whose signature already
+        verified. A nonce on an unsigned approval is decoration: an attacker
+        who can rewrite the span can rewrite the nonce in the same edit.
+        """
+        store = self.trust_store
+        if store is None:
+            return False
+        checked = evidence.verify_approval(approval, store)
+        if not checked.verified:
+            return False
+        ledger = self.approval_ledger
+        if ledger is None or not getattr(ledger, "enabled", False):
+            return True
+        return ledger.spend(checked.nonce) is not False
+
+    def approval_tier(self, approval: Approval) -> str:
+        """The tier this approval reaches in this deployment, for the verdict.
+
+        Reported whether or not it gates, because "an approval was presented
+        and nothing could vouch for it" is a fact an analyst acts on and the
+        current default is to let it cover anyway.
+        """
+        store = self.trust_store
+        if store is None:
+            return approval.tier
+        checked = evidence.verify_approval(approval, store)
+        ledger = self.approval_ledger
+        if checked.verified and ledger is not None and getattr(
+                ledger, "enabled", False):
+            checked = replace(checked, unspent=ledger.spend(checked.nonce))
+        return checked.tier
 
     @property
     def dangling_approvals(self) -> list[Approval]:
