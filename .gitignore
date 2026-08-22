@@ -10,6 +10,12 @@ build/
 tests/fixtures/*.jsonl
 *.out.jsonl
 telemetry.jsonl
+# ...except the demos', which are committed ON PURPOSE so a reader can inspect
+# the events without running Python. The bare pattern above matches at any
+# depth, so the demo fixtures were silently excluded -- their tests passed on a
+# working tree that still held the generated file and failed on a fresh clone,
+# which is the exact defect CONTRIBUTING rule 1 warns about.
+!demo/*/telemetry.jsonl
 .DS_Store
 
 # Agent worktrees. Tooling that runs work in parallel checks each task out into
