@@ -1,0 +1,18 @@
+{
+  "manifest_version": "1",
+  "policies": {
+    "payments-guard": {
+      "enforcement": "blocking"
+    }
+  },
+  "producer": "fin-ops",
+  "tools": {
+    "wire_transfer_send": {
+      "destination": "external:banking",
+      "effects": [
+        "egress"
+      ],
+      "reversible": false
+    }
+  }
+}

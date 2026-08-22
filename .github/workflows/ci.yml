@@ -125,6 +125,12 @@ jobs:
           mypy
       - name: Unit and hostile tests
         run: python -m pytest tests/ -q
+      - name: The demo still demonstrates what it claims
+        run: |
+          # A demo is the one artefact that gets shown to people and re-run by
+          # nobody. If the phantom guardrail stops being caught, this is where
+          # that surfaces -- rather than in front of an audience.
+          python -m pytest tests/test_demo.py -q
       - name: Adversarial self-test
         run: |
           # Passes when the catalogued evasions still work. A FAILURE here means

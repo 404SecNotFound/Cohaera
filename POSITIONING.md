@@ -66,6 +66,19 @@ with that list:
 > **Several projects now produce agent records that are worth believing. Few
 > grade records they did not produce, and none reports what it could not
 > evaluate.**
+>
+> **No single one of them combines signed hash-chained events, per-agent
+> attestation keys and evidence export — and no mainstream observability
+> platform ships any of the three.**
+
+The second sentence replaces a claim this project never made but was offered by
+an external gap analysis: that tamper-evident agent telemetry is unclaimed and
+the first mover sets the standard. Commissioned research found six open-source
+projects shipping it, in two briefs whose lists do not overlap. **Cohaera does
+not combine all three either** — it chains and signs, it has key roles and
+rotation rather than per-agent attestation, and it has no evidence-pack export.
+The narrowed claim describes an open position, not an occupied one. The six are
+in [docs/PRIOR-ART.md](docs/PRIOR-ART.md).
 
 Producing a trustworthy record and grading somebody else's are different jobs.
 Agent Action Capsule and halo-record are producers: the checkability is a

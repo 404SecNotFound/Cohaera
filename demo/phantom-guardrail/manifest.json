@@ -1,0 +1,39 @@
+{
+  "manifest_version": "1",
+  "policies": {
+    "case-closure-guard": {
+      "enforcement": "blocking"
+    },
+    "evidence-export-guard": {
+      "enforcement": "blocking"
+    }
+  },
+  "producer": "socxen",
+  "tools": {
+    "close_case": {
+      "effects": [
+        "write"
+      ],
+      "reversible": false
+    },
+    "export_case_evidence": {
+      "destination": "external:s3",
+      "effects": [
+        "egress"
+      ],
+      "reversible": false
+    },
+    "fetch_alert": {
+      "effects": [
+        "read"
+      ],
+      "reversible": true
+    },
+    "search_similar_cases": {
+      "effects": [
+        "read"
+      ],
+      "reversible": true
+    }
+  }
+}
