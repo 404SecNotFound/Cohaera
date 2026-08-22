@@ -215,7 +215,7 @@ project holds itself to, and the honest statement of what is not validated.
 - [Known limitations](#known-limitations)
 - [Relationship to the upstream projects](#relationship-to-the-upstream-projects)
 
-**Other documents** — [docs/README.md](docs/README.md) maps all 26 by the
+**Other documents** — [docs/README.md](docs/README.md) maps all 27 by the
 question each one answers. The four read most often:
 
 | | |
