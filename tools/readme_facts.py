@@ -619,6 +619,34 @@ def count_t0_open() -> str:
                    if tier == "T0" and status in ("working", "half_closed")))
 
 
+def _material_fp_block() -> str:
+    """The bullet list under "Read the `falsepositives` blocks"."""
+    text = CONTENT_README.read_text(encoding="utf-8")
+    start = text.index("**Read the `falsepositives` blocks")
+    return text[start:text.index("**Tagging note.**", start)]
+
+
+def count_material_fp_rules() -> str:
+    """Rules whose false-positive story content/README.md spells out.
+
+    This number was hand-typed and read "Five" over a list of six bullets --
+    defensible if the dashboard coverage entry was not meant to count, and
+    unknowable to a reader either way. It is the same defect the rest of this
+    module exists for, sitting in the one paragraph that tells a deploying
+    engineer what will page them at 3am.
+
+    Derived by counting the bullets themselves, which also forced the prose to
+    stop drawing a distinction it never explained.
+    """
+    return str(len(re.findall(r"^- \*\*", _material_fp_block(), re.M)))
+
+
+def count_material_fp_hunt() -> str:
+    """...of which how many are hunt tier, which is the clause after the comma."""
+    return str(len(re.findall(r"^- \*\*[^*]+\*\* \(`hunt`", _material_fp_block(),
+                              re.M)))
+
+
 def count_roadmap_open() -> str:
     return str(len(re.findall(r"^- \[ \]", README.read_text(encoding="utf-8"), re.M)))
 
@@ -694,6 +722,17 @@ CLAIMS = (
     # \s+ rather than a literal space: these sentences are hard-wrapped prose and
     # a claim that stops matching when somebody rewraps a paragraph is a claim
     # that silently stops being checked.
+    # The summary table on the first screen. This read "22 catalogued, 20 still
+    # working" for several revisions after the catalogue reached 28 and 26 --
+    # ungated, in the one table a reader sees before anything else, and found by
+    # an external reviewer rather than by this module. Twelfth hand-typed count
+    # to ship. Both halves are derived now.
+    Claim("README summary-table catalogued evasions", README,
+          re.compile(r"Ways to defeat it \| \*\*(\d+)\*\* catalogued"),
+          count_constructed_evasions),
+    Claim("README summary-table working evasions", README,
+          re.compile(r"catalogued, of which \*\*(\d+)\*\* still work"),
+          count_working_evasions),
     Claim("README working evasions", README,
           re.compile(r"(\d+) of them still\s+working"), count_working_evasions),
     # COH-R19 again, in the file that is most about being honest. This sentence
@@ -720,7 +759,7 @@ CLAIMS = (
           re.compile(r"the\s+false positive rate is ([\d.]+)%"),
           card_family_holdout_fpr_pct),
     Claim("README E02 confounder cost", README,
-          re.compile(r"which cost (\d+) new false positives"),
+          re.compile(r"cost (\d+) new false positives"),
           card_e02_confounder_cost),
     Claim("README family_holdout recall", README,
           re.compile(r"recall drops to ([\d.]+)%"), card_family_holdout_recall_pct),
@@ -1012,8 +1051,18 @@ CLAIMS = (
     Claim("content README statements", CONTENT_README,
           re.compile(r"invalidates all (\d+) statements"), count_sigma_rules),
     Claim("content README rules with material fp", CONTENT_README,
-          re.compile(r"Five of the (\d+) have a false positive"),
+          re.compile(r"of the (\d+) have a false positive story"),
           count_sigma_rules),
+    # The numerator, which was hand-typed as a word over a list of six.
+    Claim("content README material fp count", CONTENT_README,
+          re.compile(r"(\d+) of the \d+ have a false positive story"),
+          count_material_fp_rules),
+    Claim("content README material fp hunt share", CONTENT_README,
+          re.compile(r"\n(\d+) of those \d+ are why the `hunt` tier"),
+          count_material_fp_hunt),
+    Claim("content README material fp restated", CONTENT_README,
+          re.compile(r"of those (\d+) are why the `hunt` tier"),
+          count_material_fp_rules),
     Claim("review response sigma rules", REVIEW_RESPONSE,
           re.compile(r"evaluation card and (\d+) Sigma rules downstream"),
           count_sigma_rules),

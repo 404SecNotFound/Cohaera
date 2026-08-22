@@ -94,7 +94,7 @@ silently gains authority somewhere else — which is exactly the shape of R-01.
 
 That is why it is the wrong change to make in the same window as sixteen
 security fixes. A structural split touching every trust constant, with an
-evaluation card and 14 Sigma rules downstream, is the highest-risk
+evaluation card and 15 Sigma rules downstream, is the highest-risk
 lowest-visible-value work available right now. The R-02 to R-04 work did not
 make a ledger module fall out naturally, so it was not forced.
 
@@ -143,7 +143,7 @@ language that would suggest otherwise — enforced by a test.
 Named here rather than left to be discovered:
 
 - **No external validation.** R-09, above.
-- **No live SIEM integration.** 14 Sigma rules validate and convert; no
+- **No live SIEM integration.** 15 Sigma rules validate and convert; no
   parser has been tested against a live product, and no timeline or case has
   ever been produced.
 - **No independent reviewer.** The single largest governance gap. Every finding

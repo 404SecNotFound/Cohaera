@@ -38,7 +38,7 @@ It is **pre-alpha research software**. Read the numbers before the prose:
 | Target-attributable recall | 100% on the headline cell |
 | False positives | **420.4 per 1,000 benign sessions** |
 | Projected precision at 0.1% attack prevalence | **0.238%** |
-| Known ways to defeat it | 22 catalogued, 20 still working, each with a test |
+| Ways to defeat it | **28** catalogued, of which **26** still work — each with a test |
 | External validation | **None.** No live SIEM, no independent labels, no second reviewer |
 
 That false-positive rate is not a typo and it is not buried. At a realistic base
@@ -1138,10 +1138,10 @@ And the half that is a port rather than a contribution:
 - [x] Measured TPR and FPR with task-disjoint splits ([eval/](eval/EVALUATION-CARD.md))
 - [ ] CH02 semantic matching, currently lexical and its weakest point
 - [ ] Praxen Worker Remit compiler, remit sections to runtime predicates
-- [x] Sigma content pack, 14 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
+- [x] Sigma content pack, 15 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 1074 passing across unit, hostile-input and content conformance
+- [x] Tests, 1153 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 34 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger

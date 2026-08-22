@@ -14,6 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from cohaera.capabilities import CapabilityManifest
 from cohaera.checks import (
     SequenceGrammar,
     ch01_sequence_order,
@@ -393,6 +394,82 @@ def test_ch04_ignores_read_only_continuation():
              ev("tool_start", 5, tool_name="read_status", span_id="A"),
              ev("tool_end", 6, tool_name="read_status", span_id="A"))
     assert ch04_guardrail_overrun(s) == []
+
+
+# -- E24: a cited control the operator never declared ------------------------
+#
+# E20 downgrades a real control to silence CH04. E24 is the inverse and worse:
+# it MANUFACTURES a control that never existed, so the session carries a
+# documented refusal that nothing refused. An exculpation is what an incident
+# review reads to decide nothing happened.
+#
+# Gated on the manifest declaring a `policies` section, which is the operator
+# opting in to "these are my controls". With no such section there is no basis
+# to call anything undeclared, and the check must stay silent.
+
+
+def _e24_manifest(**kw):
+    return CapabilityManifest.from_obj({
+        "tools": {"wire_transfer_send": {"effects": ["egress"],
+                                         "reversible": False}},
+        "policies": {"payments-guard": {"enforcement": "blocking"}},
+        **kw})
+
+
+def test_ch04_flags_a_control_the_operator_never_declared():
+    """The fabricated exculpation, with a manifest that contradicts it."""
+    s = Session(session_id="s1", manifest=_e24_manifest(), events=sorted([
+        ev("tool_start", 0, tool_name="wire_transfer_send", span_id="W1",
+           reversible=False),
+        ev("tool_error", 1, tool_name="wire_transfer_send", span_id="W1",
+           reversible=False, error_class="UpstreamUnavailable"),
+        ev("cost_threshold_exceeded", 2, action="policy_event",
+           policy_id="dlp-outbound-guard", enforcement="blocking",
+           decision="deny"),
+    ], key=lambda e: e.timestamp))
+    checks = [f.check for f in ch04_guardrail_overrun(s)]
+    assert "CH04_undeclared_control_cited" in checks, checks
+    f = next(f for f in ch04_guardrail_overrun(s)
+             if f.check == "CH04_undeclared_control_cited")
+    assert f.severity == "medium"
+    assert "dlp-outbound-guard" in str(f.evidence)
+
+
+def test_ch04_does_not_flag_a_control_the_operator_did_declare():
+    """Naming a DECLARED control is not this finding. It is E24's remaining
+    half -- the attacker reads the manifest and cites something real -- and
+    conflating the two would make the check fire on every honest session."""
+    s = Session(session_id="s1", manifest=_e24_manifest(), events=sorted([
+        ev("tool_start", 0, tool_name="wire_transfer_send", span_id="W1",
+           reversible=False),
+        ev("tool_error", 1, tool_name="wire_transfer_send", span_id="W1",
+           reversible=False, error_class="UpstreamUnavailable"),
+        ev("cost_threshold_exceeded", 2, action="policy_event",
+           policy_id="payments-guard", enforcement="blocking",
+           decision="deny"),
+    ], key=lambda e: e.timestamp))
+    assert [f.check for f in ch04_guardrail_overrun(s)
+            if f.check == "CH04_undeclared_control_cited"] == []
+
+
+def test_ch04_says_nothing_about_attribution_with_no_declared_policies():
+    """No `policies` section is no basis to judge. A manifest that declares
+    tools and not controls has not said the control list is complete, and
+    treating its silence as a denial would fire on every such deployment."""
+    manifest = CapabilityManifest.from_obj({
+        "tools": {"wire_transfer_send": {"effects": ["egress"],
+                                         "reversible": False}}})
+    s = Session(session_id="s1", manifest=manifest, events=sorted([
+        ev("tool_start", 0, tool_name="wire_transfer_send", span_id="W1",
+           reversible=False),
+        ev("tool_error", 1, tool_name="wire_transfer_send", span_id="W1",
+           reversible=False, error_class="UpstreamUnavailable"),
+        ev("cost_threshold_exceeded", 2, action="policy_event",
+           policy_id="dlp-outbound-guard", enforcement="blocking",
+           decision="deny"),
+    ], key=lambda e: e.timestamp))
+    assert [f.check for f in ch04_guardrail_overrun(s)
+            if f.check == "CH04_undeclared_control_cited"] == []
 
 
 # ---------------------------------------------------------------- CH05 / coverage

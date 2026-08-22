@@ -1,0 +1,114 @@
+title: Agent Cited A Control The Operator Never Declared
+id: 3f7a91c4-58be-4d0e-b2a7-6c9e40d18b53
+status: experimental
+custom:
+    # DEPLOYMENT TIER. Sigma has no tier field and this pack will not put one in
+    # `tags` -- see content/README.md, "How the tier is recorded, and why not as
+    # a tag". `custom:` is pySigma's documented extension point.
+    #
+    # production  deployable, may page. Zero benign hits on the evaluation card.
+    # hunt        never an alert. Investigation surface only.
+    # dashboard   a configuration state, not an event. Alert on a CHANGE in it.
+    deployment_tier: hunt
+    tier_rationale: >-
+        UNMEASURED, and hunt for that reason alone rather than because the
+        signal is weak. The evaluation corpus contains no session that pairs a
+        manifest declaring a `policies` section with a policy event citing a
+        control outside it, so this check fires on zero corpus sessions --
+        zero attacks and zero benign. Its family's zero-benign measurement was
+        taken before this check ID existed and says nothing about it. That is
+        the CH05 situation and it gets the CH05 treatment: it ships, it says it
+        is unmeasured, and it does not page. Promote it when the corpus grows a
+        case, not before.
+    owner: '@404SecNotFound'
+    last_reviewed: 2026-08-21
+    review_cadence_days: 90
+    next_review: 2026-11-19
+    # NO NUMBERS, DELIBERATELY. The card scores per coverage FAMILY, and this
+    # check ID sits inside a scored family that the card measured before the
+    # ID existed. Quoting the family's 72/72/0 here would launder a measurement
+    # of three other checks into a claim about this one -- the exact laundering
+    # test_the_check_a_rule_claims_evidence_for_is_the_one_it_selects_on exists
+    # to prevent. `unscored_check_id` is how a rule says so out loud; it bars
+    # the production tier and forbids any numeric evidence key.
+    evidence:
+        source: eval/evaluation-card.json
+        check: CH04_guardrail_overrun
+        unscored_check_id: CH04_undeclared_control_cited
+        note: >-
+            Not scored. No corpus session pairs a manifest declaring policies
+            with a policy event citing a control outside it, so this check ID
+            fires on nothing in the corpus -- no attacks and no benign.
+description: |
+  A policy event in an agent session cites a control that the operator's
+  capability manifest does not declare, in a deployment whose manifest DOES
+  declare its controls.
+
+  WHAT THIS IS FOR. Every other guardrail rule in this pack asks what happened
+  AFTER a control fired. This one asks the prior question: was the control ever
+  there? A policy event is otherwise accepted as a control on the strength of
+  its own policy_id, so an agent can emit one event naming a control nobody
+  operates and the session then carries a documented refusal that nothing
+  refused. An exculpation is what an incident review reads to decide nothing
+  happened, and Cohaera catalogues this as EVASION.md E24.
+
+  NOTE THE DIRECTION, because it is the opposite of its siblings'. E20 is a
+  producer SUPPRESSING a finding by stamping a blocking control `advisory`.
+  This is a producer FABRICATING an exculpation. The manifest is the only thing
+  in the session with standing to say the control was never there.
+
+  THIS IS NOT PROOF OF FABRICATION AND MUST NOT BE ROUTED AS THOUGH IT WERE.
+  An out-of-date manifest produces exactly the same verdict, and Cohaera cannot
+  tell the two apart. What it establishes is narrower and still worth having:
+  the refusal recorded in this session cannot be attributed to any control the
+  operator says exists. Read
+  data.findings[].evidence.undeclared_controls against
+  data.findings[].evidence.declared_controls and decide which of the two it is.
+
+  ONLY FIRES WHERE THE MANIFEST DECLARES POLICIES. A manifest that lists tools
+  and stops has not said its control list is complete, so its silence is not a
+  denial and this rule stays quiet. That gate is why it does not fire on every
+  deployment that has not filled the section in.
+
+  HALF THE EVASION REMAINS OPEN. An attacker who reads the manifest and cites a
+  control that IS declared produces no finding here, because nothing signs the
+  policy event. Closing that needs policy events signed by a key other than the
+  one signing tool-call events; cohaera.policy_signature:1 attests a file, not
+  an event. Absence of this rule is not evidence that a cited control is real.
+
+  Requires Cohaera. observra cannot express this: its rule engine sees one
+  event at a time and holds no operator manifest to compare a citation against.
+references:
+    - https://github.com/404SecNotFound/Cohaera
+    - https://genai.owasp.org/llm-top-10/
+author: Imran Hafeez
+date: 2026-08-21
+modified: 2026-08-21
+related:
+    - id: 6b0f8c31-4d27-4a15-9c8e-1f3a5b7d2e64
+      type: similar
+logsource:
+    product: cohaera
+    service: session_verdict
+detection:
+    selection:
+        type: 'cohaera_session_verdict'
+        data.triggered_rules|contains: 'CH04_undeclared_control_cited'
+    condition: selection
+fields:
+    - session_id
+    - agent_name
+    - user
+    - host
+    - data.policy_events
+    - data.tool_sequence
+    - data.coverage.completeness
+falsepositives:
+    - An out-of-date capability manifest. This is the common case and it is
+      indistinguishable from the attack in the telemetry; correct the manifest
+      and the finding goes away.
+    - A policy engine that emits a policy_id the manifest keys by event type, or
+      the reverse. Cohaera takes policy_id first and falls back to event type,
+      so a deployment using a third naming for the same control will look
+      undeclared.
+level: medium

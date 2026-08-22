@@ -252,6 +252,12 @@ class Limits:
     max_user_message_chars: int = 64_000
     max_injection_markers: int = 200
     max_marker_chars: int = 256
+    # How much captured tool output `content_scan` reads. Attacker-chosen
+    # length against Cohaera's own regexes, so it is bounded like every other
+    # attacker-chosen quantity. Scanning stops here rather than rejecting the
+    # record: the module can only ever LOWER a confidence, so a marker past the
+    # bound costs Cohaera a remark it would have made, never a wrong one.
+    max_scanned_result_chars: int = 65_536
 
     # ---- evidence emitted into the verdict ------------------------------
     # Bounds the OUTPUT, which is the amplification vector the review's
@@ -280,6 +286,11 @@ class Limits:
     # is the most expensive thing in this codebase per unit of attacker effort.
     # The comb changed the constant, not the shape: the work is still linear in
     # a number the producer chooses, which is why the bound below stays.
+    # E26. How many spent approval nonces one ledger will hold. An attacker
+    # chooses how many it presents, so the ledger is bounded like every other
+    # attacker-chosen quantity -- and it fails toward "no answer" rather than
+    # toward "unspent", so a full ledger cannot grant single-use assurance.
+    max_approval_nonces: int = 1_000_000
     max_integrity_streams: int = 10_000
     # How far a record may arrive out of order before the gap ahead of it is
     # called a deletion. This is the reordering-versus-deletion decision from

@@ -39,6 +39,7 @@ from itertools import pairwise
 from typing import Any
 
 from .capabilities import CapabilityManifest
+from .content_scan import local_markers
 from .evidence import (
     ARGS_UNBINDABLE,
     BINDING_CONTEXT,
@@ -111,6 +112,7 @@ __all__ = [
     "R_NO_INTEGRITY",
     "R_NO_STREAM_LEDGER",
     "R_PARTIAL_INTEGRITY",
+    "R_SCANNER_CONTRADICTED",
     "R_SEQUENCE_GAP",
     "R_SEQUENCE_REPLAY",
     "R_SIGNATURE_INVALID",
@@ -119,6 +121,7 @@ __all__ = [
     "R_STREAM_FORKED",
     "R_STREAM_REPLAYED",
     "R_STREAM_SKIPPED_RECORDS",
+    "R_UNSCANNED_CONTENT_MARKERS",
     "R_UNSIGNED",
 ]
 
@@ -1114,6 +1117,14 @@ CH04_ATTEMPTED = "CH04_post_guardrail_attempt"
 # approval bound to that work. Additive, so existing content keeps matching what
 # it always matched.
 CH04_BYPASSED = "CH04_blocking_control_bypassed"
+# E24. Not an overrun at all -- the inverse. A policy event cites a control the
+# operator's manifest does not declare, so the session carries a documented
+# refusal that nothing refused. It lives in CH04's family because CH04 owns
+# guardrail evidence, and every other check is looking the other way: CH04 asks
+# what happened AFTER a control fired, and here nothing did; CH07 falsifies a
+# reported failure carrying a receipt, and here the failure is real and there is
+# no receipt. Nothing asked the prior question -- did this control exist?
+CH04_UNDECLARED = "CH04_undeclared_control_cited"
 
 # Where the enforcement semantics came from. An operator's manifest outranks the
 # event, because the event is written by the thing being watched.
@@ -1141,6 +1152,33 @@ def _resolved_enforcement(event: Any, manifest: CapabilityManifest
     if in_band != ENFORCEMENT_UNDECLARED:
         return in_band, ENFORCEMENT_FROM_EVENT
     return ENFORCEMENT_UNDECLARED, ENFORCEMENT_FROM_NOWHERE
+
+
+# What the manifest's silence means, which is the whole design of E24's fix.
+# A manifest that declares TOOLS and no `policies` section has not said its
+# control list is complete; reading that silence as a denial would fire on
+# every deployment that has not filled the section in. A manifest that DOES
+# declare policies has made a statement about which controls exist, and a
+# citation outside it is the one the operator can act on.
+def _undeclared_controls(session: Session) -> list[Event]:
+    """Policy events citing a control the operator's manifest does not declare.
+
+    E24. The direction of trust is the same one E20 states and the opposite of
+    E20's case. E20 is a producer SUPPRESSING a finding with an in-band string,
+    and the manifest takes that back. This is a producer FABRICATING an
+    exculpation with an in-band event, and the manifest is the only thing in
+    the session with the standing to say the control was never there.
+
+    Empty unless the manifest declares policies at all. That gate is not
+    politeness: without it the check fires on every session from every
+    deployment whose manifest lists tools and stops, which is most of them.
+    """
+    manifest = session.manifest
+    if not manifest.policies:
+        return []
+    return [e for e in session.events
+            if e.event_type in POLICY_EVENTS
+            and manifest.policy(e.data.get("policy_id"), e.event_type) is None]
 
 
 def _policy_semantics(session: Session) -> dict[str, Any]:
@@ -1498,6 +1536,59 @@ def ch04_guardrail_overrun(session: Session,
             findings[first_for_this_policy:] = [
                 replace(f, detail=f.detail + note)
                 for f in findings[first_for_this_policy:]]
+
+    # E24. Asked once per session rather than per policy type, and asked
+    # OUTSIDE the loop above, because it is not a question about ordering. The
+    # loop asks "what happened after this control fired"; this asks whether the
+    # control was ever there. A session where nothing happened afterwards --
+    # which is precisely the fabricated-exculpation shape -- never enters the
+    # loop's finding paths at all.
+    undeclared = _undeclared_controls(session)
+    if undeclared:
+        cited = sorted({
+            sanitise_display(e.data.get("policy_id") or e.event_type,
+                             limits.max_identity_chars)
+            for e in undeclared})
+        cited_shown, cited_dropped = cap_list(cited, limits.max_evidence_items)
+        declared = sorted(session.manifest.policies)
+        declared_shown, declared_dropped = cap_list(
+            declared, limits.max_evidence_items)
+        findings.append(Finding(
+            check=CH04_UNDECLARED,
+            family=CH04_FAMILY,
+            # Medium, and deliberately not higher. The session states that a
+            # control fired which the operator did not declare, and the two
+            # explanations are an out-of-date manifest and a fabricated
+            # exculpation. Cohaera cannot tell them apart and must not price
+            # this as though it could.
+            severity="medium",
+            session_id=session.session_id,
+            title="Policy event cites a control the manifest does not declare",
+            detail=(
+                f"{len(undeclared)} policy event(s) cite "
+                f"{', '.join(cited_shown)}"
+                + (f" and {cited_dropped} more" if cited_dropped else "")
+                + ", which the operator's capability manifest does not declare. "
+                f"It declares {len(declared)}: {', '.join(declared_shown)}"
+                + (f" and {declared_dropped} more" if declared_dropped else "")
+                + ". A policy event is otherwise accepted as a control on the "
+                "strength of its own policy_id, so an undeclared one puts a "
+                "documented refusal in the session that nothing in the "
+                "manifest accounts for. THIS IS NOT A BYPASS AND NOT PROOF OF "
+                "FABRICATION: an out-of-date manifest produces it too. What it "
+                "establishes is that the exculpation in this session cannot be "
+                "attributed to a control the operator says exists. See "
+                "EVASION.md E24."
+            ),
+            evidence={
+                "undeclared_controls": cited_shown,
+                "undeclared_controls_truncated": cited_dropped,
+                "undeclared_event_count": len(undeclared),
+                "declared_controls": declared_shown,
+                "declared_controls_truncated": declared_dropped,
+                "declared_total": len(declared),
+            },
+        ))
 
     shown, dropped = cap_list(findings, limits.max_findings_per_check)
     return shown
@@ -2067,6 +2158,13 @@ R_ORDER_INDETERMINATE = "EVENT_ORDER_INDETERMINATE"
 # COH-R09. A scanner answered for some of the calls that could have brought
 # untrusted content in, and nothing answered for the rest.
 R_SCANNER_PARTIAL = "INJECTION_SCANNER_PARTIAL_COVERAGE"
+# E09, both halves. Produced by `cohaera.content_scan`, which is a SECOND
+# OPINION about the scanner and never taint evidence about the session; see
+# that module for why the distinction is load-bearing. Both codes can only
+# lower a CH03 confidence or add a remedy. Neither can raise one, move CH03
+# off `not_evaluated`, or contribute to a finding.
+R_UNSCANNED_CONTENT_MARKERS = "UNSCANNED_CONTENT_CARRIES_MARKERS"
+R_SCANNER_CONTRADICTED = "SCANNER_ANSWER_CONTRADICTED_BY_CONTENT"
 R_FIELD_DEFECTS = "RECORD_FIELD_DEFECTS_PRESENT"
 # P1. The three absences that are now STATED rather than passed over.
 R_NO_APPROVAL_EVIDENCE = "NO_APPROVAL_EVIDENCE"
@@ -2255,6 +2353,117 @@ def _scanner_coverage(session: Session) -> ScannerCoverage:
         scanned=sum(1 for c in scannable if id(c) in scanned),
         scannable=len(scannable),
         unbound=unbound)
+
+
+@dataclass(frozen=True)
+class LocalContentSignal:
+    """What Cohaera's own pass saw in captured content, against what upstream said.
+
+    E09. CH03's ceiling is somebody else's pattern list, and the operator had no
+    way to find that out: a session whose reads returned pages of override text
+    reported the same `NO_INJECTION_SCANNER_EVIDENCE` as one whose reads
+    returned a postcode.
+
+    Two facts, kept apart because an analyst acts on them differently.
+
+    `unscanned` is content nobody examined. It is a gap in deployment -- the
+    scanner is not pointed at this channel -- and the remedy is plumbing.
+
+    `contradicted` is content a scanner examined and called clean, which
+    Cohaera's own patterns disagree with. That is a gap in the SCANNER, it is
+    E09 exactly, and the remedy is a better pattern list upstream. It is the
+    stronger of the two signals and the rarer one.
+
+    Note what is absent: a call where upstream found markers and so did the
+    local pass is not recorded at all. Agreement is not news, and counting it
+    would let a session buy its way out of a penalty by being obviously bad.
+    """
+
+    unscanned: tuple[tuple[str, tuple[str, ...]], ...]
+    contradicted: tuple[tuple[str, tuple[str, ...]], ...]
+    examined: int
+
+    @property
+    def contradiction_share(self) -> float:
+        """Share of the examined surface whose clean answer is disputed.
+
+        0.0 when nothing was examined, because a scanner that answered for no
+        call has not been contradicted -- it has not been consulted. That case
+        is already charged as missing coverage by `ScannerCoverage.share` and
+        charging it twice would double-count one gap.
+        """
+        if not self.examined:
+            return 0.0
+        return len(self.contradicted) / self.examined
+
+
+def _brief_local(hits: tuple[tuple[str, tuple[str, ...]], ...],
+                 limits: Limits = DEFAULT_LIMITS) -> str:
+    """`tool (MARKER, MARKER)` per call, capped and sanitised for display.
+
+    The tool name is producer-controlled text on its way into an operator's
+    console, so it goes through `sanitise_display` like every other such
+    string. The marker names are Cohaera's own constants and need no such
+    treatment, which is one more reason they are prefixed `LOCAL_`: the two
+    kinds of string are never mixed in one list.
+    """
+    shown, dropped = cap_list(list(hits), limits.max_evidence_items)
+    text = ", ".join(
+        f"{sanitise_display(name, limits.max_tool_name_chars)} "
+        f"({', '.join(markers)})" for name, markers in shown)
+    return f"{text} and {dropped} more" if dropped else text
+
+
+def _local_content_signal(session: Session,
+                          limits: Limits = DEFAULT_LIMITS) -> LocalContentSignal:
+    """Compare captured `tool_result` against the scanner answers about it.
+
+    Bound to calls exactly as `_scanner_coverage` binds answers -- by span, then
+    by tool name -- because the two have to agree about which call an answer was
+    about. Measured over the same surface for the same reason: a result on a
+    consequential call is output, not somebody else's text arriving.
+    """
+    calls = session.tool_calls
+    by_span = {c.span_id: c for c in calls if c.span_id}
+    by_name: dict[str, ToolCall] = {}
+    for c in calls:
+        by_name.setdefault(c.name, c)
+
+    def bind(e: Event) -> ToolCall | None:
+        call = by_span.get(e.span_id) if e.span_id else None
+        if call is None:
+            call = by_name.get(e.tool_name) if e.tool_name else None
+        return call
+
+    scannable = {id(c) for c in calls if not c.consequential}
+    reported: set[int] = set()          # a scanner answered for this call
+    marked: set[int] = set()            # ...and it said markers were present
+    found: dict[int, tuple[str, ...]] = {}
+    names: dict[int, str] = {}
+
+    for e in session.events:
+        call = bind(e)
+        if call is None or id(call) not in scannable:
+            continue
+        key = id(call)
+        names[key] = call.name
+        if scanner_reported(e.data):
+            reported.add(key)
+        if scanner_marked(e.data):
+            marked.add(key)
+        hits = local_markers(e.data, limits)
+        if hits:
+            found[key] = tuple(dict.fromkeys(found.get(key, ()) + hits))
+
+    unscanned = tuple(sorted((names[k], m) for k, m in found.items()
+                             if k not in reported))
+    # Only a CLEAN answer can be contradicted. Where upstream already said
+    # markers were present, agreement is not a finding about the scanner.
+    contradicted = tuple(sorted((names[k], m) for k, m in found.items()
+                                if k in reported and k not in marked))
+    return LocalContentSignal(
+        unscanned=unscanned, contradicted=contradicted,
+        examined=len(reported & scannable))
 
 
 def _result_share(session: Session) -> float:
@@ -2453,13 +2662,22 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
     required = [SURFACE_INJECTION_SCANNER, SURFACE_TOOL_CLASS, SURFACE_EVENT_CLOCK,
                 SURFACE_CORRELATION_KEY]
     if not scanner:
+        # E09. The status, the confidence and the surfaces below are unchanged
+        # by anything the local pass finds: no scanner ran, so the check still
+        # cannot run, and Cohaera's own regexes do not get to say otherwise.
+        # What the local pass adds is a REMEDY that names the calls whose
+        # captured content is already full of override text -- because "no
+        # scanner ran" and "no scanner ran, and here is what was sitting in the
+        # results you captured" send an operator to very different places.
+        local = _local_content_signal(session, limits)
         contracts.append(CheckContract(
             check=CH03_FAMILY, status=STATUS_NOT_EVALUATED, confidence=0.0,
             required_surfaces=required,
             present_surfaces=[SURFACE_TOOL_CLASS, SURFACE_EVENT_CLOCK,
                               SURFACE_CORRELATION_KEY],
             missing_surfaces=[SURFACE_INJECTION_SCANNER],
-            reasons=[R_NO_SCANNER],
+            reasons=[R_NO_SCANNER] + ([R_UNSCANNED_CONTENT_MARKERS]
+                                      if local.unscanned else []),
             # F-16. The second half of this used to read "or capture
             # tool_result so Cohaera can scan locally", and Cohaera does not
             # scan locally. An operator who captured the result got the same
@@ -2467,17 +2685,25 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
             # why. A remedy that does not work is worse than no remedy: it
             # spends the operator's effort and their trust.
             #
-            # Not replaced with a local scanner. Cohaera VERIFIES evidence and
-            # does not manufacture it, and a regex pass of its own would be a
-            # new source of exactly the false confidence E09 already describes
-            # -- with the added problem that the detector would then be
-            # grading its own scanner's output.
+            # STILL NOT REPLACED WITH A LOCAL SCANNER, and the wording below is
+            # unchanged. Cohaera VERIFIES evidence and does not manufacture it.
+            # `cohaera.content_scan` scans, but its output is a second opinion
+            # about the SCANNER's coverage and is barred from becoming taint
+            # evidence about the session -- it cannot enable this check, and
+            # the sentence saying so remains true.
             remedies=["Emit has_injection_patterns on the events whose results "
                       "were scanned, from a scanner that runs where the content "
                       "arrives. Cohaera does not scan content itself: capturing "
                       "tool_result does not enable this check, and a detector "
                       "that generated its own taint evidence would be grading "
-                      "its own work."],
+                      "its own work."]
+            + ([f"{len(local.unscanned)} unscanned call(s) returned content "
+                "matching Cohaera's own injection patterns, so the gap above "
+                "is not hypothetical: "
+                + _brief_local(local.unscanned, limits)
+                + ". These are Cohaera's patterns, not a scanner's answer, and "
+                "they are reported here rather than as a finding."]
+               if local.unscanned else []),
             assumptions=["No marker field in the stream means no scanner ran, not "
                          "that nothing was found; see EVASION.md E09."]))
     else:
@@ -2508,6 +2734,25 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
         if unordered:
             conf *= 1.0 - len(unordered) / len(session.consequential_calls)
             reasons.append(R_ORDER_INDETERMINATE)
+        # E09, the sharp half. A scanner examined this call and called it
+        # clean, and Cohaera's own patterns disagree. That is not a taint claim
+        # and does not become one: no finding is produced, no marker is
+        # synthesised, and CH03 goes on ordering only the answers upstream
+        # gave. What it is, is direct evidence that the scanner's pattern list
+        # has a hole -- and CH03's confidence is a claim about how much of this
+        # session the check saw, which a demonstrated hole makes smaller.
+        #
+        # Charged as the share of examined calls whose answer is disputed, the
+        # same shape as every other coverage penalty here. It cannot reach zero
+        # from this term alone: a contradicted answer is weaker evidence than a
+        # missing one, because Cohaera's patterns are themselves just patterns
+        # and the disagreement may be Cohaera's error.
+        local = _local_content_signal(session, limits)
+        if local.contradicted:
+            conf *= 1.0 - 0.5 * local.contradiction_share
+            reasons.append(R_SCANNER_CONTRADICTED)
+        if local.unscanned:
+            reasons.append(R_UNSCANNED_CONTENT_MARKERS)
         contracts.append(CheckContract(
             check=CH03_FAMILY,
             status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
@@ -2523,6 +2768,17 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
             + ([f"{scan.unbound} scanner answer(s) name no call in this "
                 "session, so what they examined cannot be established."]
                if scan.unbound else [])
+            + ([f"{len(local.contradicted)} call(s) were scanned, reported "
+                "clean, and returned content matching Cohaera's own injection "
+                "patterns: " + _brief_local(local.contradicted, limits)
+                + ". Cohaera has NOT overridden the scanner and has raised no "
+                "finding; treat this as a gap in the upstream pattern list to "
+                "confirm by reading the result. See EVASION.md E09."]
+               if local.contradicted else [])
+            + ([f"{len(local.unscanned)} call(s) carry no scanner answer and "
+                "returned content matching Cohaera's own injection patterns: "
+                + _brief_local(local.unscanned, limits) + "."]
+               if local.unscanned else [])
             + (["Set capture_tool_data=True in a controlled environment so "
                 "marker provenance can be checked against the content."]
                if result_share < 1.0 else [])
@@ -3000,7 +3256,7 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
 
 ALL_CHECKS = ["CH01_sequence_order", "CH02_concealment_gap",
               CH03_COMPLETED, CH03_ATTEMPTED,
-              CH04_COMPLETED, CH04_ATTEMPTED, CH04_BYPASSED,
+              CH04_COMPLETED, CH04_ATTEMPTED, CH04_BYPASSED, CH04_UNDECLARED,
               "CH05_unpaired_calls",
               CH06_INTEGRITY,
               CH07_CONTRADICTED, CH07_UNBOUND, CH07_PARTIAL]
@@ -3014,6 +3270,7 @@ CHECK_FAMILIES = {
     CH04_COMPLETED: CH04_FAMILY,
     CH04_ATTEMPTED: CH04_FAMILY,
     CH04_BYPASSED: CH04_FAMILY,
+    CH04_UNDECLARED: CH04_FAMILY,
     "CH05_unpaired_calls": "CH05_unpaired_calls",
     CH06_INTEGRITY: CH06_INTEGRITY,
     CH07_CONTRADICTED: CH07_FAMILY,
