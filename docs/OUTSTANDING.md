@@ -201,6 +201,35 @@ states what it still does not buy.
       it is a second person with write access** — then the bypass goes and
       `test_the_bypass_is_declared_rather_than_silent` can be deleted.
 
+      **Applying it: disable first, verify the bypass, then enable.** The
+      approval rules and the bypass are separate fields, and the bypass can
+      fail to take while the approval requirement succeeds — which locks
+      `main` for everybody. Do not apply and hope:
+
+      ```bash
+      # 1. Load the rules with the ruleset switched off. Nothing is gated yet.
+      gh api -X PUT /repos/404SecNotFound/Cohaera/rulesets/20557863 \
+          --input .github/rulesets/main.json
+      gh api -X PUT /repos/404SecNotFound/Cohaera/rulesets/20557863 \
+          -f enforcement=disabled
+
+      # 2. Ask GitHub whether YOU can bypass. This is the check that matters:
+      #    it is computed from bypass_actors and is authoritative, where
+      #    reading back an actor_id only tells you what was stored.
+      gh api /repos/404SecNotFound/Cohaera/rulesets/20557863 \
+          --jq .current_user_can_bypass
+      #    "never"  -> STOP. Enabling now makes main unmergeable.
+      #    anything else -> the bypass resolved; go on.
+
+      # 3. Turn it on.
+      gh api -X PUT /repos/404SecNotFound/Cohaera/rulesets/20557863 \
+          -f enforcement=active
+      ```
+
+      `enforcement=disabled` is the unlock if it goes wrong; `evaluate` is
+      **not** available — it returns 422 on anything below Enterprise, so it
+      is not a rollback on this repository's plan.
+
 ---
 
 ## E. Decisions parked
