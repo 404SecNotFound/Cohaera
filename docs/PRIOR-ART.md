@@ -355,13 +355,32 @@ a truncated tool body, and a rule can be *unsatisfied* because a parser was quie
 for thirty days while today's event is complete. Cohaera's contract is a
 statement about **this session's evidence**, decided at scoring time.
 
-So §8 has to be careful about what it claims. **"Nobody scores whether a rule has
-the fields it needs" would be false — Outcomes Navigator does exactly that, and
-did it first.** What survives is narrower: a machine-readable grade attached to an
-*individual verdict* saying the evidence was insufficient. No public score schema,
-API object or failure taxonomy for that could be located, and Exabeam's published
-Open API surface covers Cloud Connectors, Context Management and Remediation
-rather than Outcomes Navigator. A New-Scale-internal API remains unchecked.
+**Narrowed again on a later pass, and this is the version to hold.** The per-rule
+drill-down carries an `ALL FIELDS SEEN` column with **three** states, not two:
+`satisfied`, `unsatisfied`, and — since the October 2025 release —
+**`Unsupported`**, which means the rule is *excluded from coverage calculations
+altogether*. Around 10% of Advanced Analytics rules sit there, including any
+whose expression involves `session-end` or `sequence-end`.
+
+**That is a per-detection "this could not be evaluated" state, shipping in a
+product.** It is not a Cohaera invention and this file must not imply otherwise.
+
+Two differences survive, and only two:
+
+1. **It is attached to a RULE, not to a VERDICT.** It answers "can this rule fire
+   given what was parsed over the last thirty days"; Cohaera answers "how much of
+   *this session* could this check actually see". Exabeam's own documentation
+   draws the line for us — a satisfied rule *"doesn't indicate whether your rules
+   are triggering"*.
+2. **It is not machine-readable.** The documented export is a PNG. The public API
+   catalogue carries no Outcomes Navigator or coverage endpoint, and the Threat
+   Center alert APIs expose no evidence-sufficiency field. An internal object
+   could exist; that is **unchecked, not disproved**.
+
+So §8's third claim now reads only as *machine-readable, verdict-attached
+evidence grading*. A research pass put it plainly: the older wording was **"one
+Exabeam blog post away from being wrong."** If Outcomes Navigator ever ships an
+API for that column, this file says so and the claim goes.
 
 ### MITRE CTID, Summiting the Pyramid
 
@@ -634,11 +653,17 @@ most useful thing any of them returned: the space is fragmented, nothing in it i
 canonical, and no single search enumerates it.
 
 **A fourth brief named that for what it is:** *a method failure, not a
-nine-project universe*. It estimates the real space at **roughly 15 to 25**
-public implementations and drafts doing some of {hash chain, per-event or
-checkpoint signature, offline verify}, once IETF drafts and near-misses are
-counted — and says so as an estimate, because its registry scrape was
-bot-blocked.
+nine-project universe*. A fifth ran the sweep properly — package registries,
+description-scoped repository search, arXiv, and a mechanical source screen
+requiring both a cryptographic primitive and an audit term in the same file —
+and reported **56 reachable repositories passing that screen**, against a
+candidate space it estimates at **50 to 100 purpose-built projects, of which
+roughly 15 to 25 hold the full signed-plus-chained-plus-export union**.
+
+Only **one** project resurfaced from the earlier lists, which settles the cause:
+the failure was vocabulary, not scarcity. The highest-yield query — npm for
+`tamper-evident` — no earlier pass had run. **56 is a candidate count from a
+mechanical screen, not 56 audited implementations**, and it is recorded that way.
 
 **Assume this table is incomplete and assume it stays incomplete** until
 somebody runs a census with written inclusion criteria. The operative lesson:
@@ -688,20 +713,34 @@ and rotation in a trust store rather than per-agent attestation, and it has no
 evidence-pack export at all. The narrowed claim is a description of an open
 position, not of an occupied one.
 
-### MCP SEP-1766 — **Unread**
+### MCP SEP-1766, and the description-layer hole — **Read on the second pass**
 
-Reported by commissioned research as the MCP proposal that actually addresses
-**tool-definition pinning**: a SHA-256 digest on each `tools/list` entry, which a
-client MAY pin, with a mismatch that SHOULD warn or block. Reported as a GitHub
-issue at status *Proposed* rather than a merged SEP, and confirmed absent from
-the `seps/` tree above.
+**This entry was wrong when first written here, and the correction matters.**
+It said SEP-1766 digests each `tools/list` entry and is therefore E25's remedy
+proposed upstream. A later pass read it: SEP-1766 is *Digest-Pinned Tool
+Versioning*, the digest is **over the code archive**, and *descriptions and
+schemas are explicitly not covered*. It was **closed without adoption on
+24 June 2026**.
 
-**This is EVASION.md E25's remedy, proposed upstream by somebody else.** E25 is
-the MCP rug pull: an approval binds the tool name and the arguments, and the
-tool's *definition* changes underneath it. If SEP-1766 lands, the digest an
-approval would need to bind already exists in the protocol, and Cohaera's job
-becomes consuming it rather than inventing one. **Read it before building E25's
-fix.**
+**So it is not E25's remedy — it is a proposal that would have left E25 open.**
+The MCP rug pull works precisely through the `description` field: the tool name,
+the code and the schema can all stay identical while the text that steers the
+model changes underneath an approval. A digest over the archive does not see
+that.
+
+The same hole runs through the neighbours. **SEP-2395 / MCPS `schema_hash`**
+covers structure, and a reviewer on that thread noted rug pulls go through
+`description`. **IETF `draft-sharif-mcps-secure-mcp-00`** offers full-object
+signatures with a client pin store and nonce, and describes itself as
+*"provenance, not safety"*. Practitioner tools fill the void without
+standardising it: `mcp-scan`, MCP Hangar's proxy digest pinning, Deconvolute's
+trust-on-first-use, OWASP AISVS 10.4.8.
+
+**Nothing adopted pins the description layer**, which leaves E25's fix as a
+design decision rather than a standard to consume: bind a JCS + SHA-256 digest
+of the **full** tool definition — name, description, input and output schemas —
+into the approval at issue time, and re-verify it at execution. That is what
+neither Vercel, nor aiAuthZ, nor any current MCP proposal does.
 
 Adjacent and non-protocol: FastMCP documents an application-specific fingerprint
 recipe, and `@socialneuron/mcp-server` ships a `tools.lock.json`. Conventions,

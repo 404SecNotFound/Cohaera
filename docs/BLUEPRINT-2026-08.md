@@ -731,6 +731,136 @@ fix; if it lands, the digest an approval must bind already exists.
 
 ---
 
+## 3.7 Fifth brief — three answers that change the plan
+
+The most technically detailed pass. It corrects two entries this project had
+already written into `docs/PRIOR-ART.md`, and it answers the two questions
+Phase 3 and Phase 7 were blocked on.
+
+### Agent Sensor: resolved, and the answer is not the convenient one
+
+The brief could not run the binary — still no licence, still no Linux build —
+so it read **string tables out of the hash-verified public binaries** instead.
+That is a weaker method than execution and it is flagged as such, including the
+legal ambiguity of doing even that.
+
+What it found:
+
+| | |
+|---|---|
+| Event timestamp field | **`ts`** |
+| `event_id`, `trace_id`, `span_id` | **zero occurrences**; all five `timestamp` hits trace to dependencies, not the schema |
+| Native event types | include **`tool_start`, `tool_end`, `tool_error`**, plus `session_start/end`, `model_request/response`, `policy_event`, `mcp_session_start/end` |
+| Drop counter | **`agent_sensor_events_dropped_total` EXISTS**, alongside `channel_depth`, `write_latency_seconds`, `backend_write_success/failure_total`, `dlq_size_bytes`, `cursor_evictions_total` |
+
+**So the "same open schema as Observra" claim is a version marker, not field
+compatibility.** Observra's envelope requires `event_id`, `timestamp`,
+`trace_id`, `span_id`; Agent Sensor carries none of the four and uses `ts`.
+
+**Phase 7's gate is answered: a separate adapter is required.** Cohaera cannot
+treat an Agent Sensor stream as an Observra stream, and any plan that assumed
+one ingestion path for both was wrong. The good news is real too — `tool_start`
+and `tool_end` exist natively, so the lifecycle Cohaera's model is built on is
+present, and the drop counter that §1.1 wanted exists on this path as well.
+
+Runtime confirmation on macOS or Windows remains open, and the engineering
+decision should treat it that way.
+
+### ABA does accept third-party telemetry — brief 4 was wrong
+
+**A direct contradiction between passes, and this one carries the citation.**
+Brief 4 reported no documented third-party ingestion contract. Brief 5 quotes
+Exabeam's own FAQ — *"Can ABA analyze custom or third-party AI agents? Yes.
+Observra standardizes agent-native telemetry…"* — and notes that Observra is
+Apache-2.0 and **explicitly usable without any Exabeam product**.
+
+So the practical contract exists and is nameable: **emit Observra/CIM-conformant
+events.** Three paths in: prebuilt collectors, the Agent Sensor binary, or the
+Observra SDK.
+
+One caveat, marked inferred rather than verified, and it is the one that
+matters: generic data arriving through a Webhook Cloud Collector with a custom
+parser lands in **search and correlation, not ABA** — the documentation warns
+that "preconfigured content support is not available". ABA's detections apply
+where events populate the agent-behaviour CIM schema. **Emitting Observra shape
+is the contract; emitting arbitrary JSON is not.**
+
+Phase 3's downstream half is unblocked.
+
+### The LogRhythm play is buildable on both sides after all
+
+Brief 4 concluded AIE packs had no documented out-of-band distribution format.
+Brief 5 names it: **AIE rules export and import as `.airx`** through Deployment
+Manager, or through the **AI Engine API from 7.23 onward**. Custom MPE rules
+export as files. Distribution outside the gated Knowledge Base is file-based and
+unrestricted — Exabeam's own blog suggests GitHub for JSON policies — and **KB
+sync only overwrites LogRhythm-authored system content, leaving custom content
+untouched**.
+
+No signed-package or vetting requirement was found in either direction, which is
+recorded as *no evidence either way* rather than as permission.
+
+**That removes the blocker on the half of the LogRhythm play that looked
+blocked.** A distributable MPE + AIE agent-security pack for LogRhythm SIEM is
+buildable by one person, with no gated channel and no Exabeam involvement.
+
+### Corpora: convertible, but they cannot test ordering
+
+All three carry full per-step transcripts. AgentDojo is the most tractable —
+roughly 100 to 200 lines, offline, no framework change. SCAM similar. InjecAgent
+is the weakest: not a live loop, pre-baked ReAct scratchpad, needing text
+parsing, at most two events per case.
+
+**And the limitation that decides how they can be used: none of the three
+records per-event timestamps.** Run-level time only. Timestamps must be
+synthesised.
+
+**CH03 and CH04 are ordering checks.** On a corpus with synthetic timestamps they
+cannot be evaluated honestly — which means a converted corpus tests *content*,
+and any ordering result from it would be an artefact of the converter. That has
+to be declared in the evaluation card as a `not_evaluated` reason, not quietly
+averaged in. The brief's own framing is the right one: this is *precisely the
+class of limitation Cohaera exists to grade*, and it would be embarrassing to
+hide it.
+
+### The gap-marker design, with the defect to fix on adoption
+
+Fully specified now, and one detail is worth more than the rest.
+
+The loss claim lives **inside the signed preimage**, as the content field —
+`obsvr:audit-gap/1 dropped={N} reason={reason}` — with the metadata copy
+explicitly unsigned and non-authoritative. The stated reason: *a count carried
+only in metadata could be edited from 10,000 to 1 without breaking a single
+signature.*
+
+Their verifier accepts a marker only after signature verification, only in the
+verified prefix, and only when `operation == "audit.gap"` — because a **user
+prompt** reading `obsvr:audit-gap/1 dropped=999999` once produced a legitimately
+signed forged loss declaration. That is a real attack they hit and fixed.
+
+**And the residual defect they document and did not fix: `operation` is not in
+the signature preimage.** A stored-event editor can flip the discriminator.
+Their note says closing it means a chain-format change they chose not to make.
+
+**If Cohaera adopts this design, sign the discriminator.** That is the one
+change to make on the way in, and it is free to us because we would be
+designing the format rather than amending one.
+
+### Positioning, from the most adversarial pass
+
+Its own summary of what is left, after finding roughly 45 projects in the space:
+
+> The defensible claim is no longer about the existence of tamper-evidence, or
+> even the union. It is (a) per-agent key scope, (b) evidence-quality grading
+> attached to detection verdicts, (c) machine-readable inconclusive signals, and
+> (d) the signed gap-marker design if adopted with the discriminator signed.
+> **Nobody in the 45 does (b) or (c).**
+
+That is the sharpest positioning statement produced by any of the five briefs,
+and it was produced by the one trying hardest to knock the project down.
+
+---
+
 ## 4. Phases
 
 Sequenced so the cheapest disconfirming evidence arrives first. **Every phase

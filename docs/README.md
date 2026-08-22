@@ -5,7 +5,7 @@
 
 # Documentation map
 
-27 documents, about 112,000 words. This page exists so you never have to
+27 documents, about 114,000 words. This page exists so you never have to
 guess which one answers your question.
 
 Each row says what question the document answers, not what it contains.
