@@ -230,14 +230,32 @@ question each one answers. The four read most often:
 ## The problem in one page
 
 [observra](https://github.com/open-agent-ai-security/observra) captures agent
-telemetry and normalises it to a Common Information Model. It is good at that.
-Its rule engine signature is:
+telemetry and normalises it to a Common Information Model. It is good at that,
+and it is **Exabeam's own project** — Apache-2.0, copyright Exabeam, Inc.,
+flagship in the `open-agent-ai-security` org, shipping an Exabeam sender. The
+gap below is in Exabeam's capture layer, not a competitor's.
+
+Its rule engine signature, read at
+[`c4d036b`](https://github.com/open-agent-ai-security/observra/blob/c4d036b40762e8791a87e9e5b8ff09a35604d319/src/observra/core/rules.py):
 
 ```python
-evaluate_rules(event_type: str, data: dict) -> list[str]
+def evaluate_rules(event_type: str, data: dict[str, Any] | None) -> dict[str, Any]:
 ```
 
-Stateless. Single event. **No rule can see two events at once.**
+Stateless. Single event. **No rule can see two events at once** — and that is
+structural rather than incidental. Every rule in the table is a literal of the
+form `lambda et, d: ...`, taking one event-type string and one data dict. There
+is no session, no accumulator, no history to consult.
+
+**One rule appears to contradict that, and does not.** `Suspicious Tool
+Sequence` checks `d.get("suspicious_sequence") is True`, so the correlation is
+expected to have happened upstream. The function that would do it,
+`detect_suspicious_sequence()` in `core/sequences.py`, is **defined once and
+called nowhere in the repository — not in `src`, not in `tests`.** Nothing sets
+the flag, so that rule cannot fire from observra's own instrumentation. And were
+it wired up, it computes `has_read and has_external` over the session's tool
+names: set membership with no notion of order, so `send_email` then `read_file`
+scores identically to `read_file` then `send_email`.
 
 The consequence is recorded by the maintainer in observra issue
 [#108](https://github.com/open-agent-ai-security/observra/issues/108),
