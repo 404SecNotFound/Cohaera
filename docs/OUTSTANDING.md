@@ -242,6 +242,40 @@ states what it still does not buy.
       | Does an invalid field abort the whole PUT? | **Yes.** The `evaluate` attempt returned 422 and changed nothing, so a bad apply fails closed rather than half-applying. |
       | Does a one-field PUT wipe the others? | **No.** `-f enforcement=…` on its own preserved every rule. |
       | Can the bypass be confirmed from an automation session? | **No.** GitHub omits `bypass_actors` for callers without admin, and `current_user_can_bypass` answers for the *calling* token — it reads `never` for the automation token and `always` for the owner. **Only a maintainer can verify this field.** |
+      | Does `current_user_can_bypass: always` mean the owner can merge? | **No — and this page said otherwise until a merge was actually attempted.** See below. |
+
+      **THE BYPASS IS PATH-DEPENDENT, AND THE FIELD DOES NOT SAY SO.** With the
+      ruleset active, one approval required and zero reviews on the pull
+      request, `PUT /repos/{owner}/{repo}/pulls/{n}/merge` returns
+      **`405 Pull Request is not mergeable`** for an owner whose
+      `current_user_can_bypass` reads `always`. The API reported the same
+      request as `"mergeable": true` with `"mergeable_state": "blocked"` — no
+      git conflict, held purely by the approval rule.
+
+      So `current_user_can_bypass` states an actor's *eligibility*, not that
+      the bypass is honoured on the path being used. The REST merge endpoint
+      enforces the rule and offers no override parameter.
+
+      | merge route | under an active ruleset with 0 approvals |
+      |---|---|
+      | `PUT /repos/{owner}/{repo}/pulls/{n}/merge` | **refused, 405** — observed |
+      | Web UI merge button | **works** — observed, this is how #44 landed |
+      | `gh pr merge --admin` | **not tested.** Its one success on this repository was under `enforcement: disabled`, where the flag is a no-op, so that proves nothing |
+
+      The last row is left as untested rather than assumed. An earlier draft of
+      this entry asserted that `--admin` works "because it takes a different
+      path", which was inference dressed as observation — the same substitution
+      the paragraph below is about, committed while writing the warning against
+      it.
+
+      This was found by trying it. The procedure above had been written, run,
+      and its verification step passed — and it still did not predict that the
+      first gated merge would be refused, because the field it checks answers a
+      narrower question than the one that matters. **A control verified through
+      the interface that reports on it, rather than through the action it
+      governs, is verified in the weakest available sense.** That is this
+      project's own argument, and it took two attempts on its own repository
+      to notice it applied here.
 
       That last row is the one to remember. An automation session can read
       `enforcement`, the rules and the required checks, and cannot read the
