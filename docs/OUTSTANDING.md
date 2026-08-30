@@ -242,31 +242,50 @@ states what it still does not buy.
       | Does an invalid field abort the whole PUT? | **Yes.** The `evaluate` attempt returned 422 and changed nothing, so a bad apply fails closed rather than half-applying. |
       | Does a one-field PUT wipe the others? | **No.** `-f enforcement=…` on its own preserved every rule. |
       | Can the bypass be confirmed from an automation session? | **No.** GitHub omits `bypass_actors` for callers without admin, and `current_user_can_bypass` answers for the *calling* token — it reads `never` for the automation token and `always` for the owner. **Only a maintainer can verify this field.** |
-      | Does `current_user_can_bypass: always` mean the owner can merge? | **No — and this page said otherwise until a merge was actually attempted.** See below. |
+      | Does `current_user_can_bypass: always` mean the owner can merge? | **Yes.** An earlier version of this entry said no. It was wrong; see below. |
 
-      **THE BYPASS IS PATH-DEPENDENT, AND THE FIELD DOES NOT SAY SO.** With the
-      ruleset active, one approval required and zero reviews on the pull
-      request, `PUT /repos/{owner}/{repo}/pulls/{n}/merge` returns
-      **`405 Pull Request is not mergeable`** for an owner whose
-      `current_user_can_bypass` reads `always`. The API reported the same
-      request as `"mergeable": true` with `"mergeable_state": "blocked"` — no
-      git conflict, held purely by the approval rule.
+      **THE BYPASS WORKS ON THE REST PATH. A PREVIOUS VERSION OF THIS ENTRY
+      CLAIMED OTHERWISE AND WAS WRONG.** The claim, and its refutation, are
+      both left here because the mistake is more instructive than the fact.
 
-      So `current_user_can_bypass` states an actor's *eligibility*, not that
-      the bypass is honoured on the path being used. The REST merge endpoint
-      enforces the rule and offers no override parameter.
+      What was observed, in order:
+
+      | # | event | evidence |
+      |---|---|---|
+      | 1 | `PUT /repos/{owner}/{repo}/pulls/44/merge` → **`405 Pull Request is not mergeable`** | with the ruleset active and 0 approvals |
+      | 2 | The same call, minutes later → **`{"merged": true, "sha": "a52da61"}`** | `a52da61` is the commit on `main` |
+      | 3 | Ruleset was active across both | set `active` `2026-08-22T13:34:12Z`, first `disabled` again `2026-08-30T04:19:19Z`; the merge committed `2026-08-30T03:39:27Z` |
+
+      So the same endpoint, same actor, same ruleset state, refused once and
+      succeeded once. **The 405 was transient, not structural.** The most
+      consistent explanation is GitHub's asynchronous mergeability
+      recomputation: the branch had just been force-pushed, `mergeable` is
+      computed in the background, and the merge endpoint answers 405 while it
+      is `null` — not only when it is `false`. This is not confirmed against
+      GitHub's implementation and is recorded as the leading explanation, not
+      as a fact.
 
       | merge route | under an active ruleset with 0 approvals |
       |---|---|
-      | `PUT /repos/{owner}/{repo}/pulls/{n}/merge` | **refused, 405** — observed |
-      | Web UI merge button | **works** — observed, this is how #44 landed |
-      | `gh pr merge --admin` | **not tested.** Its one success on this repository was under `enforcement: disabled`, where the flag is a no-op, so that proves nothing |
+      | `PUT /repos/{owner}/{repo}/pulls/{n}/merge` | **works** — observed (#44, #45, #46); one earlier 405 on a freshly force-pushed ref |
+      | Web UI merge button | untested — believed to work, never actually the route used here |
+      | `gh pr merge --admin` | **not tested.** Its one success on this repository was under `enforcement: disabled`, where the flag is a no-op |
 
-      The last row is left as untested rather than assumed. An earlier draft of
-      this entry asserted that `--admin` works "because it takes a different
-      path", which was inference dressed as observation — the same substitution
-      the paragraph below is about, committed while writing the warning against
-      it.
+      **WHAT THE MISTAKE WAS, since it is the reusable part.** One refusal was
+      generalised into a structural claim — "the bypass is path-dependent" —
+      written into the permanent record with a confident heading, inside an
+      entry whose own subject is not substituting a report for an observation.
+      A single negative result was treated as a property of the system rather
+      than as one measurement that might not repeat. **The check that would
+      have caught it was to try the same call twice**, and it cost nothing.
+
+      **A SECOND CORRECTION, same root.** Two commits were described on this
+      page and in pull request descriptions as "missed by the squash". They
+      were not. Both were pushed to branches whose pull requests had **already
+      merged** — #44 merged at `03:39:27Z` and the follow-up commit was pushed
+      after it. Nothing dropped them; they were pushed to a dead ref. The fix
+      is not a convention about when to push relative to CI, it is to check
+      whether the pull request is still open before pushing to its branch.
 
       This was found by trying it. The procedure above had been written, run,
       and its verification step passed — and it still did not predict that the
