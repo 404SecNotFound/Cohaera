@@ -180,8 +180,10 @@ states what it still does not buy.
 - [x] **Require independent approvals** (item A8). `.github/rulesets/main.json`
       now sets `required_approving_review_count: 1`, `require_code_owner_review`
       and `require_last_push_approval`, pinned by `tests/test_ci_config.py`.
-      Applying it live still needs admin; the automation token gets 403, so the
-      committed file is the source of truth and a maintainer syncs it.
+      **Applied live and verified on 2026-08-22**, against ruleset `20557863`.
+      Applying it needs admin — the automation token gets 403 — so the
+      committed file is the source of truth and a maintainer syncs it by the
+      procedure below.
 
       **This entry previously said "two minutes of repository settings", and
       that was wrong in the direction that bites.** `.github/CODEOWNERS` names
@@ -229,6 +231,29 @@ states what it still does not buy.
       `enforcement=disabled` is the unlock if it goes wrong; `evaluate` is
       **not** available — it returns 422 on anything below Enterprise, so it
       is not a rollback on this repository's plan.
+
+      **What the first application settled, and what it did not.** These were
+      open questions when the ruleset was written and are recorded here as
+      answers rather than left to be re-derived:
+
+      | question | answer |
+      |---|---|
+      | Is `actor_id: 5` / `RepositoryRole` the repository admin? | **Yes.** `current_user_can_bypass` returned `always` for the owner. It was a guess when committed and is now measured. |
+      | Does an invalid field abort the whole PUT? | **Yes.** The `evaluate` attempt returned 422 and changed nothing, so a bad apply fails closed rather than half-applying. |
+      | Does a one-field PUT wipe the others? | **No.** `-f enforcement=…` on its own preserved every rule. |
+      | Can the bypass be confirmed from an automation session? | **No.** GitHub omits `bypass_actors` for callers without admin, and `current_user_can_bypass` answers for the *calling* token — it reads `never` for the automation token and `always` for the owner. **Only a maintainer can verify this field.** |
+
+      That last row is the one to remember. An automation session can read
+      `enforcement`, the rules and the required checks, and cannot read the
+      bypass at all — so "CI confirmed the ruleset" will never cover the half
+      of it that decides whether `main` is mergeable.
+
+      **A live application is not proved by a successful merge.** Merging with
+      `--admin` while `enforcement` is `disabled` succeeds for the wrong
+      reason: the flag is a no-op and nothing was gated. Read `enforcement`
+      and `updated_at` back, and check the timestamp actually moved — a
+      re-enable that silently never reached GitHub looks identical to one that
+      worked, and this happened once already.
 
 ---
 
