@@ -254,9 +254,19 @@ states what it still does not buy.
 
       So `current_user_can_bypass` states an actor's *eligibility*, not that
       the bypass is honoured on the path being used. The REST merge endpoint
-      enforces the rule and offers no override parameter. Merge through the web
-      UI ("Merge without waiting for requirements") or `gh pr merge --admin`,
-      which take a different path.
+      enforces the rule and offers no override parameter.
+
+      | merge route | under an active ruleset with 0 approvals |
+      |---|---|
+      | `PUT /repos/{owner}/{repo}/pulls/{n}/merge` | **refused, 405** — observed |
+      | Web UI merge button | **works** — observed, this is how #44 landed |
+      | `gh pr merge --admin` | **not tested.** Its one success on this repository was under `enforcement: disabled`, where the flag is a no-op, so that proves nothing |
+
+      The last row is left as untested rather than assumed. An earlier draft of
+      this entry asserted that `--admin` works "because it takes a different
+      path", which was inference dressed as observation — the same substitution
+      the paragraph below is about, committed while writing the warning against
+      it.
 
       This was found by trying it. The procedure above had been written, run,
       and its verification step passed — and it still did not predict that the
