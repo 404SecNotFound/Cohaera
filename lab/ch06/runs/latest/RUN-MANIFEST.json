@@ -1,0 +1,23 @@
+{
+  "artifacts": {
+    "runs/latest/RESULTS.md": "0ccf52d97f135f733a6029fdd24953350b808870d5fed1264786c333d0e55070",
+    "runs/latest/results.json": "0866ba94f63ecea859703bebb84804dae3468a75d9be86a370c69523e9dbc29e"
+  },
+  "cases": 9,
+  "expectations_sha256": "a9a0278fc9e7b85ea34eac103d996d80aa685f17a1b79fbdd4ba98cbd416b14d",
+  "fixtures": {
+    "fixtures/cases/deleted.jsonl": "c1d8b193e510db302ab632636d18d72f280ea36c9e537c44a5552a72bc9c5cae",
+    "fixtures/cases/intact.jsonl": "e2c1d54cf9445d5593f16ce8091d787c389ed6c09bbb9b0682b6bd4568e2158d",
+    "fixtures/cases/modified.jsonl": "e9487ca93317720dd90c162ab134e4930127118bef44a7ef14169c3b61b31c27",
+    "fixtures/cases/no_key.jsonl": "e2c1d54cf9445d5593f16ce8091d787c389ed6c09bbb9b0682b6bd4568e2158d",
+    "fixtures/cases/reordered.jsonl": "20dbcf7e981e2d55e03ba80c56a47372eb1272cf0cd79f89fd1275b0b580cc25",
+    "fixtures/cases/replayed.jsonl": "e2c1d54cf9445d5593f16ce8091d787c389ed6c09bbb9b0682b6bd4568e2158d",
+    "fixtures/cases/stripped.jsonl": "62af40c40d5bf7a6e171656f266c44c61814ef344d427c905130c3155f3699b9",
+    "fixtures/cases/truncated.jsonl": "247346ed765865d331e3a9fcbc01d744cbcc210a80cd4b2362b0935bea018d65",
+    "fixtures/cases/unsupported.jsonl": "3d99b96ce2a26f19ea061d679e573681f021caaca55ed7814d23817d08bc7ab8",
+    "fixtures/source/canonical.raw.jsonl": "fdfaf2ff0da2eea03226e6f085031f61962955c70613c62d3f39e78652351a9a",
+    "fixtures/source/canonical.signed.jsonl": "e2c1d54cf9445d5593f16ce8091d787c389ed6c09bbb9b0682b6bd4568e2158d",
+    "fixtures/source/trust-store.json": "ac6ed79fa022b13bd86865cddc1f22f0fc65fdc1c5e3dd5d96cf82f330e2a621"
+  },
+  "schema": "cohaera.ch06_run_manifest:1"
+}
