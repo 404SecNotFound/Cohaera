@@ -1,18 +1,11 @@
-"""Cohaera: the correlation and coherence layer for agent telemetry.
+"""Passive security monitoring and detection engineering for agent telemetry.
 
 From Latin *cohaerere*, to hang together.
 
-observra captures and normalises agent events. Its rule engine signature is
-``evaluate_rules(event_type, data)``: stateless, single-event, cannot see two
-events at once. Exabeam issue #108 on that repo records the consequence in the
-maintainer's own words: "28/34 AI analytics rules work today. Zero correlation
-rules can fire."
-
-Cohaera assembles that flat stream into sessions, derives behavioural features
-that only exist once events are grouped, and emits correlation-grade CIM records
-that a SIEM can actually write rules against.
-
-It does not replace behavioural analytics. It feeds it.
+Cohaera reads exported events out of band, assembles them into sessions, checks
+the evidence, derives security features, and emits records and detections for a
+SIEM or investigation workflow. It does not proxy, authorize, or block agent
+actions.
 """
 
 __version__ = "0.3.0"

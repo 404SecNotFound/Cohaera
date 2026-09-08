@@ -5,7 +5,7 @@
 
 # Documentation map
 
-27 documents, about 116,000 words. This page exists so you never have to
+29 documents, about 111,000 words. This page exists so you never have to
 guess which one answers your question.
 
 Each row says what question the document answers, not what it contains.
@@ -15,6 +15,8 @@ Each row says what question the document answers, not what it contains.
 | Document | The question it answers |
 |---|---|
 | [README](../README.md) | What is this, what does it measure, and how do I run it? |
+| [OPERATOR-GUIDE](OPERATOR-GUIDE.md) | How do I reproduce the labs, read a verdict, score my own telemetry, and learn the code path? |
+| [DIRECTION](DIRECTION.md) | What does “Zeek for AI agents” mean here, why is Cohaera passive, and which milestones and detection areas come next? |
 | [BLUEPRINT-2026-08](BLUEPRINT-2026-08.md) | Two external strategy documents arrived and recommend opposite things. What in them is true, what is already done, which position wins, and what gets built in what order? |
 | [OUTSTANDING](OUTSTANDING.md) | Everything is merged and green — so what is actually left, who owns it, and what should be done first? |
 | [POSITIONING](../POSITIONING.md) | What layer is this, what is it *not*, and what language does the project refuse to use about its own results? |
