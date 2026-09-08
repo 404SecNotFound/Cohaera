@@ -13,7 +13,7 @@ the roadmap, work blocked on repository access, and decisions deliberately
 parked. They are listed separately because they have different owners and very
 different sizes.
 
-**The numbers here are derived.** 19 free evasions, 9 roadmap items, 8 role
+**The numbers here are derived.** 19 free evasions, 5 roadmap items, 8 role
 review findings, 3,309 lines in `checks.py` — every one of those is read out of
 the file it describes by [`tools/readme_facts.py`](../tools/readme_facts.py) and
 checked in CI. Status *within this page* is a checkbox rather than a total,
@@ -150,7 +150,7 @@ made deliberately rather than as a side effect.
 
 ## C. Roadmap
 
-9 unchecked items in the README's roadmap.
+5 unchecked items in the README's roadmap.
 
 - [ ] AgentDojo corpus under observra instrumentation, 25 attempts per scenario
 - [ ] CH02 semantic matching — currently lexical, and its weakest point

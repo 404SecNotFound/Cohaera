@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cohaera"
 version = "0.3.0"
-description = "Evidence quality for agent telemetry. Verifies how trustworthy an agent session is, normalises it into correlation-ready features, and measures where the detections fail."
+description = "Passive security monitoring and detection engineering for AI agent telemetry."
 readme = "README.md"
 # R-18. Bounded ABOVE as well as below. ">=3.10" with no ceiling claimed every
 # future Python, including 3.14 which is released and which this project has
