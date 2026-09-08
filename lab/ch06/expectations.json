@@ -1,0 +1,227 @@
+{
+  "cases": {
+    "deleted": {
+      "affected_sessions": [
+        "other",
+        "target"
+      ],
+      "baseline": {
+        "affected_sessions": [
+          "other",
+          "target"
+        ],
+        "status": "inadmissible"
+      },
+      "cohaera": {
+        "ch06_fired_sessions": [
+          "other",
+          "target"
+        ],
+        "ch06_status": {
+          "other": "degraded",
+          "target": "degraded"
+        },
+        "evidence_status": {
+          "other": "inadmissible",
+          "target": "inadmissible"
+        }
+      },
+      "condition": "manipulated",
+      "mutation": "Remove interior sequence 2 after signing."
+    },
+    "intact": {
+      "affected_sessions": [],
+      "baseline": {
+        "affected_sessions": [],
+        "status": "verified_complete"
+      },
+      "cohaera": {
+        "ch06_fired_sessions": [],
+        "ch06_status": {
+          "other": "evaluated",
+          "target": "evaluated"
+        },
+        "evidence_status": {
+          "other": "verified_complete",
+          "target": "verified_complete"
+        }
+      },
+      "condition": "intact",
+      "mutation": "None."
+    },
+    "modified": {
+      "affected_sessions": [
+        "target"
+      ],
+      "baseline": {
+        "affected_sessions": [
+          "target"
+        ],
+        "status": "inadmissible"
+      },
+      "cohaera": {
+        "ch06_fired_sessions": [
+          "target"
+        ],
+        "ch06_status": {
+          "other": "evaluated",
+          "target": "degraded"
+        },
+        "evidence_status": {
+          "other": "verified_complete",
+          "target": "inadmissible"
+        }
+      },
+      "condition": "manipulated",
+      "mutation": "Change sequence 2 body while retaining its signed sidecar."
+    },
+    "no_key": {
+      "affected_sessions": [
+        "other",
+        "target"
+      ],
+      "baseline": {
+        "affected_sessions": [],
+        "status": "chained_unsigned"
+      },
+      "cohaera": {
+        "ch06_fired_sessions": [],
+        "ch06_status": {
+          "other": "degraded",
+          "target": "degraded"
+        },
+        "evidence_status": {
+          "other": "chained_unsigned",
+          "target": "chained_unsigned"
+        }
+      },
+      "condition": "missing_prerequisite",
+      "mutation": "Score the intact stream without the collector trust store."
+    },
+    "reordered": {
+      "affected_sessions": [],
+      "baseline": {
+        "affected_sessions": [],
+        "status": "verified_complete"
+      },
+      "cohaera": {
+        "ch06_fired_sessions": [],
+        "ch06_status": {
+          "other": "evaluated",
+          "target": "evaluated"
+        },
+        "evidence_status": {
+          "other": "verified_complete",
+          "target": "verified_complete"
+        }
+      },
+      "condition": "benign_transport",
+      "mutation": "Deliver sequences as 0, 2, 1, 3, 5, 4 without changing bytes."
+    },
+    "replayed": {
+      "affected_sessions": [
+        "other",
+        "target"
+      ],
+      "baseline": {
+        "affected_sessions": [
+          "other",
+          "target"
+        ],
+        "status": "replayed"
+      },
+      "cohaera": {
+        "ch06_fired_sessions": [
+          "other",
+          "target"
+        ],
+        "ch06_status": {
+          "other": "degraded",
+          "target": "degraded"
+        },
+        "evidence_status": {
+          "other": "inadmissible",
+          "target": "inadmissible"
+        }
+      },
+      "condition": "manipulated",
+      "mutation": "Submit the intact stream twice against retained ledger state."
+    },
+    "stripped": {
+      "affected_sessions": [
+        "other",
+        "target"
+      ],
+      "baseline": {
+        "affected_sessions": [
+          "other",
+          "target"
+        ],
+        "status": "inadmissible"
+      },
+      "cohaera": {
+        "ch06_fired_sessions": [
+          "other",
+          "target"
+        ],
+        "ch06_status": {
+          "other": "degraded",
+          "target": "degraded"
+        },
+        "evidence_status": {
+          "other": "inadmissible",
+          "target": "inadmissible"
+        }
+      },
+      "condition": "manipulated",
+      "mutation": "Change sequence 2 and remove its prev and chain fields."
+    },
+    "truncated": {
+      "affected_sessions": [
+        "other",
+        "target"
+      ],
+      "baseline": {
+        "affected_sessions": [],
+        "status": "verified_prefix"
+      },
+      "cohaera": {
+        "ch06_fired_sessions": [],
+        "ch06_status": {
+          "other": "degraded",
+          "target": "degraded"
+        },
+        "evidence_status": {
+          "other": "chained_unsigned",
+          "target": "verified_prefix"
+        }
+      },
+      "condition": "incomplete",
+      "mutation": "Remove the final signed record."
+    },
+    "unsupported": {
+      "affected_sessions": [
+        "other",
+        "target"
+      ],
+      "baseline": {
+        "affected_sessions": [],
+        "status": "not_evaluated"
+      },
+      "cohaera": {
+        "ch06_fired_sessions": [],
+        "ch06_status": {
+          "other": "not_evaluated",
+          "target": "not_evaluated"
+        },
+        "evidence_status": {
+          "other": "unattested",
+          "target": "unattested"
+        }
+      },
+      "condition": "unsupported",
+      "mutation": "Replace the integrity scheme with cohaera.integrity:2."
+    }
+  },
+  "schema": "cohaera.ch06_expectations:1"
+}

@@ -19,13 +19,15 @@
 > the working code. The plan is kept because it is a real design and it
 > documents intent. It is labelled because it is not evidence.
 >
-> **If you want something that runs today, it is
-> [`lab/local/`](lab/local/README.md)** — no VMs, no cloud account, no API key,
-> no dependencies, about two seconds, and its output is committed and re-run by
-> CI on every push:
+> **Two local labs run today.** [`lab/local/`](lab/local/README.md) is the
+> end-to-end smoke demonstration. [`lab/ch06/`](lab/ch06/README.md) is the
+> frozen evidence-integrity conformance matrix with an independent baseline.
+> Neither needs a VM, cloud account, API key or runtime dependency, and both
+> have committed output that CI regenerates:
 >
 > ```bash
 > python lab/local/run.py --check
+> python lab/ch06/run.py --check
 > ```
 
 **Constraint set this design is written for:** VMs on a home hypervisor, no GPU,
@@ -56,6 +58,8 @@ this repository you can re-check. **Partially executed** means some of it has.
 | [`lab/lab.config.psd1`](lab/lab.config.psd1) | **Written, never executed.** The addressing and the `Reachability` matrix are the single source of truth for the topology, and the table further down this page is checked against it by a test. |
 | [`lab/local/run.py`](lab/local/run.py) | **Executed. Committed. Re-run by CI on every push**, and byte-identical on CPython 3.10 through 3.13. |
 | [`lab/local/runs/latest/`](lab/local/runs/latest/) | **Executed output**, produced by the file above and diffed against a fresh run in CI. |
+| [`lab/ch06/run.py`](lab/ch06/run.py) | **Executed. Committed. Re-run by CI through `tests/test_ch06_lab.py`.** Nine frozen stream conditions are scored by CH06 and a standard-library-only baseline. |
+| [`lab/ch06/runs/latest/`](lab/ch06/runs/latest/) | **Executed conformance output.** Nine of nine predeclared expectations pass; this is a stream-integrity result, not a behavioural-efficacy result. |
 | `tools/label_corpus.py` | **Does not exist.** Step 3.3 calls it. It is the next thing to build if phase 3 is ever attempted. |
 | `content/sigma`, `content/aie`, `content/parser` | **Exist, conformance-tested, not corpus-tested.** See phase 5. |
 

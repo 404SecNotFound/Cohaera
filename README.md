@@ -1168,7 +1168,7 @@ And the half that is a port rather than a contribution:
 - [x] Sigma content pack, 15 rules, validated and **conformance-tested** ([content/sigma](content/sigma))
 - [x] LogRhythm AIE rule specifications ([content/aie](content/aie))
 - [x] Exabeam parser field map and #108 analysis ([content/parser](content/parser))
-- [x] Tests, 1185 passing across unit, hostile-input and content conformance
+- [x] Tests, 1190 passing across unit, hostile-input and content conformance
 - [x] Phase 0 verification captured ([docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md))
 - [x] Adversarial self-test, 34 evasions ([EVASION.md](EVASION.md))
 - [x] Schema firewall, resource bounds and quarantine ledger
@@ -1187,6 +1187,7 @@ And the half that is a port rather than a contribution:
 - [x] Evidence-trust design: wire formats, verification and staging for all three P1 items ([docs/EVIDENCE-TRUST.md](docs/EVIDENCE-TRUST.md))
 - [x] Independent effect receipts, so a logged success can be checked — `cohaera.receipt:1`, CH07, and `tools/receipt_adapters.py`. A receipt falsifies a claimed FAILURE; it still does not confirm a success, and nothing reconciles the identifier with the provider that minted it
 - [x] Collector-side signing and hash chaining, AEGIS pattern — `cohaera.integrity:1`, CH06, `tools/collector_sign.py`, with key roles, rotation, revocation, freshness and a cross-run ledger
+- [x] Frozen CH06 conformance matrix: nine post-signing stream conditions compared with an independent standard-library verifier ([lab/ch06](lab/ch06/README.md))
 - [x] Approval and policy binding, so a continuation can be called a bypass — `cohaera.approval:1` and the CH04 advisory/blocking split. An in-band approval is reported as a CLAIM, not an authorisation fact
 - [ ] Validate content against a live SIEM
 - [ ] Build AIE-COHAERA-001 natively and compare against the Cohaera-fed version
@@ -1320,6 +1321,7 @@ tests/
 
 FINDINGS.md           three source-verified observations against observra v1.1.0
 LAB.md                full lab build, VM topology, experiment protocol
+lab/ch06/             frozen CH06 conformance matrix and independent baseline
 ```
 
 Run the tests without installing anything:
