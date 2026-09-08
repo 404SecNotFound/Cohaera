@@ -10,6 +10,10 @@
           "other",
           "target"
         ],
+        "issues": [
+          "sequence_gap"
+        ],
+        "records_reordered": 0,
         "status": "inadmissible"
       },
       "cohaera": {
@@ -24,6 +28,14 @@
         "evidence_status": {
           "other": "inadmissible",
           "target": "inadmissible"
+        },
+        "required_reasons": {
+          "other": [
+            "INTEGRITY_SEQUENCE_GAP"
+          ],
+          "target": [
+            "INTEGRITY_SEQUENCE_GAP"
+          ]
         }
       },
       "condition": "manipulated",
@@ -33,6 +45,8 @@
       "affected_sessions": [],
       "baseline": {
         "affected_sessions": [],
+        "issues": [],
+        "records_reordered": 0,
         "status": "verified_complete"
       },
       "cohaera": {
@@ -57,6 +71,10 @@
         "affected_sessions": [
           "target"
         ],
+        "issues": [
+          "chain_broken"
+        ],
+        "records_reordered": 0,
         "status": "inadmissible"
       },
       "cohaera": {
@@ -70,6 +88,11 @@
         "evidence_status": {
           "other": "verified_complete",
           "target": "inadmissible"
+        },
+        "required_reasons": {
+          "target": [
+            "INTEGRITY_CHAIN_BROKEN"
+          ]
         }
       },
       "condition": "manipulated",
@@ -82,6 +105,8 @@
       ],
       "baseline": {
         "affected_sessions": [],
+        "issues": [],
+        "records_reordered": 0,
         "status": "chained_unsigned"
       },
       "cohaera": {
@@ -93,6 +118,14 @@
         "evidence_status": {
           "other": "chained_unsigned",
           "target": "chained_unsigned"
+        },
+        "required_reasons": {
+          "other": [
+            "NO_COLLECTOR_KEYS"
+          ],
+          "target": [
+            "NO_COLLECTOR_KEYS"
+          ]
         }
       },
       "condition": "missing_prerequisite",
@@ -102,6 +135,8 @@
       "affected_sessions": [],
       "baseline": {
         "affected_sessions": [],
+        "issues": [],
+        "records_reordered": 2,
         "status": "verified_complete"
       },
       "cohaera": {
@@ -113,6 +148,14 @@
         "evidence_status": {
           "other": "verified_complete",
           "target": "verified_complete"
+        },
+        "required_reasons": {
+          "other": [
+            "INTEGRITY_RECORDS_REORDERED"
+          ],
+          "target": [
+            "INTEGRITY_RECORDS_REORDERED"
+          ]
         }
       },
       "condition": "benign_transport",
@@ -128,6 +171,10 @@
           "other",
           "target"
         ],
+        "issues": [
+          "stream_replayed"
+        ],
+        "records_reordered": 0,
         "status": "replayed"
       },
       "cohaera": {
@@ -142,6 +189,14 @@
         "evidence_status": {
           "other": "inadmissible",
           "target": "inadmissible"
+        },
+        "required_reasons": {
+          "other": [
+            "INTEGRITY_STREAM_REPLAYED"
+          ],
+          "target": [
+            "INTEGRITY_STREAM_REPLAYED"
+          ]
         }
       },
       "condition": "manipulated",
@@ -157,6 +212,11 @@
           "other",
           "target"
         ],
+        "issues": [
+          "chain_broken",
+          "chain_metadata_missing"
+        ],
+        "records_reordered": 0,
         "status": "inadmissible"
       },
       "cohaera": {
@@ -171,6 +231,14 @@
         "evidence_status": {
           "other": "inadmissible",
           "target": "inadmissible"
+        },
+        "required_reasons": {
+          "other": [
+            "INTEGRITY_CHAIN_BROKEN"
+          ],
+          "target": [
+            "INTEGRITY_CHAIN_BROKEN"
+          ]
         }
       },
       "condition": "manipulated",
@@ -183,6 +251,8 @@
       ],
       "baseline": {
         "affected_sessions": [],
+        "issues": [],
+        "records_reordered": 0,
         "status": "verified_prefix"
       },
       "cohaera": {
@@ -194,6 +264,11 @@
         "evidence_status": {
           "other": "chained_unsigned",
           "target": "verified_prefix"
+        },
+        "required_reasons": {
+          "target": [
+            "INTEGRITY_SIGNATURE_COVERS_PREFIX_ONLY"
+          ]
         }
       },
       "condition": "incomplete",
@@ -206,6 +281,10 @@
       ],
       "baseline": {
         "affected_sessions": [],
+        "issues": [
+          "unsupported_integrity"
+        ],
+        "records_reordered": 0,
         "status": "not_evaluated"
       },
       "cohaera": {
@@ -217,6 +296,14 @@
         "evidence_status": {
           "other": "unattested",
           "target": "unattested"
+        },
+        "required_reasons": {
+          "other": [
+            "NO_INTEGRITY_EVIDENCE"
+          ],
+          "target": [
+            "NO_INTEGRITY_EVIDENCE"
+          ]
         }
       },
       "condition": "unsupported",
