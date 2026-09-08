@@ -3085,6 +3085,25 @@ class StreamVerifier:
         state.note(code)
         stream.codes.add(code)
 
+    def _note_chain_break(self, stream: _Stream, session_key: str,
+                          seq: int) -> None:
+        """Charge an ambiguous stream boundary to both adjacent sessions.
+
+        A mismatch discovered on the current record can mean that record was
+        altered, or that the previous record supplied a false chain head.  When
+        a stream multiplexes sessions, assigning the break only to the current
+        session lets the previous session inherit coverage from a later
+        signature.  As with a sequence gap, neither side of the boundary can be
+        admitted independently.
+        """
+        for key in dict.fromkeys((stream.last_session, session_key)):
+            if not key:
+                continue
+            state = self._session(key)
+            self._note(state, stream, R_CHAIN_BROKEN)
+            if len(state.chain_breaks) < self.limits.max_evidence_items:
+                state.chain_breaks.append(seq)
+
     def _consume(self, stream: _Stream, seq: int, body: str,
                  integrity: Integrity, session_key: str,
                  when: float | None = None) -> None:
@@ -3096,17 +3115,16 @@ class StreamVerifier:
         stream.last_seq = seq
         expected_chain = chain_step(stream.head, body) if stream.head else None
 
-        if expected_chain is not None and integrity.chain is not None:
-            if integrity.chain != expected_chain:
-                # Localises: this record is where the stream diverged from what
-                # the collector signed.
-                self._note(state, stream, R_CHAIN_BROKEN)
-                if len(state.chain_breaks) < self.limits.max_evidence_items:
-                    state.chain_breaks.append(seq)
-        if integrity.prev is not None and stream.head and integrity.prev != stream.head:
-            self._note(state, stream, R_CHAIN_BROKEN)
-            if len(state.chain_breaks) < self.limits.max_evidence_items:
-                state.chain_breaks.append(seq)
+        chain_mismatch = (expected_chain is not None
+                          and integrity.chain is not None
+                          and integrity.chain != expected_chain)
+        prev_mismatch = (integrity.prev is not None and bool(stream.head)
+                         and integrity.prev != stream.head)
+        if chain_mismatch or prev_mismatch:
+            # Localises: this boundary is where the stream diverged from what
+            # the collector signed.  One record can fail both comparisons, but
+            # it is still one broken boundary.
+            self._note_chain_break(stream, session_key, seq)
 
         # Advance on the record's OWN declared chain when it has one. A single
         # broken record would otherwise poison every record after it, turning

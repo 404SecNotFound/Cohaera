@@ -802,6 +802,41 @@ def test_modifying_a_record_breaks_the_chain_and_localises():
     assert state.chain_breaks == [2], "the break must name the record that moved"
 
 
+def test_a_cross_session_chain_break_marks_both_sides_inadmissible():
+    """A shared stream boundary cannot exonerate either adjacent session.
+
+    If an unsigned record in one session is changed and stripped of its chain,
+    the next signed record may belong to another session.  The verifier cannot
+    know which side of that boundary was altered, so both sessions must carry
+    the break rather than letting the earlier session inherit the later
+    signature's verified range.
+    """
+    records = _records(3)
+    for record, session_id in zip(
+            records, ("target", "target", "other"), strict=True):
+        record["session_id"] = session_id
+    signed = sign_stream(
+        records, "stream-a", SECRET, KEY_ID, sign_every=100,
+    )
+    signed[1]["tool_name"] = "object_put"
+    del signed[1]["integrity"]["chain"]
+    del signed[1]["integrity"]["prev"]
+
+    sessions = {
+        session.session_id: session
+        for session in assemble(
+            [Event(raw=record) for record in signed], keys=KEYS,
+        )
+    }
+
+    for session_id in ("target", "other"):
+        session = sessions[session_id]
+        assert R_CHAIN_BROKEN in session.integrity.codes
+        assert session.integrity.chain_breaks == [2]
+        assert evidence_status(session) == EVIDENCE_INADMISSIBLE
+    assert not sessions["target"].integrity.sequence_verified("stream-a", 1)
+
+
 def test_reordering_is_reported_as_reordering_and_not_as_deletion():
     """The difference between a page at 3am and a healthy streaming path."""
     signed = sign_stream(_records(6), "stream-a", SECRET, KEY_ID)
