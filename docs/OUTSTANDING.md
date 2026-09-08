@@ -99,7 +99,7 @@ Conducted against `5cca159`. Four findings were P0; all four are merged.
       code-owner review and no last-push approval. **Owner: repository admin —
       see section D.** **Small.**
 - [ ] **9. Split the trust kernel before adding to it.** `checks.py` is 3,309
-      lines and `evidence.py` is 3,306. The decision not to split was taken when
+      lines and `evidence.py` is 3,324. The decision not to split was taken when
       they totalled about 4,700, and the ordering defect above crossed those
       module boundaries. Characterization tests first, then separate integrity
       admission, ordering, approvals, receipts, ledger handling and the check
