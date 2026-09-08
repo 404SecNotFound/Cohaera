@@ -40,6 +40,8 @@ python lab/ch06/run.py --check
   pristine recorder output. Every case starts as a deep copy of these bytes.
 - Mutations are applied only after signing. The signed stream is never rebuilt
   to make a changed record look legitimate.
+- Cohaera and the baseline each parse the generated case's committed JSONL
+  bytes. The baseline does not receive the pre-serialization Python objects.
 - The stream contains two sessions and crosses from `target` to `other` between
   sequences 2 and 3. This exercises attribution across a shared collector
   stream rather than only single-session examples.
@@ -72,6 +74,9 @@ The committed [results](runs/latest/RESULTS.md) currently pass all nine cases:
 - both missing and unsupported prerequisites are explicitly declined or
   degraded;
 - Cohaera and the baseline agree on every stream-level interpretation;
+- expectations require the mutation-specific diagnosis, including sequence
+  gaps, broken chains, reordering, replay, prefix coverage and unsupported
+  integrity;
 - Cohaera localises the body-only modification to `target`, and distinguishes
   the truncated stream's `target` verified prefix from `other`, whose records
   are only chained and unsigned.

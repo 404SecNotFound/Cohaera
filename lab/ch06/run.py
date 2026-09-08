@@ -79,6 +79,14 @@ def _write(path: Path, value: bytes) -> Path:
     return path
 
 
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
 def _event(seq: int, session_id: str, event_type: str,
            data: dict[str, Any]) -> dict[str, Any]:
     return {
@@ -186,7 +194,7 @@ def _summarise_cohaera(records: list[dict[str, Any]]) -> dict[str, Any]:
     return {"sessions": sessions}
 
 
-def _expected_projection(actual: dict[str, Any]) -> dict[str, Any]:
+def _cohaera_projection(actual: dict[str, Any]) -> dict[str, Any]:
     sessions = actual["sessions"]
     return {
         "ch06_fired_sessions": sorted(
@@ -204,6 +212,20 @@ def _expected_projection(actual: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _cohaera_matches(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
+    outcome = {
+        key: value for key, value in expected.items()
+        if key != "required_reasons"
+    }
+    if _cohaera_projection(actual) != outcome:
+        return False
+    sessions = actual["sessions"]
+    return all(
+        set(reasons).issubset(sessions[session_id]["ch06_reasons"])
+        for session_id, reasons in expected.get("required_reasons", {}).items()
+    )
+
+
 def _baseline_for(case: str, records: list[dict[str, Any]]) -> BaselineResult:
     public_key = None if case == "no_key" else PUBLIC_KEY
     seen: dict[str, tuple[int, int, str]] = {}
@@ -215,6 +237,8 @@ def _baseline_for(case: str, records: list[dict[str, Any]]) -> BaselineResult:
 def _baseline_projection(actual: dict[str, Any]) -> dict[str, Any]:
     return {
         "affected_sessions": actual["affected_sessions"],
+        "issues": actual["issues"],
+        "records_reordered": actual["records_reordered"],
         "status": actual["status"],
     }
 
@@ -322,10 +346,11 @@ def _generate(destination: Path) -> dict[str, Any]:
                     f"{case}: Cohaera emitted no verdicts (exit {code}): {stderr}"
                 )
             cohaera = _summarise_cohaera(verdicts)
-            baseline = _baseline_for(case, cases[case]).as_dict()
+            fixture_records = _read_jsonl(fixture)
+            baseline = _baseline_for(case, fixture_records).as_dict()
             expected = expectations["cases"][case]
             expectation_met = (
-                _expected_projection(cohaera) == expected["cohaera"]
+                _cohaera_matches(cohaera, expected["cohaera"])
                 and _baseline_projection(baseline) == expected["baseline"]
             )
             result_cases[case] = {
@@ -336,7 +361,7 @@ def _generate(destination: Path) -> dict[str, Any]:
                 "input_bytes": fixture.stat().st_size,
                 "input_sha256": _sha256(fixture),
                 "mutation": expected["mutation"],
-                "records": len(cases[case]),
+                "records": len(fixture_records),
             }
 
     manipulated_verified = 0

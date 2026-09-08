@@ -4,7 +4,7 @@
     "runs/latest/results.json": "0866ba94f63ecea859703bebb84804dae3468a75d9be86a370c69523e9dbc29e"
   },
   "cases": 9,
-  "expectations_sha256": "a9a0278fc9e7b85ea34eac103d996d80aa685f17a1b79fbdd4ba98cbd416b14d",
+  "expectations_sha256": "d6f378a40adc1c7a9a58e949cbd672df5754ecd7bd4386f915287a23668f3ac7",
   "fixtures": {
     "fixtures/cases/deleted.jsonl": "c1d8b193e510db302ab632636d18d72f280ea36c9e537c44a5552a72bc9c5cae",
     "fixtures/cases/intact.jsonl": "e2c1d54cf9445d5593f16ce8091d787c389ed6c09bbb9b0682b6bd4568e2158d",

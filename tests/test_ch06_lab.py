@@ -47,6 +47,26 @@ def test_expectations_and_results_cover_the_exact_frozen_case_set():
     assert results["summary"]["expectations_met"] == len(CASES)
 
 
+def test_mutation_specific_diagnoses_match_the_declared_contract():
+    expectations = _json(LAB / "expectations.json")["cases"]
+    results = _json(LAB / "runs" / "latest" / "results.json")["cases"]
+
+    for case in CASES:
+        expected = expectations[case]
+        actual = results[case]
+        assert actual["baseline"]["issues"] == expected["baseline"]["issues"]
+        assert (
+            actual["baseline"]["records_reordered"]
+            == expected["baseline"]["records_reordered"]
+        )
+        required_reasons = expected["cohaera"].get("required_reasons", {})
+        for session_id, reasons in required_reasons.items():
+            actual_reasons = actual["cohaera"]["sessions"][session_id][
+                "ch06_reasons"
+            ]
+            assert set(reasons).issubset(actual_reasons)
+
+
 def test_mutations_are_applied_to_the_frozen_signed_stream():
     source = _jsonl(LAB / "fixtures" / "source" / "canonical.signed.jsonl")
     modified = _jsonl(LAB / "fixtures" / "cases" / "modified.jsonl")
