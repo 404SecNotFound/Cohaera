@@ -625,15 +625,20 @@ def test_the_tiers_partition_the_pack_the_way_the_card_does():
     assert by_tier["production"] == {"CH04_guardrail_overrun",
                                      "CH06_evidence_integrity",
                                      "CH07_effect_contradiction"}
-    # CH04 appears in BOTH tiers, and that is the inventory rather than a leak.
-    # Three of its check IDs are measured at zero benign hits and page; the
-    # fourth, CH04_undeclared_control_cited, is not scored by the card at all
-    # and ships at hunt saying so. A family is not uniformly deployable just
-    # because most of it is.
+    # CH04 and CH07 each appear in BOTH tiers, and that is the inventory rather
+    # than a leak. Within a scored family only the check ID the card actually
+    # measured at zero benign hits pages: CH04_blocking_control_bypassed and
+    # CH07_reported_failure_with_effect_receipt. The sibling IDs the corpus
+    # never exercises -- CH04_guardrail_bypass_completed, CH04_post_guardrail_
+    # attempt, CH04_undeclared_control_cited, CH07_effect_receipt_does_not_bind,
+    # CH07_effect_receipt_partially_bound -- ship at hunt saying so, rather than
+    # borrowing the measured sibling's number. A family is not uniformly
+    # deployable just because most of it is.
     assert by_tier["hunt"] == {"CH01_sequence_order", "CH02_concealment_gap",
                                "CH03_untrusted_to_consequential",
                                "CH04_guardrail_overrun",
-                               "CH05_unpaired_calls"}
+                               "CH05_unpaired_calls",
+                               "CH07_effect_contradiction"}
     assert by_tier["dashboard"] == {None}
     assert set(card_checks()) == set().union(*by_tier.values()) - {None}
 

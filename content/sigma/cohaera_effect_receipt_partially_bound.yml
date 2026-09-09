@@ -11,11 +11,14 @@ custom:
     # production  deployable, may page. Zero benign hits on the evaluation card.
     # hunt        never an alert. Investigation surface only.
     # dashboard   a configuration state, not an event. Alert on a CHANGE in it.
-    deployment_tier: production
+    deployment_tier: hunt
     tier_rationale: >-
-        Same CH07 evidence. Deployable at low: it reports an adapter that has
-        not implemented argument digests yet, and once it has, a call in this
-        shape either becomes a critical contradiction or stops firing.
+        Hunt, because the check ID this rule selects on
+        (CH07_effect_receipt_partially_bound) is not separately measured. CH07's
+        16/16/0 headline is earned entirely by the sibling
+        CH07_reported_failure_with_effect_receipt; the corpus produces no
+        session that trips this partial-binding variant, so it has no benign
+        measurement to stand a production tier on. Stays low.
     # Ownership and review. `author` records who wrote it; `owner` records who
     # answers for it now, and mirrors .github/CODEOWNERS. An unowned rule is a
     # stale rule within two quarters.
@@ -23,17 +26,19 @@ custom:
     last_reviewed: 2026-08-19
     review_cadence_days: 90
     next_review: 2026-11-17
-    # The tier is bound to a measurement, not to an opinion.
-    # tests/test_content.py re-reads these five values out of the card on every
-    # test run and fails if a rule and the evidence disagree.
+    # NO NUMBERS, DELIBERATELY. This check ID sits inside a scored family the
+    # card measured on its sibling CH07_reported_failure_with_effect_receipt.
+    # Quoting the family's 16/16/0 here would launder that measurement into a
+    # claim about this ID. unscored_check_id bars the production tier and
+    # forbids any numeric evidence key.
     evidence:
         source: eval/evaluation-card.json
-        card_cell: 'unseen|task_disjoint|manifest'
         check: CH07_effect_contradiction
-        labelled: 16
-        on_target_attacks: 16
-        on_benign: 0
-        target_precision_pct: 100.0
+        unscored_check_id: CH07_effect_receipt_partially_bound
+        note: >-
+            Not scored. The corpus's CH07 attacks bind their receipts fully or
+            not at all, so nothing exercises the partial-binding variant, benign
+            or attack.
 description: |
   A call whose telemetry did not report success carries an effect receipt that
   names only part of the call -- the span, or the span and the tool, but not the

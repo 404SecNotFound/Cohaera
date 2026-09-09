@@ -11,11 +11,15 @@ custom:
     # production  deployable, may page. Zero benign hits on the evaluation card.
     # hunt        never an alert. Investigation surface only.
     # dashboard   a configuration state, not an event. Alert on a CHANGE in it.
-    deployment_tier: production
+    deployment_tier: hunt
     tier_rationale: >-
-        Same CH07 evidence. Deployable, and deliberately medium: the common
-        reading is an adapter emitting the binding wrongly, which is a
-        telemetry-quality ticket rather than an incident.
+        Hunt, because the check ID this rule selects on
+        (CH07_effect_receipt_does_not_bind) is not separately measured. CH07's
+        16/16/0 headline is earned entirely by the sibling
+        CH07_reported_failure_with_effect_receipt; the corpus produces no
+        session that trips this unbound-receipt variant, so it has no benign
+        measurement to stand a production tier on. Stays medium, which does not
+        page.
     # Ownership and review. `author` records who wrote it; `owner` records who
     # answers for it now, and mirrors .github/CODEOWNERS. An unowned rule is a
     # stale rule within two quarters.
@@ -23,17 +27,19 @@ custom:
     last_reviewed: 2026-08-19
     review_cadence_days: 90
     next_review: 2026-11-17
-    # The tier is bound to a measurement, not to an opinion.
-    # tests/test_content.py re-reads these five values out of the card on every
-    # test run and fails if a rule and the evidence disagree.
+    # NO NUMBERS, DELIBERATELY. This check ID sits inside a scored family the
+    # card measured on its sibling CH07_reported_failure_with_effect_receipt.
+    # Quoting the family's 16/16/0 here would launder that measurement into a
+    # claim about this ID. unscored_check_id bars the production tier and
+    # forbids any numeric evidence key.
     evidence:
         source: eval/evaluation-card.json
-        card_cell: 'unseen|task_disjoint|manifest'
         check: CH07_effect_contradiction
-        labelled: 16
-        on_target_attacks: 16
-        on_benign: 0
-        target_precision_pct: 100.0
+        unscored_check_id: CH07_effect_receipt_does_not_bind
+        note: >-
+            Not scored. The corpus's CH07 attacks pair a reported failure with a
+            binding receipt, so they route to the CONTRADICTED sibling; nothing
+            exercises the unbound-receipt variant, benign or attack.
 description: |
   A call carries an effect receipt that names a different span, a different tool,
   or a different argument digest than the call it arrived on.

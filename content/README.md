@@ -4,7 +4,7 @@ Rules and mappings that consume `cohaera_session_verdict` records.
 
 ```
 content/
-  sigma/     15 Sigma rules, tiered: 7 production, 5 hunt, 2 dashboard
+  sigma/     15 Sigma rules, tiered: 3 production, 10 hunt, 2 dashboard
   manifest/  example capability manifest: exact tool ID -> declared effects
   aie/       LogRhythm AIE rule specifications + the build-vs-buy comparison
   parser/    Exabeam field map + notes on observra issue #108
@@ -84,11 +84,12 @@ number, not a judgement.
 ### Tier gates deployment; `level` gates volume
 
 They are different questions and the pack keeps them apart.
-`cohaera_post_guardrail_attempt.yml` is `production` at `informational`: CH04's
-measured benign rate is zero, so the rule is trustworthy, and its own
-`falsepositives` block explains that a correctly enforced guardrail looks exactly
-like it, so it must not page. Production means *you may deploy this*, not *this
-should wake somebody*.
+`cohaera_blocking_control_bypassed.yml` is `production` at `high`: its check ID,
+`CH04_blocking_control_bypassed`, is the one the evaluation corpus actually
+scores at zero benign hits, so the rule is measured and may page. Production
+means *you may deploy this*, not *this should wake somebody*, and the two are
+carried in separate fields so a router reading `level` and a deployer reading
+the tier never disagree.
 
 The reverse constraint is enforced. A `hunt` rule may not carry `level: high` or
 `level: critical`, because `level` is what every downstream router actually
@@ -96,16 +97,26 @@ reads, and a hunt rule at high is an alert with a disclaimer nobody sees.
 
 ### What each tier rests on
 
-| Check | Rules | Tier | Own attacks caught | Benign hits | Target precision |
-|---|---|---|---|---|---|
-| `CH04_guardrail_overrun` | 3 | `production` | 72 of 72 | **0** | **100.0%** |
-| `CH06_evidence_integrity` | 1 | `production` | 56 of 56 | **0** | **100.0%** |
-| `CH07_effect_contradiction` | 3 | `production` | 16 of 16 | **0** | **100.0%** |
-| `CH03_untrusted_to_consequential` | 2 | `hunt` | 32 of 32 | 48 | 40.0% |
-| `CH01_sequence_order` | 1 | `hunt` | 72 of 72 | 60 | 35.3% |
-| `CH02_concealment_gap` | 1 | `hunt` | 52 of 52 | 108 | 27.1% |
-| `CH05_unpaired_calls` | 1 | `hunt` (quarantined) | **0 of 0** | 48 | **0.0%** |
-| *(no check)* | 2 | `dashboard` | — | — | not scored |
+| Check family | Rules (prod / hunt) | Own attacks caught | Benign hits | Target precision |
+|---|---|---|---|---|
+| `CH04_guardrail_overrun` | 1 prod / 2 hunt | 72 of 72 | **0** | **100.0%** |
+| `CH06_evidence_integrity` | 1 prod / 0 hunt | 56 of 56 | **0** | **100.0%** |
+| `CH07_effect_contradiction` | 1 prod / 2 hunt | 16 of 16 | **0** | **100.0%** |
+| `CH03_untrusted_to_consequential` | 0 prod / 2 hunt | 32 of 32 | 48 | 40.0% |
+| `CH01_sequence_order` | 0 prod / 1 hunt | 72 of 72 | 60 | 35.3% |
+| `CH02_concealment_gap` | 0 prod / 1 hunt | 52 of 52 | 108 | 27.1% |
+| `CH05_unpaired_calls` | 0 prod / 1 hunt (quarantined) | **0 of 0** | 48 | **0.0%** |
+| *(no check)* | 2 dashboard | — | — | not scored |
+
+The measurement is per check FAMILY, and within a family the card scores exactly
+one check ID: `CH04_blocking_control_bypassed` earns CH04's 72/72/0 and
+`CH07_reported_failure_with_effect_receipt` earns CH07's 16/16/0. Only those two
+rules are production. The sibling rules in each family select on a check ID the
+corpus never exercises, so they ship at `hunt` and say so in their own
+`evidence.unscored_check_id`, rather than borrowing the measured sibling's
+number. That is why CH04 has three rules but one page-able one, and why the
+"3 production rules" count you may have seen before this table is now three
+across the whole pack, not three per family.
 
 Target precision, not any-attack precision. A check that fires on an attack
 belonging to a different check has helped somebody; it has not shown that it can
@@ -118,7 +129,8 @@ benign confounders written specifically to break it: CH04 against 48 sessions
 that continue past an *advisory* threshold, 28 properly approved continuations
 and 28 re-approved retries; CH06 against 24 out-of-order stream deliveries and
 72 sessions straddling a collector key rotation. Zero of those fire. That is the
-evidence, and it is why those three are the ones that may page.
+evidence, and it is why the one measured check ID in each of those three
+families is the one that may page.
 
 **One caveat on CH06, because it is the only one that moves.** The zero holds in
 the `manifest` cells. In the `name_only` ablation — no capability manifest, tool
@@ -320,14 +332,14 @@ tier, because that is the order somebody enabling them should work in.
 
 | Rule | Tier | Level | Check | Expressible upstream? |
 |---|---|---|---|---|
-| `cohaera_guardrail_bypass_completed.yml` | `production` | high | CH04 completed, semantics undeclared | No |
+| `cohaera_guardrail_bypass_completed.yml` | `hunt` | medium | CH04 completed, semantics undeclared — **unmeasured**, see above | No |
 | `cohaera_blocking_control_bypassed.yml` | `production` | high | CH04 declared blocking, no bound approval | No |
-| `cohaera_post_guardrail_attempt.yml` | `production` | informational | CH04 attempted | No |
+| `cohaera_post_guardrail_attempt.yml` | `hunt` | informational | CH04 attempted — **unmeasured**, see above | No |
 | `cohaera_undeclared_control_cited.yml` | `hunt` | medium | CH04 control not in the manifest — **unmeasured**, see above | No |
 | `cohaera_evidence_integrity_failed.yml` | `production` | critical | CH06 | No |
 | `cohaera_reported_failure_with_effect_receipt.yml` | `production` | high | CH07 contradiction | No |
-| `cohaera_effect_receipt_unbound.yml` | `production` | medium | CH07 binding guard | No |
-| `cohaera_effect_receipt_partially_bound.yml` | `production` | low | CH07 partial binding | No |
+| `cohaera_effect_receipt_unbound.yml` | `hunt` | medium | CH07 binding guard — **unmeasured**, see above | No |
+| `cohaera_effect_receipt_partially_bound.yml` | `hunt` | low | CH07 partial binding — **unmeasured**, see above | No |
 | `cohaera_sequence_order_violation.yml` | `hunt` | medium | CH01 | No |
 | `cohaera_concealment_gap.yml` | `hunt` | medium | CH02 | No |
 | `cohaera_untrusted_to_completed_action.yml` | `hunt` | medium | CH03 completed | No |
@@ -412,7 +424,7 @@ section of this file says why that is structural rather than an oversight.
 
 **Read the `falsepositives` blocks before deploying any of them.** They are not
 boilerplate. 7 of the 15 have a false positive story worth stating plainly, and
-5 of those 7 are why the `hunt` tier exists:
+6 of those 7 are why the `hunt` tier exists:
 
 - **CH02** (`hunt`) uses lexical matching. An agent that says "I have emailed the
   report" without naming `send_email` will be flagged. 27.1% target precision,
@@ -434,11 +446,12 @@ boilerplate. 7 of the 15 have a false positive story worth stating plainly, and
   from the fabricated-exculpation attack it exists to surface. It has no
   measured rate at all: no corpus session exercises it. Treat it as a manifest
   hygiene signal first and a security signal second.
-- **CH04 attempted** (`production`, `informational`) fires on a guardrail that is
+- **CH04 attempted** (`hunt`, `informational`) fires on a guardrail that is
   **working**: if your policy layer refuses the call and the refusal surfaces as
-  a `tool_error`, this is what it looks like. Its check is measured at zero
-  benign hits, which is why it is production; it ships at informational, and the
-  rule refuses to describe it as a bypass, which is why it must not page.
+  a `tool_error`, this is what it looks like. Its own check ID is not measured by
+  the card (the corpus's CH04 attacks all complete a call, so they route to the
+  measured sibling), which is why it ships at hunt rather than production; the
+  rule also refuses to describe it as a bypass, which is why it must not page.
 - **Coverage** (`dashboard`) fires on every session under default privacy
   settings and without a capability manifest. Dashboard, not alert. The alertable
   event is a **drop** in completeness for an agent that previously scored higher:
