@@ -2136,6 +2136,12 @@ R_BAD_RESPONSE = "FINAL_RESPONSE_WRONG_TYPE"
 R_NO_TOOL_RESULT = "NO_TOOL_RESULT_CAPTURED"
 R_NO_SCANNER = "NO_INJECTION_SCANNER_EVIDENCE"
 R_UNKNOWN_CLASS = "TOOL_CLASS_UNKNOWN"
+# The session carried no tool_start/tool_end/tool_error events at all, so there
+# was no tool lifecycle to observe. A pairing check on a session with nothing to
+# pair has not "passed"; it has had nothing to evaluate. This is also what a
+# stream in a vocabulary Cohaera does not parse (e.g. camelCase toolStart) looks
+# like after ingestion: zero recognised tool events, not a clean session.
+R_NO_TOOL_LIFECYCLE = "NO_TOOL_LIFECYCLE_OBSERVED"
 R_HEURISTIC_CLASS = "TOOL_CLASS_FROM_NAME_HEURISTIC"
 R_NO_MANIFEST = "NO_CAPABILITY_MANIFEST"
 R_WEAK_CORRELATION = "CORRELATION_KEY_NOT_PRODUCER_SUPPLIED"
@@ -3189,17 +3195,43 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
 
     # ---- CH05 -----------------------------------------------------------
     required = [SURFACE_TOOL_LIFECYCLE, SURFACE_CORRELATION_KEY]
-    conf = corr_conf * (1.0 if not unknown else class_conf)
-    contracts.append(CheckContract(
-        check="CH05_unpaired_calls",
-        status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
-        confidence=conf, required_surfaces=required, present_surfaces=required,
-        missing_surfaces=[], reasons=common_reasons + (
-            [R_UNKNOWN_CLASS] if unknown else []),
-        remedies=[], assumptions=[
-            "Pairing integrity is an integrity signal about the telemetry, not "
-            "about the agent. A fabricated terminal event defeats it; see "
-            "EVASION.md E11."]))
+    if not calls:
+        # No tool lifecycle events were parsed. Before this the check reported
+        # tool_lifecycle PRESENT with confidence 1.0 on such a session, so a
+        # stream in an unrecognised vocabulary (zero tool calls after ingest)
+        # produced a confident clean pairing result -- a check claiming it
+        # evaluated something it never saw. With nothing to pair there is
+        # nothing to evaluate: say so, and let coverage fall rather than pass.
+        contracts.append(CheckContract(
+            check="CH05_unpaired_calls", status=STATUS_NOT_EVALUATED,
+            confidence=0.0, required_surfaces=required,
+            present_surfaces=[SURFACE_CORRELATION_KEY],
+            missing_surfaces=[SURFACE_TOOL_LIFECYCLE],
+            reasons=[R_NO_TOOL_LIFECYCLE],
+            remedies=[
+                "Emit tool_start and tool_end (or tool_error) events for the "
+                "session's tool calls. If the session genuinely used no tools, "
+                "this gap is expected and CH05 has nothing to check.",
+                "Check the producer's event_type spelling against "
+                "cohaera.input_vocabulary:1 (model.RECOGNIZED_EVENT_TYPES); a "
+                "type Cohaera does not recognise contributes no tool lifecycle."],
+            assumptions=[
+                "Zero observed tool calls is not a clean pairing result. It is "
+                "the absence of anything to pair, which can equally mean the "
+                "stream was in a vocabulary Cohaera does not parse."]))
+    else:
+        conf = corr_conf * (1.0 if not unknown else class_conf)
+        contracts.append(CheckContract(
+            check="CH05_unpaired_calls",
+            status=STATUS_EVALUATED if conf >= 1.0 else STATUS_DEGRADED,
+            confidence=conf, required_surfaces=required,
+            present_surfaces=required,
+            missing_surfaces=[], reasons=common_reasons + (
+                [R_UNKNOWN_CLASS] if unknown else []),
+            remedies=[], assumptions=[
+                "Pairing integrity is an integrity signal about the telemetry, "
+                "not about the agent. A fabricated terminal event defeats it; "
+                "see EVASION.md E11."]))
 
     evaluated = sum(1 for c in contracts if c.status == STATUS_EVALUATED)
     degraded = sum(1 for c in contracts if c.status == STATUS_DEGRADED)

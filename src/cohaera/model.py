@@ -115,12 +115,42 @@ EGRESS_KEYWORDS = {
     "email", "message", "notify", "sync", "export", "transfer", "exfiltrate",
 }
 
-TERMINAL_EVENTS = {
-    "model_response", "model_error", "turn", "tool_end", "tool_error",
-    "agent_end", "agent_handoff_error",
-}
-
 POLICY_EVENTS = {"cost_threshold_exceeded", "depth_exceeded"}
+
+# ---------------------------------------------------------------------------
+# Input vocabulary (cohaera.input_vocabulary:1)
+#
+# The set of event_type values this detector version understands, stated once
+# and named, rather than left implicit across the branches that happen to read
+# it. Two tiers, because "recognised but not consumed" and "not recognised at
+# all" are different facts about a producer's stream and must not be conflated:
+#
+#   CONSUMED  -- the model or a check actively reads this type; it changes a
+#                derived fact, a pairing, a policy signal, or a finding.
+#   CARRIED   -- a legitimate upstream (observra) type Cohaera ingests but does
+#                not branch on today. Listed so a new upstream type reads as
+#                "carried, not yet consumed" instead of an unknown dialect.
+#
+# The union is the recognised vocabulary. A value outside it is a stream this
+# version does not speak; callers can compare against RECOGNIZED_EVENT_TYPES to
+# tell a misspelling (`toolStart`) from a real observra event.
+# ---------------------------------------------------------------------------
+
+INPUT_VOCABULARY_SCHEMA = "cohaera.input_vocabulary:1"
+
+CONSUMED_EVENT_TYPES = frozenset({
+    "tool_start", "tool_end", "tool_error",
+    "model_response", "model_error", "user_message",
+    "agent_handoff", "agent_handoff_error", "agent_end", "turn",
+    "cost_threshold_exceeded", "depth_exceeded",
+})
+
+CARRIED_EVENT_TYPES = frozenset({
+    "session_start", "session_end", "agent_start", "skill_invocation",
+    "policy_event",
+})
+
+RECOGNIZED_EVENT_TYPES = CONSUMED_EVENT_TYPES | CARRIED_EVENT_TYPES
 
 # Where a call's class came from. Coverage reads this: a session classified
 # entirely by name heuristic cannot honestly report full confidence.
