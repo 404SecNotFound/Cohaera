@@ -20,11 +20,13 @@ from .model import (
     CONSUMED_EVENT_TYPES,
     INPUT_VOCABULARY_SCHEMA,
     RECOGNIZED_EVENT_TYPES,
+    TOOL_SCHEMA,
     Event,
     Finding,
     Session,
     ToolCall,
     to_cim_event,
+    to_tool_events,
 )
 from .validate import IngestReport, RecordView, Reject, sanitise_display
 
@@ -34,6 +36,7 @@ __all__ = [
     "DEFAULT_LIMITS",
     "INPUT_VOCABULARY_SCHEMA",
     "RECOGNIZED_EVENT_TYPES",
+    "TOOL_SCHEMA",
     "Capability",
     "CapabilityManifest",
     "CorrelationKey",
@@ -56,4 +59,5 @@ __all__ = [
     "run_all",
     "sanitise_display",
     "to_cim_event",
+    "to_tool_events",
 ]

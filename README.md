@@ -152,6 +152,14 @@ Each record contains:
 - a coverage contract for every CH01–CH07 check;
 - configuration and input provenance for reproduction and deduplication.
 
+With `--emit-tool-records` it also emits one `cohaera_tool` activity record per
+tool call: a durable fact about what ran, with class, pairing state, approval
+and receipt binding, queryable on its own with no detection loaded. This is the
+first record of the activity family, kept apart from the verdict the way Zeek's
+`conn.log` is kept apart from `notice.log`. See
+**[activity records](docs/ACTIVITY-RECORDS.md)** for the fields, their null
+semantics, and the hunts they answer.
+
 The longer-term record model is described in
 **[project direction](docs/DIRECTION.md)**. The intended shape is a small set of
 stable activity logs plus notices, similar to the separation between Zeek's
@@ -216,7 +224,7 @@ evidence that the current detections work on outside traffic.
 
 Repository controls are substantial but do not replace external validation:
 
-- Tests, 1191 passing across unit, hostile-input, content, lab, and regression
+- Tests, 1202 passing across unit, hostile-input, content, lab, and regression
   coverage.
 - Sigma content pack, 15 rules, validated and conformance-tested against real
   emitted fields.

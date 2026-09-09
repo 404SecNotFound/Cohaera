@@ -41,12 +41,9 @@ from typing import Any
 from .capabilities import CapabilityManifest
 from .content_scan import local_markers
 from .evidence import (
-    ARGS_UNBINDABLE,
     BINDING_CONTEXT,
     BINDING_TRUSTED,
     BOUND_ARG_MISMATCH,
-    BOUND_EXACT,
-    BOUND_NONE,
     BOUND_SPAN_ONLY,
     DECISION_DENY,
     ENFORCEMENT_ADVISORY,
@@ -1906,37 +1903,17 @@ def _receipt_severity(contradicted: list[ToolCall]) -> str:
 
 
 def _receipt_binding(call: ToolCall) -> str:
-    """How well this call's receipt binds to it. See evidence.Binding.
+    """How well this call's receipt binds to it. See ``evidence.Binding``.
 
-    R-01. This used to return ``BOUND_EXACT`` whenever the two argument digests
-    agreed, whatever else the binding did or did not name, and ``BOUND_SPAN_ONLY``
-    -- then a trusted value -- whenever it could not compare them at all. Both
-    halves were wrong in the same direction. A receipt naming only the arguments
-    is a receipt that names no call; a receipt naming nothing is not a binding.
-    Each of the three fields is now either CHECKED or the result is not exact,
-    and "the field was absent" is never the same answer as "the field matched".
+    The logic now lives on ``ToolCall.receipt_binding`` so CH07 and the
+    ``cohaera_tool`` activity record share one definition and cannot drift.
+    R-01: each of span, tool and argument digest is either CHECKED or the result
+    is not exact, and "the field was absent" is never "the field matched"; F-01:
+    a call whose own two argument identities disagree has nothing for a receipt
+    to bind to, and a contradiction resting on it would be an accusation built
+    on evidence the producer wrote both halves of.
     """
-    receipt = call.receipt
-    if receipt is None:
-        return BOUND_NONE
-    b = receipt.binding
-    if b.span_id and call.span_id and b.span_id != call.span_id:
-        return BOUND_NONE
-    if b.tool_id and b.tool_id != call.name:
-        return BOUND_NONE
-    if call.arg_digest_source in ARGS_UNBINDABLE:
-        # F-01. The CALL's own two argument identities disagree, so there is
-        # nothing here for a receipt to bind to and a contradiction resting on
-        # it would be an accusation built on evidence the producer wrote both
-        # halves of. A receipt matching the declared digest of a call whose
-        # captured arguments say otherwise is exactly the shape of a producer
-        # manufacturing the evidence used to accuse it.
-        return BOUND_ARG_MISMATCH
-    if b.arg_digest and call.arg_digest and b.arg_digest != call.arg_digest:
-        return BOUND_ARG_MISMATCH
-    if b.complete and call.span_id and call.arg_digest:
-        return BOUND_EXACT
-    return BOUND_SPAN_ONLY
+    return call.receipt_binding
 
 
 def ch07_effect_contradiction(session: Session,

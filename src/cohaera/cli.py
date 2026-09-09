@@ -3,7 +3,9 @@
     python -m cohaera.cli score <telemetry.jsonl> [--baseline benign.jsonl]
 
 Prints a human summary to stderr and emits one correlation-grade CIM record per
-session as JSONL on stdout, so it pipes straight into a collector:
+session as JSONL on stdout, so it pipes straight into a collector. With
+``--emit-tool-records`` it also emits one ``cohaera_tool`` activity record per
+tool call on the same stream (see docs/ACTIVITY-RECORDS.md):
 
     python -m cohaera.cli score run.jsonl | curl -X POST --data-binary @- ...
 
@@ -63,7 +65,7 @@ from .evidence import (
 from .identity import Correlator, run_id, trust_config_digest
 from .ingest import load
 from .limits import DEFAULT_LIMITS, Limits, LimitsError
-from .model import SESSION_SCHEMA, json_safe, to_cim_event
+from .model import SESSION_SCHEMA, json_safe, to_cim_event, to_tool_events
 from .validate import IngestReport, sanitise_display
 
 EXIT_OK = 0
@@ -545,6 +547,16 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
                               sequence=seq)
         print(json.dumps(json_safe(record), allow_nan=False, default=str))
 
+        # The activity log: one cohaera_tool fact per call, kept apart from the
+        # verdict the way conn.log is kept apart from notice.log. Off by default
+        # so the stdout contract stays one record per session unless asked;
+        # each row joins back to this verdict through verdict_id.
+        if args.emit_tool_records:
+            for tev in to_tool_events(s, provenance=provenance,
+                                      verdict_id=record["verdict_id"],
+                                      limits=limits):
+                print(json.dumps(tev, allow_nan=False, default=str))
+
         f = s.features()
         agents = ", ".join(sanitise_display(a, 60) for a in s.agent_names) or "?"
         _err(f"session {sanitise_display(s.session_id, 120)}  agent={agents}  "
@@ -809,6 +821,14 @@ def main(argv: list[str] | None = None) -> int:
     sc = sub.add_parser("score", help="score observra telemetry")
     sc.add_argument("telemetry", help="observra JSONL file")
     sc.add_argument("--baseline", help="benign JSONL to fit the sequence grammar")
+    sc.add_argument("--emit-tool-records", action="store_true",
+                    help="Also emit one cohaera_tool activity record per tool "
+                         "call to stdout, alongside the session verdict. This is "
+                         "the durable fact stream -- what tools ran, with class, "
+                         "approval and receipt state -- queryable with no "
+                         "detection loaded. Each row joins to its verdict via "
+                         "verdict_id. Off by default: the stdout contract is one "
+                         "verdict per session unless this is set.")
     sc.add_argument("--baseline-sig", metavar="PATH",
                     help="Detached cohaera.policy_signature:1 over the baseline. "
                          "CH01 is the only detector here that LEARNS, so an "

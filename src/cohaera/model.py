@@ -592,6 +592,33 @@ class ToolCall:
     def clock_valid(self) -> bool:
         return math.isfinite(self.started_at)
 
+    @property
+    def receipt_binding(self) -> str:
+        """How well this call's receipt binds to it, ``BOUND_NONE`` if it has
+        none. See ``evidence.Binding``.
+
+        The single definition CH07's ``_receipt_binding`` and the
+        ``cohaera_tool`` activity record both read, so the two cannot drift.
+        Each of span, tool and argument digest is either CHECKED or the answer
+        is not exact: "the field was absent" is never the same answer as "the
+        field matched" (R-01).
+        """
+        receipt = self.receipt
+        if receipt is None:
+            return evidence.BOUND_NONE
+        b = receipt.binding
+        if b.span_id and self.span_id and b.span_id != self.span_id:
+            return evidence.BOUND_NONE
+        if b.tool_id and b.tool_id != self.name:
+            return evidence.BOUND_NONE
+        if self.arg_digest_source in evidence.ARGS_UNBINDABLE:
+            return evidence.BOUND_ARG_MISMATCH
+        if b.arg_digest and self.arg_digest and b.arg_digest != self.arg_digest:
+            return evidence.BOUND_ARG_MISMATCH
+        if b.complete and self.span_id and self.arg_digest:
+            return evidence.BOUND_EXACT
+        return evidence.BOUND_SPAN_ONLY
+
     def brief(self, limits: Limits = DEFAULT_LIMITS) -> dict[str, Any]:
         """The bounded evidence row used by every check."""
         return {
@@ -1579,3 +1606,117 @@ def to_cim_event(session: Session, findings: list[Finding],
     if coverage is not None:
         record["data"]["coverage"] = coverage
     return json_safe(record)
+
+
+# The activity-record contract's version, independent of SESSION_SCHEMA. A
+# cohaera_tool row is a fact about one tool call; it moves on its own schedule
+# from the session verdict, so a consumer of one is not forced to re-parse the
+# other when either changes.
+TOOL_SCHEMA = "cohaera.tool:1"
+
+
+def to_tool_events(session: Session,
+                   provenance: dict[str, Any] | None = None,
+                   verdict_id: str | None = None,
+                   schema: str = TOOL_SCHEMA,
+                   limits: Limits = DEFAULT_LIMITS) -> list[dict[str, Any]]:
+    """Emit one ``cohaera_tool`` activity record per assembled tool call.
+
+    This is the activity log, kept apart from the session verdict the way
+    Zeek's conn.log is kept apart from notice.log: durable facts about what
+    tools ran, queryable on their own with no detection loaded. One row per
+    ``ToolCall``, INCLUDING unpaired starts and orphan terminals, because "a
+    consequential call that never terminated" and "a terminal with no start"
+    are exactly the rows a hunter wants and neither is a finding on its own.
+
+    Each row is self-sufficient for correlation (it carries the session and
+    actor identity) and joins to its session verdict through ``verdict_id``.
+    ``tool_event_id`` is deterministic: the same input under the same run
+    identity produces the same id, so a SIEM can recognise a re-score.
+
+    NULL SEMANTICS, stated because a hunt depends on them:
+      * ``started_at``/``ended_at`` are null when the clock was unreadable or
+        the call never terminated, never 0.
+      * ``result`` is null for an unpaired (still ``open``) call: absence of a
+        terminal is not a failure.
+      * ``reversible`` is null when the producer never declared it; it is not
+        defaulted to a class.
+      * ``class`` is ``unknown`` when nothing established it; ``class_source``
+        says which of manifest, name heuristic or producer flag decided.
+      * ``receipt_binding`` is ``unbound`` when there is no receipt AND when a
+        receipt names no call; ``receipt_present`` separates the two.
+      * ``approval_state`` is ``covered`` only for an ALLOW that bound exactly
+        and was observed before the call; ``presented_not_binding`` means an
+        approval named the call's span but did not cover it; ``none`` means no
+        approval named it.
+    """
+    prov = dict(provenance or {})
+    run_id = str(prov.get("analysis_run_id", ""))
+    tool_prov = {
+        "analysis_run_id": prov.get("analysis_run_id"),
+        "detector_version": prov.get("detector_version"),
+        "config_hash": prov.get("config_hash"),
+        "verdict_id": verdict_id,
+    }
+
+    records: list[dict[str, Any]] = []
+    for index, call in enumerate(session.tool_calls):
+        started = call.started_at if math.isfinite(call.started_at) else None
+        ended = (call.ended_at if call.ended_at is not None
+                 and math.isfinite(call.ended_at) else None)
+
+        if session.covering_approval(call) is not None:
+            approval_state = "covered"
+        elif session.approvals_for(call):
+            approval_state = "presented_not_binding"
+        else:
+            approval_state = "none"
+
+        tool_event_id = digest({
+            "run": run_id, "session": session.session_id, "index": index,
+            "span": call.span_id, "name": call.name, "at": started,
+        }, 16)
+
+        records.append(json_safe({
+            "type": "cohaera_tool",
+            "schema": schema,
+            "event_type": "cohaera_tool",
+            "timestamp": started,
+            "session_id": session.session_id,
+            "trace_id": session.session_id,
+            "agent_name": session.agent_names[0] if session.agent_names else None,
+            "framework": session.framework,
+            "host": session.host,
+            "user": session.user,
+            "log_source_type": "cohaera",
+            "tool_event_id": tool_event_id,
+            "verdict_id": verdict_id,
+            "sequence": index,
+            "data": {
+                "tool": validate.sanitise_display(
+                    call.name, limits.max_evidence_value_chars),
+                "class": call.klass,
+                "class_source": call.klass_source,
+                "consequential": call.consequential,
+                "state": call.state,
+                "result": call.result,
+                "executed": call.executed,
+                "started_at": started,
+                "ended_at": ended,
+                "duration_ms": call.duration_ms,
+                "span_id": call.span_id,
+                "error_class": call.error_class,
+                "had_args": call.had_args,
+                "had_result": call.had_result,
+                "reversible": call.reversible,
+                "arg_digest_source": call.arg_digest_source,
+                "arg_digest_disagrees": call.arg_digest_disagrees,
+                "approval_state": approval_state,
+                "receipt_present": call.receipt is not None,
+                "receipt_binding": call.receipt_binding,
+                "start_stream": call.start_stream,
+                "start_seq": call.start_seq,
+                "provenance": tool_prov,
+            },
+        }))
+    return records
