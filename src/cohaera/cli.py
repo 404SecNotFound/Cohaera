@@ -5,7 +5,8 @@
 Prints a human summary to stderr and emits one correlation-grade CIM record per
 session as JSONL on stdout, so it pipes straight into a collector. With
 ``--emit-tool-records`` it also emits one ``cohaera_tool`` activity record per
-tool call on the same stream (see docs/ACTIVITY-RECORDS.md):
+tool call (see docs/ACTIVITY-RECORDS.md), and with ``--emit-notice-records`` one
+``cohaera_notice`` per finding (see docs/NOTICES.md) on the same stream:
 
     python -m cohaera.cli score run.jsonl | curl -X POST --data-binary @- ...
 
@@ -45,7 +46,7 @@ from typing import Any, BinaryIO
 
 from . import __version__
 from .capabilities import EMPTY_MANIFEST, CapabilityManifest, ManifestError
-from .checks import SequenceGrammar, run_all
+from .checks import SequenceGrammar, run_all, to_notice_events
 from .evidence import (
     EMPTY_STORE,
     P_ABSENT,
@@ -557,6 +558,16 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
                                       limits=limits):
                 print(json.dumps(tev, allow_nan=False, default=str))
 
+        # The alert stream: one cohaera_notice per finding, each carrying a
+        # notice_grade (alert vs hunt) so a router pages on the measured checks
+        # and sends the behavioural ones to a hunting dataset. Off by default;
+        # each notice joins to this verdict through verdict_id.
+        if args.emit_notice_records:
+            for nev in to_notice_events(s, findings, coverage=cov,
+                                        provenance=provenance,
+                                        verdict_id=record["verdict_id"]):
+                print(json.dumps(nev, allow_nan=False, default=str))
+
         f = s.features()
         agents = ", ".join(sanitise_display(a, 60) for a in s.agent_names) or "?"
         _err(f"session {sanitise_display(s.session_id, 120)}  agent={agents}  "
@@ -829,6 +840,12 @@ def main(argv: list[str] | None = None) -> int:
                          "detection loaded. Each row joins to its verdict via "
                          "verdict_id. Off by default: the stdout contract is one "
                          "verdict per session unless this is set.")
+    sc.add_argument("--emit-notice-records", action="store_true",
+                    help="Also emit one cohaera_notice record per finding: the "
+                         "alert stream, kept apart from the verdict. Each notice "
+                         "carries notice_grade (alert vs hunt) so a router pages "
+                         "on the measured, deterministic checks and sends the "
+                         "behavioural ones to a hunting dataset. Off by default.")
     sc.add_argument("--baseline-sig", metavar="PATH",
                     help="Detached cohaera.policy_signature:1 over the baseline. "
                          "CH01 is the only detector here that LEARNS, so an "

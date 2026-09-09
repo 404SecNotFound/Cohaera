@@ -5,7 +5,7 @@
 
 # Documentation map
 
-30 documents, about 112,000 words. This page exists so you never have to
+31 documents, about 113,000 words. This page exists so you never have to
 guess which one answers your question.
 
 Each row says what question the document answers, not what it contains.
@@ -43,6 +43,7 @@ Each row says what question the document answers, not what it contains.
 |---|---|
 | [EVIDENCE-TRUST](EVIDENCE-TRUST.md) | What are the wire formats — collector integrity, effect receipts, approval binding, the trust store, signed policy files — and what does each actually establish? |
 | [ACTIVITY-RECORDS](ACTIVITY-RECORDS.md) | What is the `cohaera_tool` activity record, what does each field mean and when is it null, and which hunts does it answer? |
+| [NOTICES](NOTICES.md) | What is the `cohaera_notice` alert stream, what does `notice_grade` mean, and why is a critical finding not always a page? |
 | [content/README](../content/README.md) | What SIEM content ships, and what does each rule mean? |
 | [BOUNDED-SESSIONS](BOUNDED-SESSIONS.md) | How does session assembly stay bounded against a hostile producer? |
 | [CHANGELOG](../CHANGELOG.md) | What changed, what broke, and which release states the false-positive rate? |

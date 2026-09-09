@@ -37,6 +37,7 @@ from cohaera.capabilities import (
     CapabilityManifest,
 )
 from cohaera.checks import (
+    ALERT_GRADE_CHECKS,
     ALL_CHECKS,
     CHECK_FAMILIES,
     SequenceGrammar,
@@ -608,6 +609,28 @@ def test_the_dashboard_tier_did_not_flatten_the_coverage_rules_guidance():
     text = " ".join(rule["falsepositives"])
     assert "NOT A FALSE POSITIVE, A CONFIGURATION STATE" in text
     assert "DROP in completeness" in text
+
+
+def test_alert_grade_checks_match_the_production_sigma_tier():
+    """The code's notion of an alert-grade notice and the pack's production
+    tier are the same decision, so they are the same set or this fails.
+
+    ``checks.ALERT_GRADE_CHECKS`` is what ``cohaera_notice`` routes on; the
+    production tier is what the Sigma pack pages on. Both mean "measured at zero
+    benign hits on the card". Deriving them separately is how one drifts while
+    the other looks right -- exactly the laundering this module exists to stop,
+    applied to the record layer instead of a rule.
+    """
+    prod: set[str] = set()
+    for path in sigma_files():
+        rule = load_rule(path)
+        if rule["custom"]["deployment_tier"] == "production":
+            prod |= selected_checks(rule)
+    assert prod == set(ALERT_GRADE_CHECKS), (
+        f"production Sigma rules select {sorted(prod)}, but the notice layer's "
+        f"ALERT_GRADE_CHECKS is {sorted(ALERT_GRADE_CHECKS)}. Promote/demote a "
+        f"rule and update ALERT_GRADE_CHECKS together, or the notice grade and "
+        f"the Sigma tier will disagree about what may page.")
 
 
 def test_the_tiers_partition_the_pack_the_way_the_card_does():

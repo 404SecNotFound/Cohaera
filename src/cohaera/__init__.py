@@ -11,7 +11,15 @@ actions.
 __version__ = "0.3.0"
 
 from .capabilities import Capability, CapabilityManifest, ManifestError
-from .checks import SequenceGrammar, coverage, run_all
+from .checks import (
+    ALERT_GRADE_CHECKS,
+    NOTICE_SCHEMA,
+    SequenceGrammar,
+    coverage,
+    notice_grade,
+    run_all,
+    to_notice_events,
+)
 from .identity import CorrelationKey, Correlator
 from .ingest import assemble, load, read_events
 from .limits import DEFAULT_LIMITS, Limits
@@ -31,10 +39,12 @@ from .model import (
 from .validate import IngestReport, RecordView, Reject, sanitise_display
 
 __all__ = [
+    "ALERT_GRADE_CHECKS",
     "CARRIED_EVENT_TYPES",
     "CONSUMED_EVENT_TYPES",
     "DEFAULT_LIMITS",
     "INPUT_VOCABULARY_SCHEMA",
+    "NOTICE_SCHEMA",
     "RECOGNIZED_EVENT_TYPES",
     "TOOL_SCHEMA",
     "Capability",
@@ -55,9 +65,11 @@ __all__ = [
     "assemble",
     "coverage",
     "load",
+    "notice_grade",
     "read_events",
     "run_all",
     "sanitise_display",
     "to_cim_event",
+    "to_notice_events",
     "to_tool_events",
 ]

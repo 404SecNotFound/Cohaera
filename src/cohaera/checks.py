@@ -88,6 +88,7 @@ from .model import (
     Session,
     ToolCall,
     cap_list,
+    json_safe,
     scanner_marked,
     scanner_reported,
 )
@@ -3316,3 +3317,110 @@ def run_all(session: Session, grammar: SequenceGrammar | None = None,
         f.evidence_status = (EVIDENCE_NOT_APPLICABLE if f.check == CH06_INTEGRITY
                              else status)
     return findings, cov
+
+
+# ---------------------------------------------------------------------------
+# Notices: the alert stream, kept apart from the fact stream
+# ---------------------------------------------------------------------------
+#
+# The session verdict is a per-session rollup and cohaera_tool is the activity
+# log. A cohaera_notice is one finding, emitted as its own record so the alert
+# stream has a schema, a retention and a routing field of its own rather than
+# sharing the verdict's. The review's "the fact stream and the alert stream
+# have the same schema" is answered here.
+
+NOTICE_SCHEMA = "cohaera.notice:1"
+
+NOTICE_ALERT = "alert"
+NOTICE_HUNT = "hunt"
+
+# Check IDs whose findings are alert-grade: deterministic, evidence-grounded,
+# and measured at zero benign false positives on the evaluation card. These are
+# exactly the production-tier check IDs in content/sigma/, stated here in code
+# so a notice consumer can route without reading the pack -- and
+# tests/test_content.py asserts the two lists are the same set, so they cannot
+# drift. Everything else is hunt-grade: a real observation whose benign rate is
+# either high (CH01-CH03, CH05) or unmeasured (the sibling CH04 and CH07 IDs),
+# so it is an investigation surface, not a page.
+ALERT_GRADE_CHECKS = frozenset({CH04_BYPASSED, CH06_INTEGRITY, CH07_CONTRADICTED})
+
+
+def notice_grade(check: str) -> str:
+    """``alert`` for a measured, deterministic check; ``hunt`` for the rest.
+
+    Grade is not severity. Severity says how bad the finding is if real;
+    grade says whether the check is trusted enough to page. A hunt-grade notice
+    can be ``critical`` (CH02 is) and still must not page, because its benign
+    rate is not established. A router reads grade, not severity.
+    """
+    return NOTICE_ALERT if check in ALERT_GRADE_CHECKS else NOTICE_HUNT
+
+
+def to_notice_events(session: Session, findings: list[Finding],
+                     coverage: dict[str, Any] | None = None,
+                     provenance: dict[str, Any] | None = None,
+                     verdict_id: str | None = None,
+                     schema: str = NOTICE_SCHEMA) -> list[dict[str, Any]]:
+    """Emit one ``cohaera_notice`` record per finding: the alert stream.
+
+    Each notice carries ``notice_grade``. A router pages on the alert-grade
+    notices -- CH04 blocking bypass, CH06 evidence integrity, CH07 contradiction,
+    the three checks measured at zero benign false positives -- and sends the
+    behavioural notices (CH01-CH03, CH05, and the unmeasured CH04/CH07 variants)
+    to a hunting dataset. This is where the corpus's 420-per-1000 behavioural
+    noise stops being an alert: as a hunt-grade notice it carries no page,
+    while still being a durable, queryable record.
+
+    Notices join to their session verdict through ``verdict_id`` and each carries
+    a deterministic ``notice_id``. ``coverage_status`` and ``coverage_confidence``
+    are copied from the governing check's coverage contract so a notice read on
+    its own still says how much of it rests on guesswork.
+    """
+    prov = dict(provenance or {})
+    run_id = str(prov.get("analysis_run_id", ""))
+    cov_by_check: dict[str, dict[str, Any]] = {}
+    for c in (coverage or {}).get("checks", []):
+        cov_by_check[c["check"]] = c
+    notice_prov = {
+        "analysis_run_id": prov.get("analysis_run_id"),
+        "detector_version": prov.get("detector_version"),
+        "config_hash": prov.get("config_hash"),
+        "verdict_id": verdict_id,
+    }
+
+    records: list[dict[str, Any]] = []
+    for index, f in enumerate(findings):
+        cov = cov_by_check.get(f.family) or cov_by_check.get(f.check) or {}
+        notice_id = digest({"run": run_id, "session": session.session_id,
+                            "index": index, "check": f.check}, 16)
+        records.append(json_safe({
+            "type": "cohaera_notice",
+            "schema": schema,
+            "event_type": "cohaera_notice",
+            "timestamp": session.ended_at,
+            "session_id": session.session_id,
+            "trace_id": session.session_id,
+            "agent_name": session.agent_names[0] if session.agent_names else None,
+            "framework": session.framework,
+            "host": session.host,
+            "user": session.user,
+            "log_source_type": "cohaera",
+            "notice_id": notice_id,
+            "verdict_id": verdict_id,
+            "sequence": index,
+            "data": {
+                "check": f.check,
+                "family": f.family,
+                "notice_grade": notice_grade(f.check),
+                "severity": f.severity,
+                "confidence": f.confidence,
+                "evidence_status": f.evidence_status,
+                "title": f.title,
+                "detail": f.detail,
+                "evidence": f.evidence,
+                "coverage_status": cov.get("status"),
+                "coverage_confidence": cov.get("confidence"),
+                "provenance": notice_prov,
+            },
+        }))
+    return records
