@@ -76,6 +76,40 @@ DEFECT_NUMERIC_NONFINITE = "NONFINITE_NUMERIC_FIELD"
 # Exact types only, and a malformed claim is ABSENT rather than believed.
 DEFECT_SCANNER_CLAIM_TYPE = "INVALID_SCANNER_CLAIM"
 DEFECT_INJECTION_MARKERS_TYPE = "INVALID_INJECTION_MARKERS"
+# `event_id` is read for ONE purpose: recognising a record delivered twice.
+# A non-string id is absent for that purpose rather than stringified, because
+# `1` and `"1"` and `True` colliding is exactly the aliasing that made a span of
+# `true` close a call opened as `1` (BUG-04).
+DEFECT_EVENT_ID_TYPE = "INVALID_EVENT_ID_TYPE"
+
+# --- session-level: a record arrived more than once -------------------------
+# Not a field defect and not a rejection. At-least-once delivery -- a collector
+# retry, a replayed buffer, a file concatenated with itself -- hands Cohaera the
+# same record twice, and before this code existed every duplicate was scored as
+# a second event: a tool_start delivered twice became an unpaired call (CH05), a
+# consequential call delivered twice doubled the CH02 count, and eight copies of
+# a session cut CH03's confidence from 0.35 to 0.02 because the share of calls
+# it could not order fell with every copy. Nothing read `event_id` at all.
+#
+# A duplicate is a record whose full content digest matches an earlier
+# record's in the same session, or whose `event_id` matches an earlier
+# record's AND whose content matches it once the two fields a collector
+# rewrites on retry -- the timestamp and the integrity sidecar -- are set
+# aside. The first delivery is kept, the rest are dropped from the session's
+# view for check purposes, and the count travels in the verdict under this
+# code so the drop is visible. The collector-stream verifier (evidence.py)
+# separately detects sequence REPLAY, which is the signed form of the same
+# event; this is the unsigned form.
+DEFECT_DUPLICATE_DELIVERY = "DUPLICATE_DELIVERY_DROPPED"
+# An `event_id` reused for a DIFFERENT record. Not dropped, because Cohaera
+# cannot say which of the two is the record and dropping either would blind a
+# check on the producer's say-so: the repository's own test helpers derive ids
+# from the timestamp, so a guardrail and a call on the same tick share one,
+# and the first version of the rule above dropped the consequential call
+# (tests/test_evasion.py, E23). Kept, counted, and reported under this code,
+# because a producer whose ids are not unique is a fact about the telemetry
+# an analyst needs before trusting any count that rests on identity.
+DEFECT_EVENT_ID_REUSED = "EVENT_ID_REUSED_FOR_DIFFERENT_RECORD"
 
 # --- P1 evidence sidecars (docs/EVIDENCE-TRUST.md) -------------------------
 # A malformed evidence object is treated as ABSENT, never as a weaker version of
@@ -145,6 +179,7 @@ ALL_DEFECT_CODES = (
     DEFECT_NUMERIC_NONFINITE, DEFECT_INTEGRITY_TYPE, DEFECT_RECEIPT_TYPE,
     DEFECT_APPROVAL_TYPE, DEFECT_ENFORCEMENT_TYPE,
     DEFECT_SCANNER_CLAIM_TYPE, DEFECT_INJECTION_MARKERS_TYPE,
+    DEFECT_EVENT_ID_TYPE,
 )
 
 

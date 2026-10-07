@@ -77,6 +77,24 @@ EXIT_BUDGET = 5
 _SEV_MARK = {"critical": "[CRIT]", "high": "[HIGH]", "medium": "[MED ]",
              "low": "[LOW ]", "info": "[INFO]"}
 
+# The exit codes are a stable contract for automation, and the only place they
+# were written down was this module's docstring, which an operator at a shell
+# never sees. Shown by `cohaera score --help` so the reference is the tool.
+EXIT_CODES_HELP = f"""\
+exit codes (stable; automation may branch on them):
+  {EXIT_OK}   every record was accepted and scored
+  {EXIT_PARTIAL}   partial success: some records were quarantined and the rest
+      were scored (default mode); the quarantine ledger says which
+  {EXIT_STRICT_REJECT}   --strict, and at least one record was quarantined
+  {EXIT_BUDGET}   a reject budget or a resource bound was exceeded, or the
+      baseline was partial; output is incomplete
+  {EXIT_ERROR}   the run could not be completed as requested: a bound that is
+      not a bound, a manifest, trust store, signature or ledger that was
+      rejected, an audit file that could not be written, or an unexpected
+      error. Nothing is scored on this exit.
+  2   usage error, including a bound outside its valid range
+"""
+
 SECRET_ENV = "COHAERA_CORRELATION_SECRET"
 
 
@@ -288,6 +306,24 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
     except LimitsError as exc:
         _err(f"[cohaera] invalid bound: {sanitise_display(str(exc), 300)}")
         return EXIT_ERROR
+    # A signature names a file. Given without the file it was silently
+    # ignored: `_attest_policy` returns POLICY_SIGNATURE_ABSENT when either
+    # half is missing, so `--tool-manifest-sig x.sig` with no `--tool-manifest`
+    # exited 0 having checked nothing -- the sig file did not even have to
+    # exist -- and `--require-signed-policy` did not object, because it only
+    # asks about files that WERE supplied. An operator who passed a signature
+    # asked for a verification; the answer to a verification nothing could
+    # perform is a refusal, not a pass.
+    for sig_flag, sig_value, file_flag, file_value in (
+            ("--tool-manifest-sig", args.tool_manifest_sig,
+             "--tool-manifest", args.tool_manifest),
+            ("--baseline-sig", args.baseline_sig, "--baseline", args.baseline)):
+        if sig_value and not file_value:
+            _err(f"[cohaera] {sig_flag} was given without {file_flag}. A "
+                 f"detached signature verifies a file, and no file was "
+                 f"supplied for it to verify; pass {file_flag} or drop "
+                 f"{sig_flag}.")
+            return EXIT_ERROR
     try:
         manifest = _load_manifest(args.tool_manifest, limits)
     except (ManifestError, OSError) as exc:
@@ -328,9 +364,19 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
     # The manifest needs no descriptor. It was already read whole and bounded by
     # _load_manifest, and it carries the digest of exactly those bytes.
     baseline_fh: BinaryIO | None = None
-    try:
-        if args.baseline:
+    if args.baseline:
+        # Opened in its own clause. It used to sit inside the attestation
+        # try below, so a baseline that did not exist was reported as "policy
+        # signature rejected: [Errno 2] No such file" -- on a run that had
+        # passed no signature at all. The error named the one thing that had
+        # not gone wrong.
+        try:
             baseline_fh = stack.enter_context(Path(args.baseline).open("rb"))
+        except OSError as exc:
+            _err(f"[cohaera] baseline {sanitise_display(args.baseline, 160)} "
+                 f"is not readable: {sanitise_display(str(exc), 300)}")
+            return EXIT_ERROR
+    try:
         baseline_digest = (
             stream_sha256(baseline_fh, limits.max_input_bytes, str(args.baseline))
             if baseline_fh is not None and args.baseline_sig else None)
@@ -715,6 +761,18 @@ def _write_reject_log(fh: Any, report: IngestReport) -> None:
     """
     for r in report.rejects:
         fh.write(json.dumps(r.as_dict(), sort_keys=True) + "\n")
+    if report.rejects_truncated:
+        # The per-record rows are bounded (validate.REJECT_LEDGER_KEEP) and
+        # the bound used to be invisible: 1,500 rejects wrote 1,001 lines and
+        # a summary saying 1,500, with nothing between them to say the rows
+        # had been cut. A reader reconciling the two had a counting bug to
+        # chase that did not exist. The marker sits where the missing rows
+        # would have been, and the summary carries the same numbers.
+        fh.write(json.dumps({"_truncated": {
+            "rows_retained": len(report.rejects),
+            "rows_omitted": report.rejects_omitted,
+            "records_rejected": report.rejected,
+        }}, sort_keys=True) + "\n")
     fh.write(json.dumps({"_summary": report.summary()}, sort_keys=True) + "\n")
 
 
@@ -732,6 +790,15 @@ def _probe_writable(path: str) -> None:
     """
     target = Path(path)
     parent = target.parent if str(target.parent) else Path()
+    if target.is_dir():
+        # A directory passes both tests below -- it exists, it is writable,
+        # and its parent accepts a temporary file -- so the probe said yes,
+        # the run scored everything and saved both ledgers, and only then
+        # did os.replace fail with "Is a directory" and exit 1. The next run
+        # then read the advanced seen-stream ledger as a replay of the input
+        # it had never reported on. The failure was knowable up front, which
+        # is the whole reason this probe exists.
+        raise OSError(f"{path}: is a directory, not a file")
     if target.exists() and not os.access(target, os.W_OK):
         raise OSError(f"{path}: exists and is not writable")
     fd, tmp = tempfile.mkstemp(dir=str(parent) or ".", prefix=".cohaera-probe-")
@@ -860,7 +927,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="cohaera")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sc = sub.add_parser("score", help="score observra telemetry")
+    sc = sub.add_parser("score", help="score observra telemetry",
+                        epilog=EXIT_CODES_HELP,
+                        formatter_class=argparse.RawDescriptionHelpFormatter)
     sc.add_argument("telemetry", help="observra JSONL file")
     sc.add_argument("--baseline", help="benign JSONL to fit the sequence grammar")
     sc.add_argument("--baseline-sig", metavar="PATH",
