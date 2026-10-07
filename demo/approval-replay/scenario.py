@@ -66,8 +66,11 @@ def approval(span: str) -> dict:
     point 4 of EVASION.md E26. `granted_at` and `expires_at` are optional, so
     an approval that declares neither is never stale. It covers forever.
 
-    NO signature either, because the schema has nowhere to put one. Every field
-    below is plain JSON that anything writing this stream can edit.
+    NO signature and NO nonce either. The schema has optional `signature` and
+    `nonce` fields since the E26 remedy; this fixture omits them on purpose,
+    because the demo shows the default deployment, where nothing signs an
+    approval. Every field below is plain JSON that anything writing this
+    stream can edit.
     """
     return {"scheme": APPROVAL_SCHEMA, "decision": "allow",
             "subject": {"span_id": span, "tool_id": TOOL,

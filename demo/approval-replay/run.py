@@ -76,17 +76,19 @@ def main() -> int:
         print(f"\n  {note}")
 
     print(f"\n{RULE}")
-    print("  The approval is a sticky note with a span written on it.")
-    print("  Rewriting the span costs one string. Nothing signs it, nothing")
-    print("  expires it, and nothing remembers it was already spent.")
+    print("  In a default deployment the approval is a sticky note with a span")
+    print("  written on it. Rewriting the span costs one string. Nothing signs")
+    print("  it, nothing expires it, and nothing remembers it was already spent.")
     print()
-    print("  What would close it, and none of it exists on this path yet:")
-    print("    - an issuer signature over the approval body")
-    print("    - a mandatory validity window")
+    print("  The controls that close it exist and are opt-in:")
+    print("    - an issuer signature over the approval body (trust-store role")
+    print("      'approval', enforced by --require-signed-approvals)")
+    print("    - a validity window the signature covers and requires")
     print("    - a nonce the verifier records as spent, across sessions")
+    print("      (--seen-approvals)")
     print()
-    print("  All three already exist for TELEMETRY as cohaera.integrity:1.")
-    print(f"  The approval path never got them.  See EVASION.md E26.\n{RULE}\n")
+    print("  This demo ran with all of them off, which is how every deployment")
+    print(f"  starts. No tool in tools/ signs approvals yet. See EVASION.md E26.\n{RULE}\n")
     return 0
 
 

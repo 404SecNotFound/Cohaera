@@ -36,12 +36,19 @@ Conducted against `5cca159`. Four findings were P0; all four are merged.
 - [x] **3. CH07 manufactured a critical finding from an unauthenticated
       receipt.** Receipt trust is now tiered and unauthenticated tops out below
       critical. *(#33)*
-- [ ] **4. Approval binding remains incomplete.** Approval does not bind the
-      tool definition, and approvals lack issuer authentication, mandatory
-      nonces and cross-run consumption. **E25 and E26 are free,
-      default-deployment evasions.** Needs: tool-schema digest, server identity
-      and version, tenant/resource, call nonce, expiration, and an authoritative
-      single-use approval ledger. **Large.**
+- [ ] **4. Approval binding remains incomplete.** The approval does not bind
+      the tool definition: no tool-schema digest, server identity, version or
+      tenant field exists in the schema, so **E25 is a free, default-deployment
+      evasion.** Issuer authentication, nonces and cross-run consumption are
+      built, as opt-in controls: `cohaera.approval:1` carries an optional
+      `nonce` and a detached issuer `signature`, the trust store has an
+      `approval` role, `--seen-approvals` keeps a spent-nonce ledger across
+      runs, and `--require-signed-approvals` stops an unsigned approval
+      covering a call. All of it is off unless the operator issues approval
+      keys and turns it on, so **the default deployment is still exposed and
+      E26 is half closed** (A5 below). Still needed: the tool-definition
+      digest, and a signing helper under `tools/` so an issuer can produce the
+      format without reading `evidence.py`. **Large.**
 - [ ] **5. Work the free evasions rather than growing the catalogue.** 19 are
       tier T0 — no attacker capability required — of which 11 work outright and
       the rest are half closed. Remaining, cheapest first: ship memory-tool
@@ -113,7 +120,7 @@ Conducted against `5cca159`. Four findings were P0; all four are merged.
 
 ## B. Three role reviews
 
-8 findings from [REVIEWS-2026-08.md](REVIEWS-2026-08.md) remain Open or
+8 findings from [REVIEWS-2026-08.md](archive/REVIEWS-2026-08.md) remain Open or
 Recorded. None is a defect; several are positioning decisions that should be
 made deliberately rather than as a side effect.
 
@@ -150,20 +157,23 @@ made deliberately rather than as a side effect.
 
 ## C. Roadmap
 
-5 unchecked items in the README's roadmap.
+5 unchecked items in the README's roadmap. Each is a milestone in
+[DIRECTION.md](DIRECTION.md), which carries the acceptance gate. This page does
+not restate the list, because two copies of a roadmap drift.
 
-- [ ] AgentDojo corpus under observra instrumentation, 25 attempts per scenario
-- [ ] CH02 semantic matching — currently lexical, and its weakest point
-- [ ] Praxen Worker Remit compiler, remit sections to runtime predicates
-- [ ] Static analysis (CodeQL) — configured and clean, but code scanning needs
-      GitHub Code Security on a private personal-account repository. **Free the
-      moment this repository is public.**
-- [ ] Signed releases with an SBOM attested to the released artefact rather than
-      a 90-day CI artefact
-- [ ] Cohaera schema 1.0 plus a tested Exabeam exporter and parser package
-- [ ] Streaming state with watermarks, replacing batch load
-- [ ] Validate content against a live SIEM
-- [ ] Build AIE-COHAERA-001 natively and compare against the Cohaera-fed version
+| README item | DIRECTION milestone |
+|---|---|
+| Stable 1.0 activity-record family | M2, Activity record 1.0 |
+| Streaming session state with watermarks and deterministic replay | M4, Passive streaming and adapters |
+| Passive adapters for OpenTelemetry and other exported telemetry | M4, Passive streaming and adapters |
+| Content for identity, delegation, credentials, data movement, tool supply chain and campaigns | M3, Detection content expansion |
+| Independently generated traces and a live SIEM/Exabeam workflow | M5, External operational evidence |
+
+Items this section used to list and the README roadmap does not (an AgentDojo
+corpus, CH02 semantic matching, a Praxen remit compiler, signed releases with
+an attested SBOM, CodeQL) are not scheduled. The two supply-chain items stay
+recorded in [SECURITY.md](../SECURITY.md); the others are candidates for M3
+and M5 and will be added to the README roadmap if they are taken up.
 
 ---
 
@@ -321,7 +331,7 @@ judgement call rather than a fix.
       instrumentation at all" — and it is operator-assertable.
 - [ ] **The `doc map word count` claim is churny.** It moves on almost every
       documentation edit. Correct, derived, and noisy.
-- [ ] **Whether `docs/REVIEWS-2026-08.md` belongs in the repository at all.**
+- [ ] **Whether `docs/archive/REVIEWS-2026-08.md` belongs in the repository at all.**
       Role reviews of the project, rather than of the code.
 - [ ] **Renaming `inadmissible`.** Accurate, and reads as stronger than it is.
 - [ ] **CH05: quarantine or delete.** Zero target precision on `0 of 0` own

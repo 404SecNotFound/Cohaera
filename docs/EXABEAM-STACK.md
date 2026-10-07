@@ -8,7 +8,8 @@
 For someone who already ships agent monitoring and wants to know, in ten
 minutes, whether there is anything here worth their time.
 
-[POSITIONING.md](../POSITIONING.md) records the correction this project had to
+[POSITIONING.md](archive/POSITIONING.md), now archived and superseded by
+[DIRECTION.md](DIRECTION.md), records the correction this project had to
 make once Exabeam's Agent Behavior Analytics shipped. This document extends
 that correction to the rest of the stack — the sponsored open-source projects,
 the normalisation standards, and the pre-deployment verifier — and states what
@@ -104,7 +105,7 @@ normalised evidence and should not be sold as producing it.
 understates its own claim — its README headline is "Framework-agnostic agent
 behavior analytics" and it ships built-in prompt-injection heuristics. The row
 stands anyway, and not on a reading of the marketing:
-[FINDINGS.md](../FINDINGS.md) records, file and line, that `evaluate_rules` has
+[FINDINGS.md](archive/FINDINGS.md) records, file and line, that `evaluate_rules` has
 the signature `(event_type, data)` and cannot see two events, that
 `velocity.py` computes a rate and compares it to nothing, and that the
 architecture pipeline has no analysis stage. The maintainer's own issue #108
@@ -388,5 +389,5 @@ environment's proxy, so they are cited for you to check, not relied on:
 `python eval/run_eval.py` and `python -m pytest -q`:
 [`eval/EVALUATION-CARD.md`](../eval/EVALUATION-CARD.md) §§3, 3b, 4, 5;
 [`EVASION.md`](../EVASION.md); [`src/cohaera/checks.py`](../src/cohaera/checks.py)
-for the coverage reason codes; [`FINDINGS.md`](../FINDINGS.md) for observra
+for the coverage reason codes; [`FINDINGS.md`](archive/FINDINGS.md) for observra
 issue #108.

@@ -56,7 +56,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Full history, because one test resolves the commits REVIEW-RESPONSE.md
+          # Full history, because one test resolves the commits docs/archive/REVIEW-RESPONSE.md
           # cites and the default single-commit fetch has none of them. Without
           # this the check skips itself with a reason, which is honest and is
           # also a check that never runs.

@@ -5,6 +5,8 @@
 
 # Blueprint review: two strategy documents, and the plan that comes out of them
 
+> **Archived.** This is a dated record, superseded by [DIRECTION.md](../DIRECTION.md). It reflects two external strategy documents received on 21 August 2026 and the plan drawn from them at that time. The open decision in Phase 0, sidecar position versus category ownership, was decided afterwards: Cohaera is passive monitoring outside the agent's control path, and neither of the two positions below was adopted as written. The phases are not a current plan; the milestones in DIRECTION.md are.
+
 **The question this answers:** two external strategy documents arrived on
 21 August 2026. What in them is true, what is already done, what conflicts,
 what should be built, in what order — and what should deliberately not be built?

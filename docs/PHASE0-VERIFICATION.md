@@ -103,7 +103,7 @@ firing on user input:
 
 That description is correct about the code. It is inconsistent with
 `demo/data.jsonl`, which shows the same marker on a `tool_end`. See
-[FINDINGS.md](../FINDINGS.md) F-01.
+[FINDINGS.md](archive/FINDINGS.md) F-01.
 
 ## 0.5 The architecture has no analysis stage
 

@@ -225,7 +225,7 @@ cross-event state, so every check goes quiet at once. Same root cause as E13.
 CH03 orders injection markers against consequential calls. If no marker is
 recorded upstream, it has nothing to order. It therefore inherits every blind
 spot of observra's five-regex scanner, which is only ever applied to user input
-in the first place (see [FINDINGS.md](FINDINGS.md) F-01). That ceiling is low.
+in the first place (see [FINDINGS.md](docs/archive/FINDINGS.md) F-01). That ceiling is low.
 
 **HALF CLOSED, 21 August 2026, and the split matters more than the closure.**
 
