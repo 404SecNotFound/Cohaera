@@ -210,6 +210,7 @@ subcommand is `score`. There is no `--version` flag; read
 |---|---|
 | `--seen-approvals PATH` | ledger of spent approval nonces, kept between runs; unsigned, per host |
 | `--require-signed-approvals` | an approval no issuer signed does not cover a call; off by default because a deployment with no approval keys would read every authorised action as a bypass |
+| `--require-closed-streams` | every collector stream must end with a verified `final` record; a stream that ends without one is `INTEGRITY_STREAM_END_MISSING` and inadmissible. Off by default because a stream fed in batches is open until its collector closes it (EVASION.md E30) |
 
 ### Freshness and replay
 

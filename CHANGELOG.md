@@ -20,6 +20,46 @@ reports recall is a marketing document.
 
 ### Added
 
+- **A collector can close a stream, and a verifier can tell a cut from an
+  end.** EVASION.md E30, half closed. The chain proves nothing is missing in
+  between and the signatures prove the collector wrote what remains; neither
+  said how long the stream was meant to be, so cutting records off the end
+  of a signed stream left a fully verified prefix and no code of any kind.
+
+  The last record of a stream may now carry `integrity.final: true`, and the
+  literal `final` is part of that record's signing input, so the statement
+  "nothing follows this" is the collector's and cannot be added to or
+  stripped from a signed record without the signature failing. Every
+  signature made before the field existed still verifies. `cohaera.emit`
+  signs it with `StreamSigner.sign(record, final=True)` or `sign --close`,
+  records the stream as closed in its state and refuses to reopen it; a
+  batch boundary is `attest=True`, which signs without closing.
+  `tools/collector_sign.sign_stream` takes `close=True`.
+
+  Four reason codes. `INTEGRITY_STREAM_NOT_CLOSED` is coverage: no verified
+  final record closed the stream, which is what a live tail looks like, and
+  it degrades CH06 the way a missing ledger does. `INTEGRITY_RECORDS_AFTER_CLOSE`
+  is inadmissible: records past a verified close, in this run or, through the
+  seen-stream ledger (which now remembers `closed`), in a later one.
+  `INTEGRITY_STREAM_CLOSE_UNVERIFIED` says a record claimed `final` and nothing
+  trusted vouched for it. **`--require-closed-streams`** is the operator's
+  statement that every collector closes its streams; under it a stream that
+  ends without its terminator is `INTEGRITY_STREAM_END_MISSING`, inadmissible,
+  which is the cut stream reported as cut. Off by default, and refused
+  without a trust store, for the same reason `--require-signed-approvals` is.
+  The flag is in provenance and, only when on, in `trust_config_digest`.
+
+  The CH06 conformance lab now signs its canonical stream closed and scores
+  the keyed cases under the flag, so its `truncated` case reads as
+  `manipulated` and `inadmissible` on both the product and the independent
+  baseline, where it read as an honest `verified_prefix` before. The eval
+  corpus and the local lab sign open streams, so their signed sessions carry
+  `INTEGRITY_STREAM_NOT_CLOSED` and CH06 confidence on them is multiplied by
+  0.9; no detection outcome moved. Why half rather than closed: both
+  preconditions are the operator's to supply, and the heartbeat half of the
+  remedy (a periodic signed count, bounding what a cut between heartbeats
+  can lose) is not built.
+
 - **`cohaera.emit`, the producer side of the evidence format.** Three external
   reviews concluded that the signed, chained telemetry with receipts and bound
   approvals is the differentiated part of this project, and nothing emitted

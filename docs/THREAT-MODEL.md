@@ -539,15 +539,18 @@ Three consequences, and they are corrections to how `cohaera.integrity:1` should
 be talked about:
 
 1. **Its near-term value is detecting absence, deletion and modification, not
-   forgery — and not a stream that simply stops.** A sequence that skips, a
-   record that does not chain, a session only partly attested (E21) — those
-   are the shapes the observed anti-forensics makes, and CH06 reports them.
-   Tail truncation is not among them: cut the last records off a signed stream
-   and what remains is a contiguous, chained, fully signed prefix that reports
-   `attested` with `signature_covers_final: true`, because nothing in
-   `cohaera.integrity:1` says how long the stream was meant to be (E30).
-   Closing that needs a signed end-of-stream or heartbeat record carrying the
-   record count and the collector's clock, which nothing emits yet.
+   forgery, and a stream that simply stops only when the collector closes its
+   streams.** A sequence that skips, a record that does not chain, a session
+   only partly attested (E21) are the shapes the observed anti-forensics
+   makes, and CH06 reports them. Tail truncation is detectable only one way:
+   the collector signs its last record as `final`, and the operator passes
+   `--require-closed-streams`. Then a stream that ends without its terminator
+   is `INTEGRITY_STREAM_END_MISSING` and inadmissible, and records past a
+   verified close are `INTEGRITY_RECORDS_AFTER_CLOSE`. On a stream nobody
+   closed, cutting the last records off leaves a contiguous, chained, fully
+   signed prefix, and the verdict can only say the end is unattested
+   (`INTEGRITY_STREAM_NOT_CLOSED`), which is also what a live tail looks like
+   (E30, half closed).
    `NO_INTEGRITY_EVIDENCE` names the state of a deployment that could not have
    reported anything at all. That is the claim worth making, and it is smaller
    and more defensible than "tamper-evident telemetry".

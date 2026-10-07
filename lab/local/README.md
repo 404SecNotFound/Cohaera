@@ -86,20 +86,20 @@ can tell a stream fed twice from a stream rewritten.
 | Pass | Integrity codes |
 |---|---|
 | first | — |
-| replay | `INTEGRITY_STREAM_REPLAYED` |
-| fork | `INTEGRITY_CHAIN_BROKEN`, `INTEGRITY_STREAM_FORKED`, `STREAM_LEDGER_NOT_ADVANCED` |
+| replay | `INTEGRITY_STREAM_NOT_CLOSED`, `INTEGRITY_STREAM_REPLAYED` |
+| fork | `INTEGRITY_CHAIN_BROKEN`, `INTEGRITY_STREAM_FORKED`, `INTEGRITY_STREAM_NOT_CLOSED`, `STREAM_LEDGER_NOT_ADVANCED` |
 
 **What it declines to answer, and why.** Three prerequisites the detector needs
 and a first deployment does not have, each scored twice on the same telemetry.
 
 | Prerequisite | Configuration | Coverage | Session grouping | Session key | Evidence | Fired |
 |---|---|---|---|---|---|---|
-| Capability manifest | `absent` | 0.129 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | — |
-| Capability manifest | `supplied` | 0.7 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | `CH03_untrusted_to_completed_action` |
-| Collector signature | `chained` | 0.49 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `chained_unsigned` | — |
-| Collector signature | `signed` | 0.557 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | — |
-| Correlation key | `unkeyed` | 0.257 | 0.3 (`scoped_anonymous`) | `sha256-unkeyed-v1` | `verified_complete` | — |
-| Correlation key | `keyed` | 0.257 | 0.3 (`scoped_anonymous`) | `hmac-sha256-v1` | `verified_complete` | — |
+| Capability manifest | `absent` | 0.116 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | — |
+| Capability manifest | `supplied` | 0.687 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | `CH03_untrusted_to_completed_action` |
+| Collector signature | `chained` | 0.484 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `chained_unsigned` | — |
+| Collector signature | `signed` | 0.544 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | — |
+| Correlation key | `unkeyed` | 0.244 | 0.3 (`scoped_anonymous`) | `sha256-unkeyed-v1` | `verified_complete` | — |
+| Correlation key | `keyed` | 0.244 | 0.3 (`scoped_anonymous`) | `hmac-sha256-v1` | `verified_complete` | — |
 
 | Prerequisite | Check | Without | With |
 |---|---|---|---|
@@ -108,7 +108,7 @@ and a first deployment does not have, each scored twice on the same telemetry.
 | Capability manifest | `CH04_guardrail_overrun` | `degraded` 0.0 | `evaluated` 1.0 |
 | Capability manifest | `CH05_unpaired_calls` | `degraded` 0.0 | `evaluated` 1.0 |
 | Capability manifest | `CH07_effect_contradiction` | `degraded` 0.0 | `evaluated` 1.0 |
-| Collector signature | `CH06_evidence_integrity` | `degraded` 0.432 | `degraded` 0.9 |
+| Collector signature | `CH06_evidence_integrity` | `degraded` 0.389 | `degraded` 0.81 |
 
 ### 4. Watch it decline to answer
 
@@ -126,12 +126,12 @@ PYTHONPATH=../../../../../src python -m cohaera.cli score 06-no-manifest.jsonl \
 ```
 
 ```
-session lab-06-no-manifest  agent=support-agent  tools=2 (ro=1 sc=0 eg=0 ?=1)  cost=$0.11  coverage=0.129  corr=session_id
+session lab-06-no-manifest  agent=support-agent  tools=2 (ro=1 sc=0 eg=0 ?=1)  cost=$0.11  coverage=0.116  corr=session_id
    [GAP ] CH01_sequence_order not_evaluated: NO_BENIGN_BASELINE_FITTED
    [GAP ] CH02_concealment_gap degraded: TOOL_CLASS_UNKNOWN; TOOL_CLASS_FROM_NAME_HEURISTIC; NO_CAPABILITY_MANIFEST
    [GAP ] CH03_untrusted_to_consequential degraded: TOOL_CLASS_UNKNOWN; TOOL_CLASS_FROM_NAME_HEURISTIC; NO_CAPABILITY_MANIFEST; INJECTION_SCANNER_PARTIAL_COVERAGE
-   [GAP ] CH04_guardrail_overrun degraded: TOOL_CLASS_UNKNOWN; TOOL_CLASS_FROM_NAME_HEURISTIC; NO_CAPABILITY_MANIFEST
-   [GAP ] CH06_evidence_integrity degraded: NO_STREAM_LEDGER
+   [GAP ] CH04_guardrail_overrun not_evaluated: NO_POLICY_EVIDENCE
+   [GAP ] CH06_evidence_integrity degraded: INTEGRITY_STREAM_NOT_CLOSED; NO_STREAM_LEDGER
    [GAP ] CH07_effect_contradiction degraded: TOOL_CLASS_UNKNOWN; TOOL_CLASS_FROM_NAME_HEURISTIC; NO_CAPABILITY_MANIFEST
    [GAP ] CH05_unpaired_calls degraded: TOOL_CLASS_UNKNOWN
 [cohaera] 0 finding(s) across 1 session(s); 10 record(s) accepted, 0 quarantined, 0 accepted with field defects
@@ -245,18 +245,20 @@ they have. These three are:
 
 1. **Capability manifest, absent and supplied.** Untrusted content, then
    `issue_refund` — a tool the name heuristic returns `unknown` for, on a stream
-   carrying no `reversible` hint. Without a manifest, CH02, CH03, CH04, CH05 and
-   CH07 all report `degraded` at confidence **0.0** and completeness is 0.129.
-   With one, all five reach `evaluated` and CH03 fires.
+   carrying no `reversible` hint. Without a manifest, CH02, CH03, CH05 and CH07
+   report `degraded` at confidence **0.0**, CH04 has no policy event to
+   evaluate, and completeness is 0.116. With a manifest they reach `evaluated`
+   and CH03 fires.
 2. **Collector signature, chained and signed.** The same records with and
    without a signature over the chain. Unsigned reports `chained_unsigned` and
-   CH06 at 0.432 rather than `verified_complete` at 0.9. The evaluation card
-   calls this the realistic first-adoption state, and most of the evaluation
-   corpus is in it.
+   CH06 at 0.389 rather than `verified_complete` at 0.81. Neither stream is
+   closed by its collector, so both carry `INTEGRITY_STREAM_NOT_CLOSED`
+   (EVASION.md E30). The evaluation card calls this the realistic
+   first-adoption state, and most of the evaluation corpus is in it.
 3. **Correlation key, unkeyed and keyed.** A stream carrying no `session_id`,
    scored with `$COHAERA_CORRELATION_SECRET` unset and then set. Correlation
-   drops to `scoped_anonymous` at **0.3** in both, and coverage to 0.3 against
-   0.7 for the same workflow with a `session_id`. The secret does **not** raise
+   drops to `scoped_anonymous` at **0.3** in both, and coverage to 0.244
+   against 0.687 for the same workflow with a `session_id`. The secret does **not** raise
    that number — nothing does but a producer-supplied identifier. What it
    changes is the key version, from an unkeyed SHA-256 digest to an HMAC, so
    that a small identity space cannot be enumerated out of the SIEM copy.

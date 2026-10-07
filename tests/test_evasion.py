@@ -1684,11 +1684,13 @@ def test_evasion_30_truncate_the_end_of_a_signed_stream():
     every signature verifies, ``attested`` and ``signature_covers_final``
     both true, and the codes are byte-identical to the untouched stream's.
 
-    This pins the CURRENT behaviour. The remedy is a signed end-of-stream or
-    heartbeat record carrying the record count and the collector's clock, and
-    nothing emits one yet; when something does, this test fails and EVASION.md
-    E30 gets updated. See docs/THREAT-MODEL.md section 8, which used to claim
-    the chain detected truncation.
+    HALF CLOSED. On a stream nobody closed, the cut still passes: that half
+    is pinned first, because it is the stream every deployment without a
+    closing collector has. On a stream the collector closed with a signed
+    ``final`` record, scored under --require-closed-streams, the cut is
+    INTEGRITY_STREAM_END_MISSING and inadmissible, the whole stream is
+    clean, and records appended past the close are
+    INTEGRITY_RECORDS_AFTER_CLOSE.
     """
     secret = bytes.fromhex("30" * 32)
     public = ed25519.public_key(secret)
@@ -1699,24 +1701,39 @@ def test_evasion_30_truncate_the_end_of_a_signed_stream():
                 "tool_name": "alert_read", "data": {}} for i in range(10)]
     signed = sign_stream(records, "stream-a", secret, key_id)
 
-    def score(batch):
-        v = StreamVerifier(keys=store)
+    def score(batch, require_closed=False):
+        v = StreamVerifier(keys=store, require_closed=require_closed)
         for raw in batch:
             e = Event(raw=raw)
             v.observe(e.raw, e.integrity, "s1")
         v.finalise()
         return v.for_session("s1")
 
+    # The open half: a collector that does not close its streams.
     whole = score(signed)
     assert whole.attested and whole.signature_covers_final, "fixture is broken"
-
     cut = score(signed[:7])                            # the whole attack
-    assert cut.attested, "tail truncation is now detected; update EVASION.md E30"
+    assert cut.attested
     assert cut.signature_covers_final
     assert not cut.inadmissible
     assert set(cut.codes) == set(whole.codes), (
-        "a truncated stream now carries a code the whole one does not; "
-        "update EVASION.md E30")
+        "a cut open stream must look exactly like a whole open stream; if it "
+        "no longer does, EVASION.md E30 understates the closure")
+    assert "INTEGRITY_STREAM_NOT_CLOSED" in whole.codes, (
+        "an open stream must say its end is unattested")
+
+    # The closed half: the collector signed the last record as final.
+    closed = sign_stream(records, "stream-a", secret, key_id, close=True)
+    whole = score(closed, require_closed=True)
+    assert whole.attested and not whole.inadmissible
+    assert "INTEGRITY_STREAM_NOT_CLOSED" not in whole.codes
+    cut = score(closed[:7], require_closed=True)
+    assert cut.inadmissible == ["INTEGRITY_STREAM_END_MISSING"], cut.codes
+    assert not cut.attested
+    appended = closed + sign_stream(records + records[:2], "stream-a", secret,
+                                    key_id)[10:]
+    tail = score(appended)
+    assert "INTEGRITY_RECORDS_AFTER_CLOSE" in tail.inadmissible
 
 
 TIERS = {"T0", "T1", "T2"}

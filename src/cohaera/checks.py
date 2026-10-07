@@ -55,6 +55,7 @@ from .evidence import (
     ENFORCEMENT_UNDECLARED,
     R_CHAIN_BROKEN,
     R_CHAIN_UNANCHORED,
+    R_CLOSE_UNVERIFIED,
     R_FRESHNESS_UNVERIFIABLE,
     R_KEY_EXPIRED,
     R_KEY_NOT_YET_VALID,
@@ -67,13 +68,16 @@ from .evidence import (
     R_NO_INTEGRITY,
     R_NO_STREAM_LEDGER,
     R_PARTIAL_INTEGRITY,
+    R_RECORDS_AFTER_CLOSE,
     R_SEQUENCE_GAP,
     R_SEQUENCE_REPLAY,
     R_SIGNATURE_INVALID,
     R_SIGNATURE_PREFIX_ONLY,
     R_STALE,
+    R_STREAM_END_MISSING,
     R_STREAM_FORKED,
     R_STREAM_KEY_CHANGED,
+    R_STREAM_NOT_CLOSED,
     R_STREAM_REPLAYED,
     R_STREAM_SKIPPED_RECORDS,
     R_UNSIGNED,
@@ -109,6 +113,7 @@ from .validate import sanitise_display
 __all__ = [
     "R_CHAIN_BROKEN",
     "R_CHAIN_UNANCHORED",
+    "R_CLOSE_UNVERIFIED",
     "R_FRESHNESS_UNVERIFIABLE",
     "R_KEY_EXPIRED",
     "R_KEY_NOT_YET_VALID",
@@ -121,14 +126,17 @@ __all__ = [
     "R_NO_INTEGRITY",
     "R_NO_STREAM_LEDGER",
     "R_PARTIAL_INTEGRITY",
+    "R_RECORDS_AFTER_CLOSE",
     "R_SCANNER_CONTRADICTED",
     "R_SEQUENCE_GAP",
     "R_SEQUENCE_REPLAY",
     "R_SIGNATURE_INVALID",
     "R_SIGNATURE_PREFIX_ONLY",
     "R_STALE",
+    "R_STREAM_END_MISSING",
     "R_STREAM_FORKED",
     "R_STREAM_KEY_CHANGED",
+    "R_STREAM_NOT_CLOSED",
     "R_STREAM_REPLAYED",
     "R_STREAM_SKIPPED_RECORDS",
     "R_UNSCANNED_CONTENT_MARKERS",
@@ -1849,6 +1857,14 @@ def ch06_evidence_integrity(session: Session,
                      f"declared no predecessor, so their content is bound to "
                      f"no chain and the signature they carry attests nothing "
                      f"about it")
+    if R_STREAM_END_MISSING in codes:
+        parts.append("a stream ended without the verified final record its "
+                     "collector signs at the end of every stream, so records "
+                     "were cut off its end or it was stopped before it closed; "
+                     "--require-closed-streams makes that inadmissible")
+    if R_RECORDS_AFTER_CLOSE in codes:
+        parts.append("records arrived past the sequence at which the collector "
+                     "signed that nothing follows")
     if R_SIGNATURE_INVALID in codes:
         parts.append(f"{len(audit.bad_signatures)} signature(s) did not verify")
     if R_KEY_UNKNOWN in codes:
@@ -3174,6 +3190,26 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
                 "replay to THIS host; an attacker who can delete the file, or "
                 "who replays to a different Cohaera host, defeats it "
                 "(EVASION.md E22).")
+        # E30. Where the stream ended is a statement only the collector can
+        # make, and a stream nobody closed has not made it. Degrades like the
+        # ledger does: a live tail is the ordinary case, and the coverage
+        # contract is where "the end of this stream is unattested" belongs.
+        if R_STREAM_NOT_CLOSED in audit.codes:
+            conf *= 0.9
+            int_reasons.append(R_STREAM_NOT_CLOSED)
+            int_remedies.append(
+                "Have the collector close each stream with a signed final "
+                "record (StreamSigner.sign(record, final=True), or the emit "
+                "command's --close; see docs/EMITTING.md), and pass "
+                "--require-closed-streams once every collector does. Until "
+                "then, cutting records off the END of this stream leaves a "
+                "verified prefix nothing can tell from the whole.")
+            int_assumptions.append(
+                "No verified final record closed this stream, so its end is "
+                "where the input stopped and not where the collector said it "
+                "was (EVASION.md E30)."
+                + (" A record claimed to be final and nothing trusted vouched "
+                   "for the claim." if R_CLOSE_UNVERIFIED in audit.codes else ""))
         if R_STREAM_SKIPPED_RECORDS in audit.codes:
             int_reasons.append(R_STREAM_SKIPPED_RECORDS)
             int_assumptions.append(

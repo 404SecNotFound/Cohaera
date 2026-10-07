@@ -1,22 +1,22 @@
 {
   "artifacts": {
-    "runs/latest/RESULTS.md": "0ccf52d97f135f733a6029fdd24953350b808870d5fed1264786c333d0e55070",
-    "runs/latest/results.json": "0866ba94f63ecea859703bebb84804dae3468a75d9be86a370c69523e9dbc29e"
+    "runs/latest/RESULTS.md": "4a93d69d1d7104ee918873302d6e387a0acafbebff0b30ee999b0ce66f7b5a2b",
+    "runs/latest/results.json": "017c25ad95ee6048844912ecfa1da4a214ce8bbe89187bf169ad136f8b320800"
   },
   "cases": 9,
-  "expectations_sha256": "d6f378a40adc1c7a9a58e949cbd672df5754ecd7bd4386f915287a23668f3ac7",
+  "expectations_sha256": "08a130d4ce4f7743f9e193283e7d396f38c93d18de0558d3d631a20320a9f3b9",
   "fixtures": {
-    "fixtures/cases/deleted.jsonl": "c1d8b193e510db302ab632636d18d72f280ea36c9e537c44a5552a72bc9c5cae",
-    "fixtures/cases/intact.jsonl": "e2c1d54cf9445d5593f16ce8091d787c389ed6c09bbb9b0682b6bd4568e2158d",
-    "fixtures/cases/modified.jsonl": "e9487ca93317720dd90c162ab134e4930127118bef44a7ef14169c3b61b31c27",
-    "fixtures/cases/no_key.jsonl": "e2c1d54cf9445d5593f16ce8091d787c389ed6c09bbb9b0682b6bd4568e2158d",
-    "fixtures/cases/reordered.jsonl": "20dbcf7e981e2d55e03ba80c56a47372eb1272cf0cd79f89fd1275b0b580cc25",
-    "fixtures/cases/replayed.jsonl": "e2c1d54cf9445d5593f16ce8091d787c389ed6c09bbb9b0682b6bd4568e2158d",
-    "fixtures/cases/stripped.jsonl": "62af40c40d5bf7a6e171656f266c44c61814ef344d427c905130c3155f3699b9",
+    "fixtures/cases/deleted.jsonl": "bcb56b3774691b24c93e4e74fd653a631f82d7f9ba3c5985104dec5b26209ee2",
+    "fixtures/cases/intact.jsonl": "948d7f2e034fd7b17f22ef91638eaf2a024115103291f79c3c35d307516d8af5",
+    "fixtures/cases/modified.jsonl": "ece2e3e9e50f7c0edbf3e56670bbc56ca1c65c33bb3e32600c211fb135e541e0",
+    "fixtures/cases/no_key.jsonl": "948d7f2e034fd7b17f22ef91638eaf2a024115103291f79c3c35d307516d8af5",
+    "fixtures/cases/reordered.jsonl": "3f59079177b4f962906fb7a67dbe613f6495e2516d1f18613dd13d670419ade6",
+    "fixtures/cases/replayed.jsonl": "948d7f2e034fd7b17f22ef91638eaf2a024115103291f79c3c35d307516d8af5",
+    "fixtures/cases/stripped.jsonl": "b3f2a0ff975baf29a3ad2c6827affb25d6f06cb35e9b3969e2279ad1342089a8",
     "fixtures/cases/truncated.jsonl": "247346ed765865d331e3a9fcbc01d744cbcc210a80cd4b2362b0935bea018d65",
-    "fixtures/cases/unsupported.jsonl": "3d99b96ce2a26f19ea061d679e573681f021caaca55ed7814d23817d08bc7ab8",
+    "fixtures/cases/unsupported.jsonl": "6d32569421bd4970bcc226586504eabfb94552282e4a081aa46735b558f88a00",
     "fixtures/source/canonical.raw.jsonl": "fdfaf2ff0da2eea03226e6f085031f61962955c70613c62d3f39e78652351a9a",
-    "fixtures/source/canonical.signed.jsonl": "e2c1d54cf9445d5593f16ce8091d787c389ed6c09bbb9b0682b6bd4568e2158d",
+    "fixtures/source/canonical.signed.jsonl": "948d7f2e034fd7b17f22ef91638eaf2a024115103291f79c3c35d307516d8af5",
     "fixtures/source/trust-store.json": "ac6ed79fa022b13bd86865cddc1f22f0fc65fdc1c5e3dd5d96cf82f330e2a621"
   },
   "schema": "cohaera.ch06_run_manifest:1"

@@ -493,6 +493,16 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
              "the flag.")
         return EXIT_ERROR
 
+    if args.require_closed_streams and not keys.loaded:
+        # E30. A close is a signed statement, and with no key to verify one
+        # every stream would be "end missing" and inadmissible. Same refusal
+        # as --require-signed-approvals without an approval key: a run whose
+        # every verdict is noise by construction is not a control.
+        _err("[cohaera] --require-closed-streams: no trust store was loaded, "
+             "so no final record could ever verify and every stream would be "
+             "inadmissible. Pass --trust-store, or drop the flag.")
+        return EXIT_ERROR
+
     report = IngestReport(source=str(args.telemetry))
     correlator = _correlator(args, limits)
 
@@ -543,7 +553,8 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
                     manifest=manifest, report=report, keys=keys,
                     freshness=freshness, ledger=ledger,
                     approval_ledger=approvals,
-                    require_signed_approvals=bool(args.require_signed_approvals))
+                    require_signed_approvals=bool(args.require_signed_approvals),
+                    require_closed_streams=bool(args.require_closed_streams))
     _err(f"[cohaera] {sanitise_display(str(args.telemetry), 160)}: "
          f"{sum(len(s.events) for s in sessions)} events in {len(sessions)} sessions, "
          f"{report.rejected} record(s) quarantined\n")
@@ -563,6 +574,7 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
     trust_config = trust_config_digest(
         approval_ledger=approvals_identity,
         require_signed_approvals=bool(args.require_signed_approvals),
+        require_closed_streams=bool(args.require_closed_streams),
         trust_store=keys.as_dict(limits.max_evidence_items),
         policy_attestations=[a.as_dict() for a in attestations],
         freshness=freshness.as_dict(),
@@ -623,6 +635,7 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
             else {"enabled": False}),
         "approval_ledger": approvals_identity,
         "require_signed_approvals": bool(args.require_signed_approvals),
+        "require_closed_streams": bool(args.require_closed_streams),
         # Stream identity and extent, so that two runs which scored the same
         # collector stream twice are distinguishable after the fact. Cohaera
         # keeps no state between runs, so this is the only form replay detection
@@ -851,6 +864,16 @@ def _add_common(p: argparse._ActionsContainer) -> None:
                         "call. OFF by default: turning it on in a deployment "
                         "that has issued no approval keys makes every "
                         "authorised action look like a bypass.")
+    p.add_argument("--require-closed-streams", action="store_true",
+                   help="Every collector stream must end with a verified final "
+                        "record (cohaera.integrity:1 'final', which the "
+                        "collector signs). OFF by default: a stream fed in "
+                        "batches is open until its collector closes it, and "
+                        "refusing those would refuse every live tail. On, a "
+                        "stream that ends without its terminator is "
+                        "INADMISSIBLE, which is what makes cutting the tail off "
+                        "a signed stream detectable (EVASION.md E30). Needs a "
+                        "collector that closes streams; see docs/EMITTING.md.")
     p.add_argument("--seen-streams", metavar="PATH",
                    help="JSON OBSERVATION ledger of collector streams already "
                         "seen, kept BETWEEN runs. It is what detects a stream "

@@ -1,9 +1,10 @@
 {
-  "digest": "8c1662b0969a65629d3bd5aa48612370c9a67846d940e2be563cdb7b7ef8370b",
+  "digest": "ef438efe54351ff029d73c6e1cab66cd82e636cae070c9edb5c1635b270ac69b",
   "generation": 3,
   "scheme": "cohaera.stream_ledger:1",
   "streams": {
     "lab-collector-01-01-normal": {
+      "closed": false,
       "first_seq": 0,
       "head": "143faefb958ec9a240458b65b7cee70ffd0e5e3889b42f4bad75f078ebdde68f",
       "key_ids": [

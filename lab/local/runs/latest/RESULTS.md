@@ -33,8 +33,8 @@ genuine, they are just not new, or not the same history.
 | Pass | Integrity codes |
 |---|---|
 | first | — |
-| replay | `INTEGRITY_STREAM_REPLAYED` |
-| fork | `INTEGRITY_CHAIN_BROKEN`, `INTEGRITY_STREAM_FORKED`, `STREAM_LEDGER_NOT_ADVANCED` |
+| replay | `INTEGRITY_STREAM_NOT_CLOSED`, `INTEGRITY_STREAM_REPLAYED` |
+| fork | `INTEGRITY_CHAIN_BROKEN`, `INTEGRITY_STREAM_FORKED`, `INTEGRITY_STREAM_NOT_CLOSED`, `STREAM_LEDGER_NOT_ADVANCED` |
 
 ## What it declines to answer, and why
 
@@ -45,12 +45,12 @@ the two rows is attributable to that one thing.
 
 | Prerequisite | Configuration | Coverage | Session grouping | Session key | Evidence | Fired |
 |---|---|---|---|---|---|---|
-| Capability manifest | `absent` | 0.129 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | — |
-| Capability manifest | `supplied` | 0.7 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | `CH03_untrusted_to_completed_action` |
-| Collector signature | `chained` | 0.49 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `chained_unsigned` | — |
-| Collector signature | `signed` | 0.557 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | — |
-| Correlation key | `unkeyed` | 0.257 | 0.3 (`scoped_anonymous`) | `sha256-unkeyed-v1` | `verified_complete` | — |
-| Correlation key | `keyed` | 0.257 | 0.3 (`scoped_anonymous`) | `hmac-sha256-v1` | `verified_complete` | — |
+| Capability manifest | `absent` | 0.116 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | — |
+| Capability manifest | `supplied` | 0.687 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | `CH03_untrusted_to_completed_action` |
+| Collector signature | `chained` | 0.484 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `chained_unsigned` | — |
+| Collector signature | `signed` | 0.544 | 1.0 (`session_id`) | `sha256-unkeyed-v1` | `verified_complete` | — |
+| Correlation key | `unkeyed` | 0.244 | 0.3 (`scoped_anonymous`) | `sha256-unkeyed-v1` | `verified_complete` | — |
+| Correlation key | `keyed` | 0.244 | 0.3 (`scoped_anonymous`) | `hmac-sha256-v1` | `verified_complete` | — |
 
 And per check, which is where it is actually legible. Only the checks
 whose contract MOVED are listed: a check that reads the same either
@@ -62,7 +62,7 @@ way did not depend on the prerequisite.
 | Capability manifest | `CH03_untrusted_to_consequential` | `degraded` 0.0 | `evaluated` 1.0 |
 | Capability manifest | `CH05_unpaired_calls` | `degraded` 0.0 | `evaluated` 1.0 |
 | Capability manifest | `CH07_effect_contradiction` | `degraded` 0.0 | `evaluated` 1.0 |
-| Collector signature | `CH06_evidence_integrity` | `degraded` 0.432 | `degraded` 0.9 |
+| Collector signature | `CH06_evidence_integrity` | `degraded` 0.389 | `degraded` 0.81 |
 
 The `absent`, `chained` and `unkeyed` rows are the **shipping default**,
 not a misconfiguration. A check reported `degraded` at confidence 0.0

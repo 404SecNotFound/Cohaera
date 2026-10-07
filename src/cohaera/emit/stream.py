@@ -64,6 +64,11 @@ class SignerStateError(ValueError):
     """The persisted state cannot continue a chain. Refuse; never restart at 0."""
 
 
+class StreamClosedError(ValueError):
+    """``sign`` was called on a signer that has signed a ``final`` record."""
+
+
+
 def _rate(sign_every: Any) -> int:
     # R-05, verbatim from the reference signer. `seq % sign_every` accepted
     # anything an int could be: 0 emitted a stream nobody had attested and
@@ -103,7 +108,7 @@ class StreamSigner:
 
     def __init__(self, stream_id: str, private_key: bytes, key_id: str,
                  sign_every: int = 1, *, _next_seq: int = 0,
-                 _head: str | None = None) -> None:
+                 _head: str | None = None, _closed: bool = False) -> None:
         self._stream_id = identity(stream_id, "stream_id")
         self._key_id = identity(key_id, "key_id")
         if not isinstance(private_key, bytes) or len(private_key) != ed25519.KEY_BYTES:
@@ -112,6 +117,7 @@ class StreamSigner:
         self._sign_every = _rate(sign_every)
         self._next_seq = _next_seq
         self._head = _head if _head is not None else chain_seed(stream_id, key_id)
+        self._closed = _closed
         self._lock = threading.Lock()
 
     # -- introspection ----------------------------------------------------
@@ -138,13 +144,19 @@ class StreamSigner:
         """The chain head after the last record signed; ``chain[0]`` before any."""
         return self._head
 
+    @property
+    def closed(self) -> bool:
+        """Has a ``final`` record been signed? A closed signer signs nothing more."""
+        return self._closed
+
     def __repr__(self) -> str:
         return (f"StreamSigner(stream_id={self._stream_id!r}, "
                 f"key_id={self._key_id!r}, next_seq={self._next_seq})")
 
     # -- signing ----------------------------------------------------------
 
-    def sign(self, record: Mapping[str, Any], *, final: bool = False) -> dict[str, Any]:
+    def sign(self, record: Mapping[str, Any], *, attest: bool = False,
+             final: bool = False) -> dict[str, Any]:
         """Return a copy of ``record`` with its ``integrity`` sidecar attached.
 
         The caller's mapping is never written to. The copy is shallow: nested
@@ -153,14 +165,21 @@ class StreamSigner:
         writing has broken its own chain. Write what ``sign`` returns, and write
         it promptly.
 
-        ``final`` signs this record whatever the sampling rate says. A
+        ``attest`` signs this record whatever the sampling rate says. A
         signature covers the chain head at its own sequence and nothing after
         it (R-05), so with ``sign_every > 1`` a stream whose last record fell
         between signing positions reports ``verified_prefix``, never
         ``verified_complete``. The reference signer always signs the last
         record of its list; an incremental signer cannot know which record is
-        last, so the caller says -- on shutdown, or at the end of each batch.
-        With ``sign_every == 1`` the flag changes nothing.
+        last, so the caller says -- at the end of each batch. With
+        ``sign_every == 1`` the flag changes nothing.
+
+        ``final`` CLOSES the stream (E30). The record is signed with the
+        ``final`` marker in its signing input, so the verifier can tell a
+        stream that ended from one that was cut off, and this signer refuses
+        to sign anything further: the statement "nothing follows" is only
+        worth signing if it is kept. Use it on shutdown, not at the end of
+        each batch; a batch boundary is ``attest``.
         """
         if not isinstance(record, Mapping):
             raise TypeError(f"a record is a JSON object (dict), got "
@@ -173,6 +192,11 @@ class StreamSigner:
         body = dict(record)
         require_strict_json(body)
         with self._lock:
+            if self._closed:
+                raise StreamClosedError(
+                    f"stream {self._stream_id!r} was closed at seq "
+                    f"{self._next_seq - 1}; a closed stream does not reopen. "
+                    f"Start a new stream id for what follows")
             seq = self._next_seq
             prev = self._head
             head = chain_step(prev, body_digest(body))
@@ -183,13 +207,18 @@ class StreamSigner:
                 "prev": prev,
                 "chain": head,
             }
-            if final or seq % self._sign_every == 0:
+            if final:
+                sidecar["final"] = True
+            if final or attest or seq % self._sign_every == 0:
                 sidecar["key_id"] = self._key_id
                 sidecar["sig"] = base64.b64encode(
-                    ed25519.sign(self._secret, signing_input(self._stream_id, seq, head))
+                    ed25519.sign(self._secret,
+                                 signing_input(self._stream_id, seq, head, final=final))
                 ).decode("ascii")
             self._head = head
             self._next_seq = seq + 1
+            if final:
+                self._closed = True
         return {**body, INTEGRITY_FIELD: sidecar}
 
     # -- persistence ------------------------------------------------------
@@ -204,7 +233,7 @@ class StreamSigner:
         with self._lock:
             return {"scheme": SIGNER_STATE_SCHEMA, "stream_id": self._stream_id,
                     "key_id": self._key_id, "next_seq": self._next_seq,
-                    "head": self._head}
+                    "head": self._head, "closed": self._closed}
 
     @classmethod
     def resume(cls, state: Mapping[str, Any], private_key: bytes,
@@ -241,8 +270,11 @@ class StreamSigner:
                 "state claims no record has been signed but its head is not "
                 "chain[0] for this stream and key; the file is not this "
                 "stream's state")
+        closed = state.get("closed", False)
+        if closed is not True and closed is not False:
+            raise SignerStateError("state.closed must be true or false")
         return cls(stream_id, private_key, stored_key, sign_every,
-                   _next_seq=next_seq, _head=head)
+                   _next_seq=next_seq, _head=head, _closed=closed)
 
 
 def write_state(path: str | Path, state: Mapping[str, Any]) -> Path:

@@ -37,7 +37,7 @@
                   "status": "degraded"
                 },
                 "CH06_evidence_integrity": {
-                  "confidence": 0.9,
+                  "confidence": 0.81,
                   "status": "degraded"
                 },
                 "CH07_effect_contradiction": {
@@ -49,14 +49,14 @@
                 "confidence": 1.0,
                 "kind": "session_id"
               },
-              "coverage_completeness": 0.129,
+              "coverage_completeness": 0.116,
               "evidence_status": "verified_complete",
               "finding_count": 0,
               "max_severity": "info",
               "schema": "cohaera:0.3",
               "session_id": "lab-06-no-manifest",
               "triggered_rules": [],
-              "verdict_id": "b435276b1176ececc03adceb853abcbd"
+              "verdict_id": "f9e562f6d6fbfa628f457fba12b1e837"
             }
           ]
         },
@@ -91,7 +91,7 @@
                   "status": "evaluated"
                 },
                 "CH06_evidence_integrity": {
-                  "confidence": 0.9,
+                  "confidence": 0.81,
                   "status": "degraded"
                 },
                 "CH07_effect_contradiction": {
@@ -103,7 +103,7 @@
                 "confidence": 1.0,
                 "kind": "session_id"
               },
-              "coverage_completeness": 0.7,
+              "coverage_completeness": 0.687,
               "evidence_status": "verified_complete",
               "finding_count": 1,
               "max_severity": "high",
@@ -112,7 +112,7 @@
               "triggered_rules": [
                 "CH03_untrusted_to_completed_action"
               ],
-              "verdict_id": "42a6f1e6968f7fa6f499614918d89e8f"
+              "verdict_id": "357231cf9a763943bf81e1616603004e"
             }
           ]
         }
@@ -158,7 +158,7 @@
                   "status": "evaluated"
                 },
                 "CH06_evidence_integrity": {
-                  "confidence": 0.432,
+                  "confidence": 0.389,
                   "status": "degraded"
                 },
                 "CH07_effect_contradiction": {
@@ -170,14 +170,14 @@
                 "confidence": 1.0,
                 "kind": "session_id"
               },
-              "coverage_completeness": 0.49,
+              "coverage_completeness": 0.484,
               "evidence_status": "chained_unsigned",
               "finding_count": 0,
               "max_severity": "info",
               "schema": "cohaera:0.3",
               "session_id": "lab-07-chained-unsigned",
               "triggered_rules": [],
-              "verdict_id": "7cef45e1ac69a1a27123a0f08563e5a5"
+              "verdict_id": "9c0f53ff5b3e3eca3ec07a8f99ba4bc1"
             }
           ]
         },
@@ -212,7 +212,7 @@
                   "status": "evaluated"
                 },
                 "CH06_evidence_integrity": {
-                  "confidence": 0.9,
+                  "confidence": 0.81,
                   "status": "degraded"
                 },
                 "CH07_effect_contradiction": {
@@ -224,14 +224,14 @@
                 "confidence": 1.0,
                 "kind": "session_id"
               },
-              "coverage_completeness": 0.557,
+              "coverage_completeness": 0.544,
               "evidence_status": "verified_complete",
               "finding_count": 0,
               "max_severity": "info",
               "schema": "cohaera:0.3",
               "session_id": "lab-07-chained-unsigned",
               "triggered_rules": [],
-              "verdict_id": "9038f13570e759ca968b9bc4330b3731"
+              "verdict_id": "837de4185f3bc390e760606619d90a30"
             }
           ]
         }
@@ -276,7 +276,7 @@
                   "status": "degraded"
                 },
                 "CH06_evidence_integrity": {
-                  "confidence": 0.9,
+                  "confidence": 0.81,
                   "status": "degraded"
                 },
                 "CH07_effect_contradiction": {
@@ -288,14 +288,14 @@
                 "confidence": 0.3,
                 "kind": "scoped_anonymous"
               },
-              "coverage_completeness": 0.257,
+              "coverage_completeness": 0.244,
               "evidence_status": "verified_complete",
               "finding_count": 0,
               "max_severity": "info",
               "schema": "cohaera:0.3",
               "session_id": "anon-26ba7747d11429f5d31aa116d4244639-w5952366",
               "triggered_rules": [],
-              "verdict_id": "146f35e10d80ae47603e379e3c747178"
+              "verdict_id": "9cbaa47b39c7c88d630315979d2aed9e"
             }
           ]
         },
@@ -330,7 +330,7 @@
                   "status": "degraded"
                 },
                 "CH06_evidence_integrity": {
-                  "confidence": 0.9,
+                  "confidence": 0.81,
                   "status": "degraded"
                 },
                 "CH07_effect_contradiction": {
@@ -342,14 +342,14 @@
                 "confidence": 0.3,
                 "kind": "scoped_anonymous"
               },
-              "coverage_completeness": 0.257,
+              "coverage_completeness": 0.244,
               "evidence_status": "verified_complete",
               "finding_count": 0,
               "max_severity": "info",
               "schema": "cohaera:0.3",
               "session_id": "anon-319a0ad30aaff85c3aa858811d1b0066-w5952366",
               "triggered_rules": [],
-              "verdict_id": "73ac18aafe2ad3c0a3ef600d018159f5"
+              "verdict_id": "88daafaf25559679aa4a730f5cd3a1fb"
             }
           ]
         }
@@ -405,8 +405,8 @@
               "status": "evaluated"
             },
             "CH06_evidence_integrity": {
-              "confidence": 1.0,
-              "status": "evaluated"
+              "confidence": 0.9,
+              "status": "degraded"
             },
             "CH07_effect_contradiction": {
               "confidence": 1.0,
@@ -417,20 +417,21 @@
             "confidence": 1.0,
             "kind": "session_id"
           },
-          "coverage_completeness": 0.571,
+          "coverage_completeness": 0.557,
           "evidence_status": "verified_complete",
           "finding_count": 0,
           "max_severity": "info",
           "schema": "cohaera:0.3",
           "session_id": "lab-01-normal",
           "triggered_rules": [],
-          "verdict_id": "f1a69de067b4ac6aa554e86da6c81a9a"
+          "verdict_id": "ae86d9502b699574066f1e9cc88dc155"
         }
       ]
     },
     {
       "exit_code": 0,
       "integrity_codes": [
+        "INTEGRITY_STREAM_NOT_CLOSED",
         "INTEGRITY_STREAM_REPLAYED"
       ],
       "pass": "replay",
@@ -479,7 +480,7 @@
           "triggered_rules": [
             "CH06_evidence_integrity"
           ],
-          "verdict_id": "de8e77042e446346ef1681357d939a24"
+          "verdict_id": "00ece60c8081941d773bf19e72e0761a"
         }
       ]
     },
@@ -488,6 +489,7 @@
       "integrity_codes": [
         "INTEGRITY_CHAIN_BROKEN",
         "INTEGRITY_STREAM_FORKED",
+        "INTEGRITY_STREAM_NOT_CLOSED",
         "STREAM_LEDGER_NOT_ADVANCED"
       ],
       "pass": "fork",
@@ -537,7 +539,7 @@
             "CH02_concealment_gap",
             "CH06_evidence_integrity"
           ],
-          "verdict_id": "25aac98fc30e1e25cbda140b040b4857"
+          "verdict_id": "6cbd732cda5a3f971c90ddff915225a1"
         }
       ]
     }
@@ -576,7 +578,7 @@
               "status": "evaluated"
             },
             "CH06_evidence_integrity": {
-              "confidence": 0.9,
+              "confidence": 0.81,
               "status": "degraded"
             },
             "CH07_effect_contradiction": {
@@ -588,14 +590,14 @@
             "confidence": 1.0,
             "kind": "session_id"
           },
-          "coverage_completeness": 0.557,
+          "coverage_completeness": 0.544,
           "evidence_status": "verified_complete",
           "finding_count": 0,
           "max_severity": "info",
           "schema": "cohaera:0.3",
           "session_id": "lab-01-normal",
           "triggered_rules": [],
-          "verdict_id": "a48c71fe55e311dc31cd3d4d18f8c537"
+          "verdict_id": "d0a9926824da901b59ed2e4ea3a4153a"
         }
       ],
       "why": "Known agent, expected tool, exactly bound approval, effect completes, response discloses it."
@@ -631,7 +633,7 @@
               "status": "evaluated"
             },
             "CH06_evidence_integrity": {
-              "confidence": 0.9,
+              "confidence": 0.81,
               "status": "degraded"
             },
             "CH07_effect_contradiction": {
@@ -643,7 +645,7 @@
             "confidence": 1.0,
             "kind": "session_id"
           },
-          "coverage_completeness": 0.7,
+          "coverage_completeness": 0.687,
           "evidence_status": "verified_complete",
           "finding_count": 1,
           "max_severity": "critical",
@@ -652,7 +654,7 @@
           "triggered_rules": [
             "CH03_untrusted_to_completed_action"
           ],
-          "verdict_id": "a49b7c9741d5def12fa7d1077a73e841"
+          "verdict_id": "00bdb0ea2d1f5a0bb4d7ffa11919d178"
         }
       ],
       "why": "First-time tool and new destination after untrusted content."
@@ -661,6 +663,7 @@
       "exit_code": 0,
       "integrity_codes": [
         "INTEGRITY_CHAIN_BROKEN",
+        "INTEGRITY_STREAM_NOT_CLOSED",
         "NO_STREAM_LEDGER"
       ],
       "records_in": 10,
@@ -712,7 +715,7 @@
           "triggered_rules": [
             "CH06_evidence_integrity"
           ],
-          "verdict_id": "c585073e1731838391b24d81365928d0"
+          "verdict_id": "42cb5e908b18bb2c8e4b55ec9f3307b6"
         }
       ],
       "why": "State 1's behaviour, with one record edited after it was signed."
@@ -748,7 +751,7 @@
               "status": "evaluated"
             },
             "CH06_evidence_integrity": {
-              "confidence": 0.9,
+              "confidence": 0.81,
               "status": "degraded"
             },
             "CH07_effect_contradiction": {
@@ -760,7 +763,7 @@
             "confidence": 1.0,
             "kind": "session_id"
           },
-          "coverage_completeness": 0.557,
+          "coverage_completeness": 0.544,
           "evidence_status": "verified_complete",
           "finding_count": 1,
           "max_severity": "medium",
@@ -769,7 +772,7 @@
           "triggered_rules": [
             "CH07_reported_failure_with_effect_receipt"
           ],
-          "verdict_id": "3d403b32ccb8972bad0584d87f544fe8"
+          "verdict_id": "ff7974f1f1c4351a673166ef034bc1e8"
         }
       ],
       "why": "Agent reports failure; an exactly bound provider receipt says otherwise."
@@ -805,7 +808,7 @@
               "status": "evaluated"
             },
             "CH06_evidence_integrity": {
-              "confidence": 0.9,
+              "confidence": 0.81,
               "status": "degraded"
             },
             "CH07_effect_contradiction": {
@@ -817,7 +820,7 @@
             "confidence": 1.0,
             "kind": "session_id"
           },
-          "coverage_completeness": 0.486,
+          "coverage_completeness": 0.473,
           "evidence_status": "verified_complete",
           "finding_count": 1,
           "max_severity": "low",
@@ -826,7 +829,7 @@
           "triggered_rules": [
             "CH07_effect_receipt_partially_bound"
           ],
-          "verdict_id": "3849fcb07859acd49ab7e6fada04037b"
+          "verdict_id": "3fac94318215c32351dac2a63087b9f9"
         }
       ],
       "why": "The same claim with an incomplete binding, which must NOT contradict."
@@ -862,7 +865,7 @@
               "status": "evaluated"
             },
             "CH06_evidence_integrity": {
-              "confidence": 0.833,
+              "confidence": 0.75,
               "status": "degraded"
             },
             "CH07_effect_contradiction": {
@@ -874,14 +877,14 @@
             "confidence": 1.0,
             "kind": "session_id"
           },
-          "coverage_completeness": 0.405,
+          "coverage_completeness": 0.393,
           "evidence_status": "verified_prefix",
           "finding_count": 0,
           "max_severity": "info",
           "schema": "cohaera:0.3",
           "session_id": "lab-05-partial-attestation",
           "triggered_rules": [],
-          "verdict_id": "6b6830974181ddbbff61103e8690e42f"
+          "verdict_id": "db79f78d253d265d66b879555168c412"
         }
       ],
       "why": "A long session signed at every fourth record, leaving an unsigned tail."
