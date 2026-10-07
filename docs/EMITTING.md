@@ -256,6 +256,35 @@ subcommand does. With `sign_every=1` the flag changes nothing. `sign_every`
 must be an integer of at least 1; `0` and `-1` are refused rather than quietly
 switching signing off or on.
 
+## 6a. Closing a stream
+
+A signature says the collector wrote everything up to that record. It does
+not say the stream ended there, so a stream cut off after record 6 of 10 is
+a verified prefix that nothing can tell from the whole (EVASION.md E30).
+Close the stream when the collector stops:
+
+```python
+signer.sign(last_record, final=True)
+```
+
+The record carries `"final": true` and its signature covers that marker, and
+the signer refuses to sign anything further; `state()` records `closed`, so a
+restarted collector cannot reopen it either. From the command line, pass
+`--close` on the last batch:
+
+```bash
+python -m cohaera.emit sign --key collector.key --stream-id collector-01 \
+  --state collector-01.state --in batch-3.jsonl --out signed.jsonl --append --close
+```
+
+Score with `--require-closed-streams` once every collector closes its
+streams. A stream that ends without its terminator is then
+`INTEGRITY_STREAM_END_MISSING` and inadmissible. Without the flag, an
+unclosed stream degrades CH06 with `INTEGRITY_STREAM_NOT_CLOSED` and nothing
+more, because a stream still being fed is open by definition. Use `final`
+on shutdown; a batch boundary is `attest=True`, which signs the record
+without closing anything.
+
 ## 7. Approvals and receipts
 
 Both are built with the same helpers and both run their output back through

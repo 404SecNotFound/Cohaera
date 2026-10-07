@@ -137,7 +137,7 @@ same distinction without splitting the counts four ways.
 | E28 | `working` | T0 | CH03 | Make the durable memory write the consequential call | no manifest entry | Free, the default | Ship a manifest entry for the memory tools |
 | E28b | `remedy` | — | — | The manifest **does** make the memory write consequential | — | — | *the remedy, exercised* |
 | E29 | `working` | T0 | all | Smuggle extra turns inside one logged delegation | none | Free | Yes, and cheaply: duration and tokens against turn count |
-| E30 | `working` | T1 | CH06 | Truncate the END of a signed stream | none | Access to the stream between collector and Cohaera | Yes, a signed end-of-stream or heartbeat record carrying count and time |
+| E30 | `half_closed` | T1 | CH06 | Truncate the END of a signed stream | collector does not close streams, or `--require-closed-streams` not set | Access to the stream between collector and Cohaera | Half closed, a collector that signs a `final` record plus `--require-closed-streams` |
 
 ---
 
@@ -844,15 +844,33 @@ cannot know about records it never saw. `docs/THREAT-MODEL.md` §8 used to say
 the chain's near-term value was "detecting absence and truncation"; the second
 word was wrong and has been corrected.
 
-**Fix, and it is a producer-side one.** A signed end-of-stream record, or a
-periodic heartbeat, carrying the record count and the collector's clock, so
-that a stream which ends without one, or whose last heartbeat promises more
-records than arrived, reports as truncated rather than as complete. The
-verifier's half is small: a stream that ends without its terminator is
-`signature_covers_final: false` with a reason code. Nothing emits such a
-record yet, so this entry is open.
+**HALF CLOSED, 7 October 2026.** The collector can now close a stream: the
+last record carries `integrity.final: true`, and the literal `final` is part
+of that record's signing input, so the statement "nothing follows this" is
+the collector's and cannot be added to or stripped from a signed record
+without the signature failing. `cohaera.emit` signs it with
+`StreamSigner.sign(record, final=True)` or `python -m cohaera.emit sign
+--close`, and refuses to sign anything after it; `tools/collector_sign.py`
+takes `close=True`. On the verifier side a stream that ends without a verified
+final record is `INTEGRITY_STREAM_NOT_CLOSED`, which degrades CH06 the way a
+missing ledger does; records past a verified close, in this run or through
+the seen-stream ledger in a later one, are `INTEGRITY_RECORDS_AFTER_CLOSE`
+and inadmissible; and under `--require-closed-streams` a stream that ends
+without its terminator is `INTEGRITY_STREAM_END_MISSING`, inadmissible, which
+is the cut stream reported as cut.
 
-Backed by `test_evasion_30_truncate_the_end_of_a_signed_stream`.
+**Why half.** Both preconditions are the operator's to supply. A collector
+that never closes its streams produces exactly the evidence it always did,
+and the verifier can only say the end is unattested, which is also what a
+live tail looks like. The flag is off by default for that reason: a stream
+fed in batches is open until its collector closes it, and refusing those
+would refuse every deployment. The heartbeat half of the remedy (a periodic
+signed count, so that a stream cut between heartbeats is bounded in how much
+it can lose) is not built.
+
+Backed by `test_evasion_30_truncate_the_end_of_a_signed_stream`, which pins
+both halves: the cut passes on an open stream and is inadmissible on a closed
+one under the flag.
 
 ---
 
@@ -1448,7 +1466,7 @@ regression tests.
 | CH05 | Orphan terminal events were constructed with `result="success"` and never flagged. | An irreversible action appearing from nowhere was invisible | **Fixed.** `orphan_end` state, reported by CH05. |
 
 The review's C-05 finding, no executable test suite, was accurate at revision
-`45d3bf8`. There are now 1542 tests: unit, hostile-input, content conformance and
+`45d3bf8`. There are now 1567 tests: unit, hostile-input, content conformance and
 35 evasion characterizations, plus a seeded fuzz smoke test in CI.
 
 ### What is still open from the third review

@@ -11,7 +11,7 @@ predeclared expectations in `expectations.json`.
 | `modified` | `manipulated` | `inadmissible / verified_complete` | `degraded / evaluated` | `inadmissible` | **PASS** |
 | `stripped` | `manipulated` | `inadmissible / inadmissible` | `degraded / degraded` | `inadmissible` | **PASS** |
 | `reordered` | `benign_transport` | `verified_complete / verified_complete` | `evaluated / evaluated` | `verified_complete` | **PASS** |
-| `truncated` | `incomplete` | `verified_prefix / chained_unsigned` | `degraded / degraded` | `verified_prefix` | **PASS** |
+| `truncated` | `manipulated` | `inadmissible / inadmissible` | `degraded / degraded` | `inadmissible` | **PASS** |
 | `replayed` | `manipulated` | `inadmissible / inadmissible` | `degraded / degraded` | `replayed` | **PASS** |
 | `no_key` | `missing_prerequisite` | `chained_unsigned / chained_unsigned` | `degraded / degraded` | `chained_unsigned` | **PASS** |
 | `unsupported` | `unsupported` | `unattested / unattested` | `not_evaluated / not_evaluated` | `not_evaluated` | **PASS** |

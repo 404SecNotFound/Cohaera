@@ -122,8 +122,10 @@ def _build_fixtures() -> tuple[
         list[dict[str, Any]], list[dict[str, Any]],
         dict[str, list[dict[str, Any]]]]:
     raw = _canonical_records()
+    # Closed: the collector signs the last record as `final` (E30), so the
+    # truncated case is a cut stream rather than merely an unsigned tail.
     pristine = sign_stream(
-        raw, STREAM_ID, LAB_SEED, KEY_ID, sign_every=100,
+        raw, STREAM_ID, LAB_SEED, KEY_ID, sign_every=100, close=True,
     )
     cases = {name: copy.deepcopy(pristine) for name in CASE_NAMES}
 
@@ -153,7 +155,11 @@ def _score(fixture: Path, *, trust_store: Path | None,
         "--seen-streams", str(ledger),
     ]
     if trust_store is not None:
-        argv += ["--trust-store", str(trust_store)]
+        # The declared condition: this collector closes every stream. Only
+        # statable with a key, because a close is a signed statement and the
+        # CLI refuses the flag without one; the no_key case is scored as a
+        # deployment that cannot verify closure, which is what it is.
+        argv += ["--trust-store", str(trust_store), "--require-closed-streams"]
     env = dict(os.environ, PYTHONPATH=str(REPO / "src"))
     # encoding named: `text=True` alone decodes with the console code page on
     # Windows, and the verdict JSON is UTF-8 wherever it is run.

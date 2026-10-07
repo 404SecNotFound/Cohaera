@@ -453,7 +453,8 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
              freshness: Freshness = NO_FRESHNESS,
              ledger: StreamLedger | None = None,
              approval_ledger: Any = None,
-             require_signed_approvals: bool = False) -> list[Session]:
+             require_signed_approvals: bool = False,
+             require_closed_streams: bool = False) -> list[Session]:
     """Group a flat event stream into Sessions.
 
     ``keys`` is handed to each session as its trust store when it holds any
@@ -521,7 +522,7 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
     # is observed for sequence continuity and attributed to no session. Omitting
     # it would manufacture a gap out of Cohaera's own budget.
     verifier = StreamVerifier(keys=keys, limits=limits, freshness=freshness,
-                              ledger=ledger)
+                              ledger=ledger, require_closed=require_closed_streams)
     for e in incoming:
         verifier.observe(e.raw, e.integrity, session_of.get(id(e), ""))
     verifier.finalise()
@@ -565,7 +566,8 @@ def load(path: str | Path, limits: Limits = DEFAULT_LIMITS,
          ledger: StreamLedger | None = None,
          fh: BinaryIO | None = None,
          approval_ledger: Any = None,
-         require_signed_approvals: bool = False) -> list[Session]:
+         require_signed_approvals: bool = False,
+         require_closed_streams: bool = False) -> list[Session]:
     """Read and group one telemetry file. The report is filled in as a side effect.
 
     ``fh``, when given, is an open descriptor for ``path`` that the caller has
@@ -578,4 +580,5 @@ def load(path: str | Path, limits: Limits = DEFAULT_LIMITS,
                     manifest=manifest, report=rep, quiet=quiet, keys=keys,
                     freshness=freshness, ledger=ledger,
                     approval_ledger=approval_ledger,
-                    require_signed_approvals=require_signed_approvals)
+                    require_signed_approvals=require_signed_approvals,
+                    require_closed_streams=require_closed_streams)

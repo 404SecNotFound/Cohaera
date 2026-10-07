@@ -179,7 +179,7 @@ def cmd_sign(args: argparse.Namespace) -> int:
                     signed += 1
                 pending = record
             if pending is not None:
-                _emit(sink, signer.sign(pending, final=True))
+                _emit(sink, signer.sign(pending, attest=True, final=args.close))
                 signed += 1
         finally:
             if sink is not sys.stdout:
@@ -187,6 +187,8 @@ def cmd_sign(args: argparse.Namespace) -> int:
             else:
                 sys.stdout.flush()
     except (ValueError, OSError) as exc:
+        # StreamClosedError is a ValueError: signing into a closed stream is
+        # refused here with the reason, and the state file is left as it was.
         _err(f"refused after {signed} record(s): {sanitise_display(str(exc), 300)}")
         return EXIT_REFUSED
     finally:
@@ -300,6 +302,12 @@ def main(argv: list[str] | None = None) -> int:
                          "always signed (default 1)")
     sg.set_defaults(func=cmd_sign)
 
+    sg.add_argument("--close", action="store_true",
+                    help="mark the last record of this input as the end of the "
+                         "stream and sign that (E30). The state file then records "
+                         "the stream as closed and a later `sign` on it is "
+                         "refused. Without it the last record is signed as a "
+                         "batch boundary and the stream stays open.")
     ia = sub.add_parser("issue-approval", help="sign one cohaera.approval:1")
     ia.add_argument("--key", required=True, metavar="PATH",
                     help="private key file for a key with the 'approval' role")

@@ -61,8 +61,14 @@ from cohaera.evidence import (
 
 
 def sign_stream(records: list[dict], stream_id: str, secret: bytes,
-                key_id: str, sign_every: int = 1) -> list[dict]:
+                key_id: str, sign_every: int = 1, close: bool = False) -> list[dict]:
     """Add an ``integrity`` sidecar to each record, chained and signed.
+
+    ``close`` marks the last record ``final`` and signs that fact (E30), so a
+    verifier can tell a stream that ended from one that was cut. Off by
+    default because this signer's output is also what the labs, the corpus
+    and the fixtures have been for a year, and a stream the collector has not
+    finished is the ordinary case.
 
     ``sign_every`` exists because the signature covers the CHAIN HEAD rather
     than the record, so one verified signature covers every record before it.
@@ -104,10 +110,13 @@ def sign_stream(records: list[dict], stream_id: str, secret: bytes,
         # used to report as `verified`. Signing the last record is what makes
         # `verified_complete` reachable at all for a sampled stream, and it
         # costs one scalar multiplication per stream.
+        final = close and seq == len(records) - 1
+        if final:
+            sidecar["final"] = True
         if seq % sign_every == 0 or seq == len(records) - 1:
             sidecar["key_id"] = key_id
             sidecar["sig"] = base64.b64encode(
-                ed25519.sign(secret, signing_input(stream_id, seq, head))
+                ed25519.sign(secret, signing_input(stream_id, seq, head, final=final))
             ).decode("ascii")
         out.append({**body, INTEGRITY_FIELD: sidecar})
     return out

@@ -31,11 +31,11 @@ tools are called, and whether any out-of-band capability declaration exists.
 
 | vocabulary | capability source | attributable recall | any-alert recall | false positive rate | precision | self-reported coverage |
 |---|---|---|---|---|---|---|
-| unseen | manifest | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 42.0% [38%-46%] (264/628) | 53.2% [49%-57%] (300/564) | 0.65 |
-| unseen | producer_flag | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 42.0% [38%-46%] (264/628) | 53.2% [49%-57%] (300/564) | 0.54 |
-| unseen | name_only | 34.7% [30%-40%] (104/300) | 53.3% [48%-59%] (160/300) | 15.3% [13%-18%] (96/628) | 62.5% [56%-68%] (160/256) | 0.13 |
-| lexical | manifest | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 42.0% [38%-46%] (264/628) | 53.2% [49%-57%] (300/564) | 0.65 |
-| lexical | producer_flag | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 42.0% [38%-46%] (264/628) | 53.2% [49%-57%] (300/564) | 0.54 |
+| unseen | manifest | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 42.0% [38%-46%] (264/628) | 53.2% [49%-57%] (300/564) | 0.64 |
+| unseen | producer_flag | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 42.0% [38%-46%] (264/628) | 53.2% [49%-57%] (300/564) | 0.53 |
+| unseen | name_only | 34.7% [30%-40%] (104/300) | 53.3% [48%-59%] (160/300) | 15.3% [13%-18%] (96/628) | 62.5% [56%-68%] (160/256) | 0.12 |
+| lexical | manifest | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 42.0% [38%-46%] (264/628) | 53.2% [49%-57%] (300/564) | 0.64 |
+| lexical | producer_flag | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 42.0% [38%-46%] (264/628) | 53.2% [49%-57%] (300/564) | 0.53 |
 | lexical | name_only | 100.0% [99%-100%] (300/300) | 100.0% [99%-100%] (300/300) | 45.9% [42%-50%] (288/628) | 51.0% [47%-55%] (300/588) | 0.53 |
 
 **Two recall columns, because they are two different claims.** *Attributable* recall counts an attack as detected only when the check the corpus holds RESPONSIBLE for that behaviour fired. *Any-alert* recall counts it when anything fired. Where they differ, the gap is attacks caught by a check that was never asked about them -- real collateral detection, and not evidence that the responsible check works. Reporting only the second is how a check that declined every one of its own labelled examples came to be published at full recall; see §2.
@@ -46,7 +46,7 @@ tools are called, and whether any out-of-band capability declaration exists.
 
 Read the false-positive column carefully, because it moves the wrong way for the right reason. Under `unseen`/`name_only` the false positive rate *drops* to 15.3% and precision *rises* to 62.5%, a +9.3% swing that a card reporting precision alone would have published as an improvement. It is not one. Every check that needs to know whether a call was consequential -- CH02, CH03, CH04 -- cannot fire at all, because every tool classifies as `unknown`. The detector got quieter by going blind.
 
-The thing that makes that visible is Cohaera's own coverage figure, which falls from 0.53 to 0.13 in the same cell. Coverage reporting was built for exactly this and this is the first measurement that shows it earning its place: **the precision number is misleading and the coverage number next to it says so.**
+The thing that makes that visible is Cohaera's own coverage figure, which falls from 0.53 to 0.12 in the same cell. Coverage reporting was built for exactly this and this is the first measurement that shows it earning its place: **the precision number is misleading and the coverage number next to it says so.**
 
 ### 2. What a random split would have bought
 

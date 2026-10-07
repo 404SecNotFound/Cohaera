@@ -492,6 +492,13 @@ class Integrity:
     chain: str | None = None
     key_id: str | None = None
     sig: bytes | None = None
+    # E30. The collector's statement that this is the LAST record of the
+    # stream. Folded into the signing input, so it cannot be added to or
+    # removed from a signed record without the signature failing. A stream
+    # that ends without a verified final record is reported as not closed;
+    # under --require-closed-streams that is inadmissible, which is what
+    # makes cutting the tail off a signed stream detectable at all.
+    final: bool = False
 
     @property
     def signed(self) -> bool:
@@ -543,12 +550,19 @@ class Integrity:
                 return None, (DEFECT_INTEGRITY_TYPE,)
             if len(sig) != ed25519.SIG_BYTES:
                 return None, (DEFECT_INTEGRITY_TYPE,)
+        final_raw = obj.get("final")
+        if final_raw is not None and final_raw is not True:
+            # `true` or absent, nothing else. A producer writing "yes" or 1
+            # has not closed anything, and a sidecar that cannot say whether
+            # it closes the stream is refused whole, as a malformed `sig` is.
+            return None, (DEFECT_INTEGRITY_TYPE,)
         return cls(
             stream_id=stream_id, seq=seq,
             prev=_hex_or_none(obj.get("prev")),
             chain=_hex_or_none(obj.get("chain")),
             key_id=_short(obj.get("key_id"), limits),
             sig=sig,
+            final=final_raw is True,
         ), ()
 
 
@@ -622,18 +636,25 @@ def chain_step(previous: str, body: str) -> str:
     return h.hexdigest()
 
 
-def signing_input(stream_id: str, seq: int, chain: str) -> bytes:
-    """``scheme || stream_id || seq || chain[n]``.
+def signing_input(stream_id: str, seq: int, chain: str,
+                  final: bool = False) -> bytes:
+    """``scheme || stream_id || seq || chain[n]``, plus ``final`` on the last record.
 
     The signature covers the CHAIN HEAD, not the record. That is what lets one
     verified signature cover every record before it, so a collector may sign
     every record or every kth without the verifier changing -- and it is why
     signature verification is bounded rather than per-record work.
+
+    E30. A closing record signs one more field, the literal ``final``, so that
+    the statement "nothing follows this" is the collector's and not the
+    producer's. Non-final records sign exactly what they always did, which is
+    why every signature made before this field existed still verifies.
     """
-    return b"\x1f".join((INTEGRITY_SCHEMA.encode("utf-8"),
-                         stream_id.encode("utf-8"),
-                         str(seq).encode("ascii"),
-                         chain.encode("utf-8")))
+    parts = [INTEGRITY_SCHEMA.encode("utf-8"), stream_id.encode("utf-8"),
+             str(seq).encode("ascii"), chain.encode("utf-8")]
+    if final:
+        parts.append(b"final")
+    return b"\x1f".join(parts)
 
 
 def approval_signing_input(*, decision: str, span_id: str, tool_id: str | None,
@@ -1823,6 +1844,28 @@ R_STREAM_SKIPPED_RECORDS = "INTEGRITY_STREAM_RECORDS_NEVER_SCORED"
 # it must never read as a checked boundary. A producer that omits ``prev`` gives
 # up the only cross-run continuity evidence there is; EVASION.md carries it.
 R_STREAM_BOUNDARY_UNVERIFIED = "INTEGRITY_STREAM_BOUNDARY_UNVERIFIED"
+# E30. Where a stream ENDS. The chain says nothing is missing in between and
+# the signatures say the collector wrote what remains; neither says how long
+# the stream was meant to be, so cutting records off the end of a signed
+# stream left a contiguous, fully verified prefix and no code of any kind.
+# A collector that closes its streams signs a `final` record. These four say
+# what the verifier found about that.
+#
+# NOT_CLOSED is coverage, not a finding: a stream fed in batches is open until
+# its collector closes it, and calling every live tail tampering would refuse
+# every deployment. It degrades CH06 the way NO_STREAM_LEDGER does.
+R_STREAM_NOT_CLOSED = "INTEGRITY_STREAM_NOT_CLOSED"
+# END_MISSING is the same fact under --require-closed-streams, where the
+# operator has said their collectors close every stream, so one that ends
+# without its terminator is a stream somebody cut. Inadmissible.
+R_STREAM_END_MISSING = "INTEGRITY_STREAM_END_MISSING"
+# Records at a sequence past a verified final record, in this run or, through
+# the ledger, in a later one. Inadmissible: the collector said nothing follows.
+R_RECORDS_AFTER_CLOSE = "INTEGRITY_RECORDS_AFTER_CLOSE"
+# A record claimed `final` and nothing trusted vouched for the claim (no key,
+# unsigned, or the signature failed on its own account). Coverage: the claim
+# does not close the stream, and the verdict says one was made.
+R_CLOSE_UNVERIFIED = "INTEGRITY_STREAM_CLOSE_UNVERIFIED"
 R_NO_STREAM_LEDGER = "NO_STREAM_LEDGER"
 R_LEDGER_EVICTED = "STREAM_LEDGER_EVICTED_THIS_STREAM"
 # R-03. The stream was compared against the ledger and deliberately not written
@@ -1849,7 +1892,8 @@ INADMISSIBLE = frozenset({R_SEQUENCE_GAP, R_CHAIN_BROKEN, R_CHAIN_UNANCHORED,
                           R_KEY_REVOKED, R_KEY_EXPIRED, R_KEY_NOT_YET_VALID,
                           R_KEY_WRONG_ROLE, R_STALE, R_FROM_FUTURE,
                           R_STREAM_REPLAYED, R_STREAM_FORKED,
-                          R_STREAM_KEY_CHANGED})
+                          R_STREAM_KEY_CHANGED,
+                          R_STREAM_END_MISSING, R_RECORDS_AFTER_CLOSE})
 
 # R_STREAM_SKIPPED_RECORDS is deliberately NOT inadmissible. Records between the
 # last scored sequence and this run's first one were never scored, which is
@@ -2005,6 +2049,7 @@ SEEN_ADVANCED = "advanced"        # continues from exactly where scoring stopped
 SEEN_DISCONTINUOUS = "discontinuous"   # continues past it, over a gap
 SEEN_REPLAYED = "replayed"        # occupies sequence positions already scored
 SEEN_FORKED = "forked"            # incompatible history, at or past the boundary
+SEEN_AFTER_CLOSE = "after_close"  # continues a stream its collector had closed
 SEEN_EVICTED = "evicted"          # was known, and the budget dropped it
 
 # How the incoming stream's first record joined onto what the ledger stored.
@@ -2084,13 +2129,18 @@ class SeenStream:
     last_run_id: str = ""
     last_seen_at: float | None = None
     key_ids: tuple[str, ...] = ()
+    # E30. A verified final record was seen at last_seq. Once true it stays
+    # true: a stream does not reopen, and a later run presenting records past
+    # last_seq is INTEGRITY_RECORDS_AFTER_CLOSE rather than advancement.
+    closed: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {"first_seq": self.first_seq, "last_seq": self.last_seq,
                 "head": self.head, "runs": self.runs,
                 "last_run_id": self.last_run_id,
                 "last_seen_at": self.last_seen_at,
-                "key_ids": list(self.key_ids)}
+                "key_ids": list(self.key_ids),
+                "closed": self.closed}
 
 
 @dataclass(frozen=True)
@@ -2120,6 +2170,8 @@ class SeenVerdict:
             return R_STREAM_REPLAYED
         if self.status == SEEN_DISCONTINUOUS:
             return R_STREAM_SKIPPED_RECORDS
+        if self.status == SEEN_AFTER_CLOSE:
+            return R_RECORDS_AFTER_CLOSE
         return None
 
     def as_dict(self) -> dict[str, Any]:
@@ -2275,6 +2327,18 @@ class StreamLedger:
             return SeenVerdict(stream_id, SEEN_NEW)
 
         if first_seq > previous.last_seq:
+            if previous.closed:
+                # E30. The collector signed "nothing follows" at last_seq and
+                # here is something that follows. Decided before contiguity,
+                # because a continuation of a closed stream is wrong whether
+                # or not it is contiguous, and the chain comparison below
+                # would otherwise call a contiguous one ordinary advancement.
+                return SeenVerdict(stream_id, SEEN_AFTER_CLOSE,
+                                   previous_last_seq=previous.last_seq,
+                                   previous_runs=previous.runs,
+                                   boundary=BOUNDARY_NOT_COMPARED,
+                                   declared_prev=first_prev,
+                                   previous_head=previous.head)
             if first_seq != previous.last_seq + 1:
                 # A gap. Deliberately NOT a fork: an operator scoring a subset
                 # on purpose and an attacker deleting a range look identical
@@ -2323,7 +2387,8 @@ class StreamLedger:
 
     def record(self, verdict: SeenVerdict, first_seq: int, last_seq: int,
                head: str, run_id: str, when: float | None,
-               key_ids: tuple[str, ...] = (), admit: bool = True) -> None:
+               key_ids: tuple[str, ...] = (), admit: bool = True,
+               closed: bool = False) -> None:
         """Fold one verified stream into the ledger.
 
         A REPLAYED or FORKED stream does NOT advance the recorded position, and
@@ -2345,7 +2410,8 @@ class StreamLedger:
         """
         self.verdicts.append(verdict)
         self._touched.add(verdict.stream_id)
-        if not admit or verdict.status in (SEEN_REPLAYED, SEEN_FORKED):
+        if not admit or verdict.status in (SEEN_REPLAYED, SEEN_FORKED,
+                                           SEEN_AFTER_CLOSE):
             # Including the R-02 fork, which is a CONTINUATION rather than an
             # overlap. It matters most there: an overlapping fork at least
             # collides with positions the ledger already holds, while a
@@ -2374,7 +2440,8 @@ class StreamLedger:
             last_seq=max(last_seq, previous.last_seq) if previous else last_seq,
             head=head, runs=(previous.runs + 1) if previous else 1,
             last_run_id=run_id, last_seen_at=when,
-            key_ids=merged_keys[:self.limits.max_evidence_items])
+            key_ids=merged_keys[:self.limits.max_evidence_items],
+            closed=closed or bool(previous.closed if previous else False))
 
     def state_digest(self) -> str:
         """A digest of the ledger AS READ, before this run writes to it. R-06.
@@ -2395,7 +2462,10 @@ class StreamLedger:
                        "streams": [{"stream_id": k,
                                     "first_seq": v.first_seq,
                                     "last_seq": v.last_seq,
-                                    "head": v.head}
+                                    "head": v.head,
+                                    # Only when set, so every ledger written
+                                    # before E30 keeps the digest it had.
+                                    **({"closed": True} if v.closed else {})}
                                    for k, v in sorted(self.streams.items())]},
                       24)
 
@@ -2630,7 +2700,9 @@ class StreamLedger:
                 last_run_id=_short(spec.get("last_run_id"), limits) or "",
                 last_seen_at=_finite(spec.get("last_seen_at")),
                 key_ids=tuple(k for k in keys if isinstance(k, str))
-                if isinstance(keys, list) else ())
+                if isinstance(keys, list) else (),
+                # Absent in ledgers written before E30, which reads as open.
+                closed=spec.get("closed") is True)
         # R-04. A ledger written before generations existed has no field and
         # reads as 0, which is correct: the first save under the new code writes
         # generation 1 and every writer afterwards agrees on the sequence.
@@ -3130,6 +3202,10 @@ class _Stream:
     # value that separates a stream signed to its end from one signed to its
     # middle, and there was nothing tracking it.
     highest_verified_seq: int | None = None
+    # E30. The sequence at which a VERIFIED final record closed this stream,
+    # and whether any record claimed to, verified or not.
+    closed_at: int | None = None
+    final_seen: bool = False
     # Records consumed for this stream that reached no scored session, because
     # assembly dropped them on max_sessions or max_events_per_session. Their
     # positions were verified and their content was never looked at.
@@ -3182,9 +3258,14 @@ class StreamVerifier:
                  limits: Limits = DEFAULT_LIMITS,
                  freshness: Freshness = NO_FRESHNESS,
                  ledger: StreamLedger | None = None,
-                 run_id: str = "") -> None:
+                 run_id: str = "",
+                 require_closed: bool = False) -> None:
         self.keys = keys
         self.limits = limits
+        # E30. --require-closed-streams: the operator's statement that their
+        # collectors close every stream, which turns "not closed" from
+        # coverage into inadmissible evidence.
+        self.require_closed = require_closed
         self.freshness = freshness
         self.ledger = ledger if ledger is not None else NO_LEDGER
         self.run_id = run_id
@@ -3278,6 +3359,22 @@ class StreamVerifier:
         # edited, because a record with no integrity object cannot fail a chain
         # check. Only knowable once the whole input has been seen, which is why
         # it is decided here rather than per record.
+        # E30. Whether each stream was closed by its collector. Decided here
+        # because "the last record" is only knowable once there are no more,
+        # and before the ledger comparison so that a stream cut short is not
+        # also remembered as having ended where the cut was.
+        for stream in sorted(self.streams.values(), key=lambda s: s.stream_id):
+            if stream.first_seq is None or stream.closed_at is not None:
+                continue
+            for session_key in stream.sessions_seen:
+                if not session_key:
+                    continue
+                state = self._session(session_key)
+                self._note(state, stream, R_STREAM_NOT_CLOSED)
+                if stream.final_seen:
+                    self._note(state, stream, R_CLOSE_UNVERIFIED)
+                if self.require_closed:
+                    self._note(state, stream, R_STREAM_END_MISSING)
         self._judge_against_ledger()
         # R-05. How far each stream ran and how far its attestation reached,
         # attributed to every session it fed. Done here rather than per record
@@ -3376,7 +3473,8 @@ class StreamVerifier:
             refusal = self._admission(stream)
             self.ledger.record(verdict, stream.first_seq, stream.last_seq,
                                stream.head, self.run_id, self.freshness.as_of,
-                               key_ids=keys, admit=not refusal)
+                               key_ids=keys, admit=not refusal,
+                               closed=stream.closed_at is not None)
             if refusal:
                 self.ledger_refusals.append(
                     {"stream_id": stream.stream_id, "reason": refusal,
@@ -3438,7 +3536,8 @@ class StreamVerifier:
         return [{"stream_id": s.stream_id, "first_seq": s.first_seq,
                  "last_seq": s.last_seq, "head": s.head,
                  "first_prev": s.first_prev,
-                 "joined_midstream": s.joined_midstream}
+                 "joined_midstream": s.joined_midstream,
+                 "closed_at": s.closed_at}
                 for s in sorted(self.streams.values(),
                                 key=lambda s: s.stream_id)[:cap]]
 
@@ -3508,6 +3607,11 @@ class StreamVerifier:
             stream.first_seq = seq
             stream.first_prev = integrity.prev
         stream.last_seq = seq
+        if stream.closed_at is not None and seq > stream.closed_at:
+            # E30. The collector signed "nothing follows" and this follows.
+            self._note(state, stream, R_RECORDS_AFTER_CLOSE)
+        if integrity.final:
+            stream.final_seen = True
         expected_chain = chain_step(stream.head, body) if stream.head else None
         if expected_chain is None and seq > 0:
             # No head, past the seed. Either _begin adopted an absent ``prev``
@@ -3610,7 +3714,8 @@ class StreamVerifier:
             return
         self.signatures_verified += 1
         state.signatures_verified += 1
-        message = signing_input(stream.stream_id, seq, integrity.chain or "")
+        message = signing_input(stream.stream_id, seq, integrity.chain or "",
+                                final=integrity.final)
         started = time.monotonic()
         verified = ed25519.verify(key.public, message, integrity.sig or b"")
         self.signature_seconds += time.monotonic() - started
@@ -3629,6 +3734,11 @@ class StreamVerifier:
         if (stream.highest_verified_seq is None
                 or seq > stream.highest_verified_seq):
             stream.highest_verified_seq = seq
+        if integrity.final and (stream.closed_at is None or seq < stream.closed_at):
+            # E30. Verified, so the closing statement is the collector's.
+            # The lowest verified close wins: everything past it is already
+            # charged as after-close in _consume.
+            stream.closed_at = seq
         self._pin_key(stream, seq, key, state)
 
         if key.windowed:

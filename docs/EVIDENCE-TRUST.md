@@ -117,6 +117,19 @@ itself. Signing the chain head rather than the record is what makes a single
 verified signature cover every record before it, so a collector may sign every
 record or every *k*th without changing the verifier.
 
+The last record of a stream may carry `"final": true`. Its signing input is
+`scheme ‖ stream_id ‖ seq ‖ chain[n] ‖ final`, so the statement "nothing
+follows this" is the collector's and cannot be added to or stripped from a
+signed record without the signature failing (E30). A verifier reports a
+stream that ends without a verified final record as
+`INTEGRITY_STREAM_NOT_CLOSED` (coverage; a live tail is open until its
+collector closes it), records past a verified close as
+`INTEGRITY_RECORDS_AFTER_CLOSE` (inadmissible), and, under
+`--require-closed-streams`, a missing terminator as
+`INTEGRITY_STREAM_END_MISSING` (inadmissible). The seen-stream ledger
+remembers a closed stream as closed, so a continuation in a later run is
+after-close rather than advancement.
+
 ### What Cohaera verifies
 
 Per `stream_id`, in one pass, with bounded state (one chain head, one expected
@@ -203,6 +216,10 @@ A new surface `event_integrity`, and reason codes:
 | `INTEGRITY_CHAIN_UNANCHORED` | A record past sequence zero declared no `prev` and nothing before it was seen, so its content is bound to no chain and its signature attests nothing about it. Inadmissible, because the record claims attestation while withholding the field that would let the claim be checked |
 | `INTEGRITY_SIGNATURE_INVALID` | A signature did not verify under the supplied key |
 | `INTEGRITY_KEY_UNKNOWN` | `key_id` is not in the supplied key set |
+| `INTEGRITY_STREAM_NOT_CLOSED` | No verified `final` record closed this stream; its end is where the input stopped. Coverage, degrades CH06 |
+| `INTEGRITY_STREAM_END_MISSING` | The same, under `--require-closed-streams`: the collector closes every stream and this one ends without its terminator. Inadmissible |
+| `INTEGRITY_RECORDS_AFTER_CLOSE` | Records past the sequence at which a verified `final` record said nothing follows, in this run or via the ledger. Inadmissible |
+| `INTEGRITY_STREAM_CLOSE_UNVERIFIED` | A record claimed `final` and nothing trusted vouched for the claim; the stream is not closed by it |
 | `INTEGRITY_STREAM_KEY_CHANGED` | A verified signature under a different collector key than the one pinned to the stream, with no `replaces` succession recorded in the trust store |
 
 `NO_INTEGRITY_EVIDENCE` is the important one. It is what turns "Cohaera did not

@@ -117,6 +117,7 @@ from cohaera.evidence import (
     R_STALE,
     R_STREAM_BOUNDARY_UNVERIFIED,
     R_STREAM_FORKED,
+    R_STREAM_NOT_CLOSED,
     R_STREAM_REPLAYED,
     R_STREAM_SKIPPED_RECORDS,
     R_UNSIGNED,
@@ -1553,9 +1554,12 @@ def test_confidence_is_not_one_when_a_tail_is_unattested():
 
     assert contract["confidence"] < 1.0
     assert R_SIGNATURE_PREFIX_ONLY in contract["reasons"]
-    # 101 of 150 records reached, so the share is the multiplier and nothing
-    # else is penalising this run.
-    assert contract["confidence"] == round(101 / 150, 3)
+    # 101 of 150 records reached, so the share is one multiplier. The other is
+    # E30: a stream whose tail is unsigned cannot have been closed (a close is
+    # a signed record), so INTEGRITY_STREAM_NOT_CLOSED applies its 0.9 as the
+    # missing ledger would. Nothing else penalises this run.
+    assert R_STREAM_NOT_CLOSED in contract["reasons"]
+    assert contract["confidence"] == round(101 / 150 * 0.9, 3)
 
 
 def test_a_stream_signed_to_its_end_is_complete():

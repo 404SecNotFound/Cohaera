@@ -55,8 +55,8 @@
       },
       "condition": "manipulated",
       "expectation_met": true,
-      "input_bytes": 2743,
-      "input_sha256": "c1d8b193e510db302ab632636d18d72f280ea36c9e537c44a5552a72bc9c5cae",
+      "input_bytes": 2758,
+      "input_sha256": "bcb56b3774691b24c93e4e74fd653a631f82d7f9ba3c5985104dec5b26209ee2",
       "mutation": "Remove interior sequence 2 after signing.",
       "records": 5
     },
@@ -98,8 +98,8 @@
       },
       "condition": "intact",
       "expectation_met": true,
-      "input_bytes": 3279,
-      "input_sha256": "e2c1d54cf9445d5593f16ce8091d787c389ed6c09bbb9b0682b6bd4568e2158d",
+      "input_bytes": 3294,
+      "input_sha256": "948d7f2e034fd7b17f22ef91638eaf2a024115103291f79c3c35d307516d8af5",
       "mutation": "None.",
       "records": 6
     },
@@ -152,8 +152,8 @@
       },
       "condition": "manipulated",
       "expectation_met": true,
-      "input_bytes": 3278,
-      "input_sha256": "e9487ca93317720dd90c162ab134e4930127118bef44a7ef14169c3b61b31c27",
+      "input_bytes": 3293,
+      "input_sha256": "ece2e3e9e50f7c0edbf3e56670bbc56ca1c65c33bb3e32600c211fb135e541e0",
       "mutation": "Change sequence 2 body while retaining its signed sidecar.",
       "records": 6
     },
@@ -172,10 +172,12 @@
         "exit_code": 0,
         "sessions": {
           "other": {
-            "ch06_confidence": 0.48,
+            "ch06_confidence": 0.432,
             "ch06_fired": false,
             "ch06_reasons": [
               "INTEGRITY_FRESHNESS_UNVERIFIABLE",
+              "INTEGRITY_STREAM_CLOSE_UNVERIFIED",
+              "INTEGRITY_STREAM_NOT_CLOSED",
               "NO_COLLECTOR_KEYS",
               "NO_FRESHNESS_BOUND"
             ],
@@ -184,10 +186,12 @@
             "integrity_codes": []
           },
           "target": {
-            "ch06_confidence": 0.48,
+            "ch06_confidence": 0.432,
             "ch06_fired": false,
             "ch06_reasons": [
               "INTEGRITY_FRESHNESS_UNVERIFIABLE",
+              "INTEGRITY_STREAM_CLOSE_UNVERIFIED",
+              "INTEGRITY_STREAM_NOT_CLOSED",
               "NO_COLLECTOR_KEYS",
               "NO_FRESHNESS_BOUND"
             ],
@@ -199,9 +203,9 @@
       },
       "condition": "missing_prerequisite",
       "expectation_met": true,
-      "input_bytes": 3279,
-      "input_sha256": "e2c1d54cf9445d5593f16ce8091d787c389ed6c09bbb9b0682b6bd4568e2158d",
-      "mutation": "Score the intact stream without the collector trust store.",
+      "input_bytes": 3294,
+      "input_sha256": "948d7f2e034fd7b17f22ef91638eaf2a024115103291f79c3c35d307516d8af5",
+      "mutation": "Score the intact stream without the collector trust store, so its closing record cannot be verified either.",
       "records": 6
     },
     "reordered": {
@@ -244,8 +248,8 @@
       },
       "condition": "benign_transport",
       "expectation_met": true,
-      "input_bytes": 3279,
-      "input_sha256": "20dbcf7e981e2d55e03ba80c56a47372eb1272cf0cd79f89fd1275b0b580cc25",
+      "input_bytes": 3294,
+      "input_sha256": "3f59079177b4f962906fb7a67dbe613f6495e2516d1f18613dd13d670419ade6",
       "mutation": "Deliver sequences as 0, 2, 1, 3, 5, 4 without changing bytes.",
       "records": 6
     },
@@ -300,8 +304,8 @@
       },
       "condition": "manipulated",
       "expectation_met": true,
-      "input_bytes": 3279,
-      "input_sha256": "e2c1d54cf9445d5593f16ce8091d787c389ed6c09bbb9b0682b6bd4568e2158d",
+      "input_bytes": 3294,
+      "input_sha256": "948d7f2e034fd7b17f22ef91638eaf2a024115103291f79c3c35d307516d8af5",
       "mutation": "Submit the intact stream twice against retained ledger state.",
       "records": 6
     },
@@ -361,55 +365,77 @@
       },
       "condition": "manipulated",
       "expectation_met": true,
-      "input_bytes": 3125,
-      "input_sha256": "62af40c40d5bf7a6e171656f266c44c61814ef344d427c905130c3155f3699b9",
+      "input_bytes": 3140,
+      "input_sha256": "b3f2a0ff975baf29a3ad2c6827affb25d6f06cb35e9b3969e2279ad1342089a8",
       "mutation": "Change sequence 2 and remove its prev and chain fields.",
       "records": 6
     },
     "truncated": {
       "baseline": {
-        "affected_sessions": [],
+        "affected_sessions": [
+          "other",
+          "target"
+        ],
         "first_seq": 0,
-        "issues": [],
+        "issues": [
+          "stream_not_closed"
+        ],
         "last_seq": 4,
         "records_reordered": 0,
         "signatures_verified": 1,
-        "status": "verified_prefix",
+        "status": "inadmissible",
         "verified_to": 0
       },
       "cohaera": {
         "exit_code": 0,
         "sessions": {
           "other": {
-            "ch06_confidence": 0.48,
-            "ch06_fired": false,
+            "ch06_confidence": 0.0,
+            "ch06_fired": true,
             "ch06_reasons": [
               "INTEGRITY_FRESHNESS_UNVERIFIABLE",
+              "INTEGRITY_STREAM_END_MISSING",
+              "INTEGRITY_STREAM_NOT_CLOSED",
               "INTEGRITY_UNSIGNED",
-              "NO_FRESHNESS_BOUND"
+              "NO_FRESHNESS_BOUND",
+              "STREAM_LEDGER_NOT_ADVANCED"
             ],
             "ch06_status": "degraded",
-            "evidence_status": "chained_unsigned",
-            "integrity_codes": []
+            "evidence_status": "inadmissible",
+            "integrity_codes": [
+              "INTEGRITY_FRESHNESS_UNVERIFIABLE",
+              "INTEGRITY_STREAM_END_MISSING",
+              "INTEGRITY_STREAM_NOT_CLOSED",
+              "INTEGRITY_UNSIGNED",
+              "STREAM_LEDGER_NOT_ADVANCED"
+            ]
           },
           "target": {
-            "ch06_confidence": 0.2,
-            "ch06_fired": false,
+            "ch06_confidence": 0.0,
+            "ch06_fired": true,
             "ch06_reasons": [
               "INTEGRITY_SIGNATURE_COVERS_PREFIX_ONLY",
-              "INTEGRITY_UNSIGNED"
+              "INTEGRITY_STREAM_END_MISSING",
+              "INTEGRITY_STREAM_NOT_CLOSED",
+              "INTEGRITY_UNSIGNED",
+              "STREAM_LEDGER_NOT_ADVANCED"
             ],
             "ch06_status": "degraded",
-            "evidence_status": "verified_prefix",
-            "integrity_codes": []
+            "evidence_status": "inadmissible",
+            "integrity_codes": [
+              "INTEGRITY_STREAM_END_MISSING",
+              "INTEGRITY_STREAM_NOT_CLOSED",
+              "INTEGRITY_UNSIGNED",
+              "STREAM_LEDGER_NOT_ADVANCED"
+            ]
           }
         }
       },
-      "condition": "incomplete",
+      "condition": "manipulated",
       "expectation_met": true,
       "input_bytes": 2651,
       "input_sha256": "247346ed765865d331e3a9fcbc01d744cbcc210a80cd4b2362b0935bea018d65",
-      "mutation": "Remove the final signed record.",
+      "mutation": "Remove the final signed record, which closed the stream (E30).",
       "records": 5
     },
     "unsupported": {
@@ -452,8 +478,8 @@
       },
       "condition": "unsupported",
       "expectation_met": true,
-      "input_bytes": 3279,
-      "input_sha256": "3d99b96ce2a26f19ea061d679e573681f021caaca55ed7814d23817d08bc7ab8",
+      "input_bytes": 3294,
+      "input_sha256": "6d32569421bd4970bcc226586504eabfb94552282e4a081aa46735b558f88a00",
       "mutation": "Replace the integrity scheme with cohaera.integrity:2.",
       "records": 6
     }

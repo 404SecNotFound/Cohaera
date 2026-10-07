@@ -62,7 +62,7 @@ python lab/ch06/run.py --check
 | `modified` | change sequence 2 body | manipulated, `target` affected |
 | `stripped` | change sequence 2 and remove `prev`/`chain` | manipulated, both boundary sessions affected |
 | `reordered` | deliver 0, 2, 1, 3, 5, 4 | benign transport reordering |
-| `truncated` | remove the final signed record | explicit incomplete attestation |
+| `truncated` | remove the closing record | manipulated: the collector closed the stream and its end is missing (E30) |
 | `replayed` | submit the intact bytes twice | cross-run replay |
 | `no_key` | omit the collector trust store | explicit missing prerequisite |
 | `unsupported` | change the scheme to `cohaera.integrity:2` | explicit unsupported/not-evaluated result |
@@ -75,11 +75,11 @@ The committed [results](runs/latest/RESULTS.md) currently pass all nine cases:
   degraded;
 - Cohaera and the baseline agree on every stream-level interpretation;
 - expectations require the mutation-specific diagnosis, including sequence
-  gaps, broken chains, reordering, replay, prefix coverage and unsupported
-  integrity;
-- Cohaera localises the body-only modification to `target`, and distinguishes
-  the truncated stream's `target` verified prefix from `other`, whose records
-  are only chained and unsigned.
+  gaps, broken chains, reordering, replay, a missing stream end and
+  unsupported integrity;
+- Cohaera localises the body-only modification to `target`, and reports the
+  truncated stream as cut rather than merely signed to a prefix, because the
+  collector closed it and the lab scores with `--require-closed-streams`.
 
 ## What this establishes
 

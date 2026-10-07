@@ -134,10 +134,14 @@ def _chain_step(previous: str, body_digest: str) -> str:
     return digest.hexdigest()
 
 
-def _signing_input(stream_id: str, seq: int, chain: str) -> bytes:
-    return SEPARATOR.join((
-        SCHEME.encode(), stream_id.encode(), str(seq).encode(), chain.encode(),
-    ))
+def _signing_input(stream_id: str, seq: int, chain: str,
+                   final: bool = False) -> bytes:
+    parts = [SCHEME.encode(), stream_id.encode(), str(seq).encode(), chain.encode()]
+    if final:
+        # The closing record signs one more literal, so "nothing follows"
+        # cannot be added or removed without the signature failing.
+        parts.append(b"final")
+    return SEPARATOR.join(parts)
 
 
 @dataclass(frozen=True)
@@ -218,6 +222,7 @@ def verify(records: list[dict[str, Any]], *, public_key: bytes | None,
     verified_to: int | None = None
     signatures_verified = 0
     signature_present = False
+    closed = False
 
     for seq, record, sidecar in ordered:
         session_id: str = (str(record["session_id"])
@@ -248,6 +253,12 @@ def verify(records: list[dict[str, Any]], *, public_key: bytes | None,
 
         signature_text = sidecar.get("sig")
         signature_key = sidecar.get("key_id")
+        final = sidecar.get("final") is True
+        if closed:
+            # A verified final record was seen and here is a later one.
+            issues.add("records_after_close")
+            if session_id:
+                affected.add(session_id)
         if isinstance(signature_text, str) and isinstance(signature_key, str):
             signature_present = True
             if public_key is not None and isinstance(declared_chain, str):
@@ -257,13 +268,22 @@ def verify(records: list[dict[str, Any]], *, public_key: bytes | None,
                     signature = b""
                 if _verify_ed25519(
                         public_key,
-                        _signing_input(stream_id, seq, declared_chain), signature):
+                        _signing_input(stream_id, seq, declared_chain, final),
+                        signature):
                     signatures_verified += 1
                     verified_to = seq if verified_to is None else max(verified_to, seq)
+                    if final:
+                        closed = True
                 else:
                     issues.add("signature_invalid")
                     if session_id:
                         affected.add(session_id)
+
+    if public_key is not None and signatures_verified and not closed:
+        # Only decidable when signatures could be checked at all: without a
+        # key, "not closed" and "could not tell" are the same observation.
+        issues.add("stream_not_closed")
+        affected.update(sessions)
 
     fingerprint = (first_seq, last_seq, head)
     if seen is not None:
@@ -280,7 +300,12 @@ def verify(records: list[dict[str, Any]], *, public_key: bytes | None,
     inadmissible = {
         "sequence_replay", "sequence_gap", "chain_broken",
         "chain_metadata_missing", "signature_invalid", "stream_replayed",
-        "stream_forked",
+        "stream_forked", "records_after_close",
+        # The lab's declared condition is a collector that closes every
+        # stream, which is the operator policy --require-closed-streams states
+        # on the product side; a stream that ends without its terminator is
+        # therefore a cut stream here.
+        "stream_not_closed",
     }
     if issues & inadmissible:
         status = "replayed" if "stream_replayed" in issues else "inadmissible"

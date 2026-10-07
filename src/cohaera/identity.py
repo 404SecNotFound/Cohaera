@@ -234,7 +234,8 @@ def trust_config_digest(
         baseline_partial_allowed: bool = False,
         schema: str = "",
         approval_ledger: dict[str, Any] | None = None,
-        require_signed_approvals: bool = False) -> str:
+        require_signed_approvals: bool = False,
+        require_closed_streams: bool = False) -> str:
     """One digest over every setting that can change a verdict or its trust.
 
     R-06. ``run_id`` used to cover the detector version, the bounds, the source,
@@ -334,6 +335,11 @@ def trust_config_digest(
                        # What was READ, as with the stream ledger.
                        "nonces_known": appr.get("nonces_known", 0)},
         }
+    # E30. Same rule and same asymmetry: a run that refuses unclosed streams
+    # reaches different CH06 verdicts on identical telemetry, and a run that
+    # never asked keeps the identity it had.
+    if require_closed_streams:
+        payload["require_closed_streams"] = True
     return digest(payload, 24)
 
 

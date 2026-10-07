@@ -14,7 +14,7 @@ parked. They are listed separately because they have different owners and very
 different sizes.
 
 **The numbers here are derived.** 19 free evasions, 5 roadmap items, 8 role
-review findings, 3,411 lines in `checks.py` — every one of those is read out of
+review findings, 3,447 lines in `checks.py` — every one of those is read out of
 the file it describes by [`tools/readme_facts.py`](../tools/readme_facts.py) and
 checked in CI. Status *within this page* is a checkbox rather than a total,
 because a checklist cannot disagree with itself the way "6 of 10 remain" can.
@@ -105,8 +105,8 @@ Conducted against `5cca159`. Four findings were P0; all four are merged.
       a recorded GitHub review, and the ruleset requires zero approvals, no
       code-owner review and no last-push approval. **Owner: repository admin —
       see section D.** **Small.**
-- [ ] **9. Split the trust kernel before adding to it.** `checks.py` is 3,411
-      lines and `evidence.py` is 3,784. The decision not to split was taken when
+- [ ] **9. Split the trust kernel before adding to it.** `checks.py` is 3,447
+      lines and `evidence.py` is 3,894. The decision not to split was taken when
       they totalled about 4,700, and the ordering defect above crossed those
       module boundaries. Characterization tests first, then separate integrity
       admission, ordering, approvals, receipts, ledger handling and the check

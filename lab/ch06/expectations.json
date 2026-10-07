@@ -121,15 +121,17 @@
         },
         "required_reasons": {
           "other": [
-            "NO_COLLECTOR_KEYS"
+            "NO_COLLECTOR_KEYS",
+            "INTEGRITY_STREAM_CLOSE_UNVERIFIED"
           ],
           "target": [
-            "NO_COLLECTOR_KEYS"
+            "NO_COLLECTOR_KEYS",
+            "INTEGRITY_STREAM_CLOSE_UNVERIFIED"
           ]
         }
       },
       "condition": "missing_prerequisite",
-      "mutation": "Score the intact stream without the collector trust store."
+      "mutation": "Score the intact stream without the collector trust store, so its closing record cannot be verified either."
     },
     "reordered": {
       "affected_sessions": [],
@@ -250,29 +252,41 @@
         "target"
       ],
       "baseline": {
-        "affected_sessions": [],
-        "issues": [],
+        "affected_sessions": [
+          "other",
+          "target"
+        ],
+        "issues": [
+          "stream_not_closed"
+        ],
         "records_reordered": 0,
-        "status": "verified_prefix"
+        "status": "inadmissible"
       },
       "cohaera": {
-        "ch06_fired_sessions": [],
+        "ch06_fired_sessions": [
+          "other",
+          "target"
+        ],
         "ch06_status": {
           "other": "degraded",
           "target": "degraded"
         },
         "evidence_status": {
-          "other": "chained_unsigned",
-          "target": "verified_prefix"
+          "other": "inadmissible",
+          "target": "inadmissible"
         },
         "required_reasons": {
+          "other": [
+            "INTEGRITY_STREAM_END_MISSING"
+          ],
           "target": [
+            "INTEGRITY_STREAM_END_MISSING",
             "INTEGRITY_SIGNATURE_COVERS_PREFIX_ONLY"
           ]
         }
       },
-      "condition": "incomplete",
-      "mutation": "Remove the final signed record."
+      "condition": "manipulated",
+      "mutation": "Remove the final signed record, which closed the stream (E30)."
     },
     "unsupported": {
       "affected_sessions": [

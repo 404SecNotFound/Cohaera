@@ -69,6 +69,7 @@ from cohaera.evidence import (
     R_NO_STREAM_LEDGER,
     R_SEQUENCE_GAP,
     R_SEQUENCE_REPLAY,
+    R_STREAM_NOT_CLOSED,
     ROLE_APPROVAL,
     ROLE_COLLECTOR,
     TRUST_STORE_SCHEMA,
@@ -265,12 +266,12 @@ def test_the_sidecar_is_exactly_what_the_reference_signer_emits():
     records = _records(7)
     reference = collector_sign.sign_stream(records, "stream-a", SEED, PAIR.key_id)
     signer = StreamSigner("stream-a", SEED, PAIR.key_id)
-    assert [signer.sign(r, final=(i == 6)) for i, r in enumerate(records)] == reference
+    assert [signer.sign(r, attest=(i == 6)) for i, r in enumerate(records)] == reference
 
     reference = collector_sign.sign_stream(records, "stream-a", SEED, PAIR.key_id,
                                            sign_every=3)
     signer = StreamSigner("stream-a", SEED, PAIR.key_id, sign_every=3)
-    assert [signer.sign(r, final=(i == 6)) for i, r in enumerate(records)] == reference
+    assert [signer.sign(r, attest=(i == 6)) for i, r in enumerate(records)] == reference
 
 
 def test_a_restart_from_state_continues_the_chain():
@@ -302,8 +303,10 @@ def test_a_restart_from_state_continues_the_chain():
     # NO_STREAM_LEDGER says this run kept no memory between runs. It is a
     # statement about the verifier's configuration, not about the chain, and
     # the whole-stream case above carries it too.
-    assert set(batch_two.codes) - {R_NO_STREAM_LEDGER} == {R_JOINED_MIDSTREAM}, \
-        batch_two.codes
+    # INTEGRITY_STREAM_NOT_CLOSED likewise: nothing closed this stream, and a
+    # batch boundary is not a close (E30).
+    assert set(batch_two.codes) - {R_NO_STREAM_LEDGER, R_STREAM_NOT_CLOSED} == {
+        R_JOINED_MIDSTREAM}, batch_two.codes
     assert batch_two.signatures_verified == 6
 
 
@@ -323,7 +326,7 @@ def test_state_round_trips_through_the_file_helpers(tmp_path):
 def test_the_state_carries_no_secret():
     state = StreamSigner("stream-a", SEED, PAIR.key_id).state()
     assert SEED.hex() not in json.dumps(state)
-    assert set(state) == {"scheme", "stream_id", "key_id", "next_seq", "head"}
+    assert set(state) == {"scheme", "stream_id", "key_id", "next_seq", "head", "closed"}
 
 
 def _good_state() -> dict:
@@ -431,7 +434,7 @@ def test_a_sampled_stream_is_complete_only_if_the_last_record_is_marked_final():
     assert _status(signed) == EVIDENCE_VERIFIED_PREFIX
 
     signer = StreamSigner("stream-a", SEED, PAIR.key_id, sign_every=100)
-    signed = [signer.sign(r, final=(i == 149)) for i, r in enumerate(records)]
+    signed = [signer.sign(r, attest=(i == 149)) for i, r in enumerate(records)]
     assert [r["integrity"]["seq"] for r in signed if "sig" in r["integrity"]] == [0, 100, 149]
     assert _status(signed) == EVIDENCE_VERIFIED_COMPLETE
 
