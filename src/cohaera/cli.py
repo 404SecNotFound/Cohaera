@@ -464,14 +464,22 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
     approvals: ApprovalLedger | None = None
     if args.seen_approvals:
         try:
-            approvals = ApprovalLedger(Path(args.seen_approvals), limits=limits)
+            # EH-04. Under the same exclusive lock, held for the same reason
+            # and for the same span, as the stream ledger above: two runs
+            # sharing a nonce ledger both read a nonce as unspent otherwise.
+            approvals = stack.enter_context(
+                ApprovalLedger.locked(Path(args.seen_approvals), limits))
         except (LedgerError, OSError) as exc:
             _err(f"[cohaera] approval ledger rejected: "
                  f"{sanitise_display(str(exc), 400)}")
             return EXIT_ERROR
         _err(f"[cohaera] approval ledger "
              f"{sanitise_display(args.seen_approvals, 160)}: "
-             f"{approvals.size} nonce(s) previously spent")
+             f"{approvals.size} nonce(s) previously spent, "
+             f"generation {approvals.generation}"
+             + ("" if approvals.locked_exclusively else
+                " (WARNING: no file locking on this host, so concurrent runs "
+                "sharing this ledger cannot exclude each other)"))
     approvals_known = approvals.size if approvals is not None else 0
     if args.require_signed_approvals and not any(
             k.authorises(ROLE_APPROVAL) for k in keys.keys.values()):

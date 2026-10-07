@@ -1675,6 +1675,50 @@ def test_evasion_29_hidden_turns_inside_one_logged_delegation():
 # the number this file exists to keep honest.
 # =====================================================================
 
+def test_evasion_30_truncate_the_end_of_a_signed_stream():
+    """E30. Cut the last records off a signed stream and nothing says so.
+
+    The chain proves nothing is missing IN BETWEEN and the signatures prove
+    the collector wrote what remains. Neither says how long the stream was
+    meant to be. Ten records signed, seven delivered: no gap, no break,
+    every signature verifies, ``attested`` and ``signature_covers_final``
+    both true, and the codes are byte-identical to the untouched stream's.
+
+    This pins the CURRENT behaviour. The remedy is a signed end-of-stream or
+    heartbeat record carrying the record count and the collector's clock, and
+    nothing emits one yet; when something does, this test fails and EVASION.md
+    E30 gets updated. See docs/THREAT-MODEL.md section 8, which used to claim
+    the chain detected truncation.
+    """
+    secret = bytes.fromhex("30" * 32)
+    public = ed25519.public_key(secret)
+    key_id = key_id_for(public)
+    store = TrustStore.from_obj(keys_document(public, key_id))
+    records = [{"event_type": "tool_start", "session_id": "s1",
+                "timestamp": 1000.0 + i, "span_id": f"sp{i}",
+                "tool_name": "alert_read", "data": {}} for i in range(10)]
+    signed = sign_stream(records, "stream-a", secret, key_id)
+
+    def score(batch):
+        v = StreamVerifier(keys=store)
+        for raw in batch:
+            e = Event(raw=raw)
+            v.observe(e.raw, e.integrity, "s1")
+        v.finalise()
+        return v.for_session("s1")
+
+    whole = score(signed)
+    assert whole.attested and whole.signature_covers_final, "fixture is broken"
+
+    cut = score(signed[:7])                            # the whole attack
+    assert cut.attested, "tail truncation is now detected; update EVASION.md E30"
+    assert cut.signature_covers_final
+    assert not cut.inadmissible
+    assert set(cut.codes) == set(whole.codes), (
+        "a truncated stream now carries a code the whole one does not; "
+        "update EVASION.md E30")
+
+
 TIERS = {"T0", "T1", "T2"}
 NOT_AN_ADVERSARY = "n/a"
 NO_TIER = "—"
