@@ -20,6 +20,53 @@ reports recall is a marketing document.
 
 ### Added
 
+- **`cohaera.emit`, the producer side of the evidence format.** Three external
+  reviews concluded that the signed, chained telemetry with receipts and bound
+  approvals is the differentiated part of this project, and nothing emitted
+  it. The new subpackage is the collector-side library: `KeyPair` and private
+  key files with restrictive modes, `StreamSigner` that attaches a
+  `cohaera.integrity:1` sidecar one record at a time and resumes a chain from
+  saved state after a restart, `ApprovalIssuer` that mints `cohaera.approval:1`
+  objects with a fresh nonce and a signature the verifier accepts, receipt
+  helpers that agree byte for byte with `tools/receipt_adapters.py`, a JSONL
+  writer, and `python -m cohaera.emit keygen | sign | issue-approval`. Zero
+  runtime dependencies, nothing in `emit/` is imported by the verifier side,
+  and the guide in `docs/EMITTING.md` ends with the command sequence that
+  produces a `verified_complete` verdict, which was run rather than described.
+
+- **Duplicate delivery is seen and discounted.** Nothing read `event_id`, so a
+  session delivered twice (ordinary at-least-once transport) gained a CH05
+  finding, double counted in CH02 and diluted CH03 from 0.35 to 0.02 at eight
+  copies. A record whose `event_id` matches an earlier one with the same
+  content (timestamp and sidecar set aside) is dropped from the session view
+  and counted; an id reused for different content is kept and flagged, because
+  the repository's own fixtures derive ids from the clock and an id-only rule
+  made a consequential call vanish from CH04. New features
+  `duplicate_event_count` and `event_id_conflicts`, coverage reasons
+  `DUPLICATE_DELIVERY_DROPPED` and `EVENT_ID_REUSED_FOR_DIFFERENT_RECORD`.
+
+- **Streams are pinned to the key that first attested them.** Any
+  collector-role key could sign any `stream_id`, including taking over
+  another collector's stream part-way through, while EVIDENCE-TRUST promised
+  one key reference per stream. A later verified signature under a different
+  key is `INTEGRITY_STREAM_KEY_CHANGED`, inadmissible, unless the trust store
+  records the new key as replacing the old one. Transitions are listed in the
+  integrity block as `stream_key_changes`.
+
+- **A receipt's declared assurance now caps its trust.** `EffectReceipt`
+  dropped the `assurance` and `scope` fields the adapters write, so a
+  `client_claimed` Message-ID was treated like one the provider returned. Both
+  are parsed and emitted, and the trust tier can no longer exceed what the
+  declared assurance supports.
+
+- **`docs/REFERENCE.md`**, one page for the input format, output fields and
+  their null semantics, exit codes, environment variables and every `cohaera
+  score` flag; the exit codes are also in `cohaera score --help`.
+
+- **Approval signing is explicit about its coverage.** `Approval.as_dict`
+  emits `signed_fields`; EVIDENCE-TRUST documents which fields the issuer
+  signature does not cover and why the wire format was kept.
+
 - **Approvals can now be signed, bounded and spent once** — EVASION.md E26, half
   closed. An approval was previously plain JSON on a stream the agent writes:
   rewriting one field, `subject.span_id`, moved a real approval onto a call it
@@ -152,6 +199,57 @@ reports recall is a marketing document.
   deduplicating on those IDs will see all-new ones after this release.
 
 ### Fixed
+
+- **A key's validity window and the freshness bound could be skipped with a
+  string clock.** The stream verifier read the record timestamp with a parser
+  that ignored strings while the validator accepted `"4990.0"`, so a retired
+  key signing records dated as strings got `KEY_WINDOW_UNCHECKED` instead of
+  `INTEGRITY_KEY_EXPIRED`. Both now read the clock the same way.
+
+- **The approval signing input could be re-bound.** Fields are joined with
+  `\x1f` and identity fields accepted `\x1f` inside values, so one signature
+  verified for two different bindings. Control characters are refused in every
+  identity field and nonce; the wire format is unchanged.
+
+- **The approval ledger had no lock and no generation guard,** so two
+  concurrent runs both saw a nonce as unspent. It now locks, guards and fsyncs
+  the way the stream ledger does.
+
+- **CH02's negation window crossed sentence ends.** "No issues found, nothing
+  was skipped. I sent the email to Bob." reported a critical concealment gap.
+  The span now ends at sentence punctuation.
+
+- **CLI edges.** A signature flag without its policy file was silently
+  ignored (now refused, with or without `--require-signed-policy`); a missing
+  baseline was reported as a signature failure; `--reject-log` pointing at a
+  directory passed the writability probe and failed after the ledgers were
+  saved; the quarantine ledger silently stopped at 1,000 rows (now a
+  `_truncated` marker and `rejects_omitted` in the summary); bidirectional
+  override, isolate, zero-width and line-separator characters reached stderr
+  unescaped.
+
+- **`tools/policy_sign.py`'s warning for a key holding both the collector and
+  policy roles could never print.**
+
+- **Hex digests were validated with `int(x, 16)`,** which accepts `0x`, `_`,
+  whitespace and Unicode digits. Strict 64-character lowercase hex now.
+
+- **Documentation said things the code did not.** The strategy was split
+  across four documents that disagreed; DIRECTION.md is now the only one and
+  the rest are dated records under `docs/archive/`. CITATION.cff, the
+  approval-replay demo, OUTSTANDING, THREAT-MODEL and EVIDENCE-TRUST described
+  approvals without signatures, nonces or a ledger; they now describe the
+  opt-in controls and the still-exposed default. SECURITY.md counted 22
+  evasions (28), content/README counted 5 hunt rules (6), eval/README counted
+  104 sample sessions (184), the issue template asked for a `--version` flag
+  that does not exist, and the README reported tests "passing" for a count
+  that is tests collected. Every one of those numbers is now derived by
+  `tools/readme_facts.py`.
+
+- **Tail truncation is now stated rather than claimed away.** Cutting records
+  off the end of a signed stream is undetected; THREAT-MODEL said the chain
+  detected truncation. It is EVASION.md E30, open, with the end-of-stream
+  record as the designed remedy, and a test pins the current behaviour.
 
 - **`--seen-approvals` and `--require-signed-approvals` did nothing.** Both
   were parsed and read by nothing: the ledger was never opened and the flag
@@ -881,7 +979,7 @@ including the three recommended remedies that were declined.
   of COH-R12 is the one exception, and it reached the card only as a side
   effect of the `producer_flag` ablation rather than by design; see
   `eval/README.md`.
-- **28 constructed evasions are catalogued and 26 still work**, on purpose:
+- **29 constructed evasions are catalogued and 27 still work**, on purpose:
   `tests/test_evasion.py` asserts they do, so that closing one without updating
   the catalogue fails the build.
 - **Cohaera still holds the whole run in memory.** `load` materialises every

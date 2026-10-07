@@ -12,7 +12,7 @@ traffic. Its detection numbers come from a synthetic corpus written by its own
 author; the one run against an outside corpus
 ([EXTERNAL-RESULTS.md](docs/EXTERNAL-RESULTS.md)) detected nothing and could not
 bring a single check to `evaluated`.
-[EVASION.md](EVASION.md) catalogues 28 constructed ways to defeat its checks, 26
+[EVASION.md](EVASION.md) catalogues 29 constructed ways to defeat its checks, 27
 of which currently work.
 
 The single most important thing to know is not a vulnerability, it is a design
@@ -74,7 +74,7 @@ Credit in the advisory and in [EVASION.md](EVASION.md) unless you ask otherwise.
 Not because these do not matter, but because they are **already written down**
 and a report restating them tells nobody anything new:
 
-- **Anything in [EVASION.md](EVASION.md).** 28 constructed evasions, each with
+- **Anything in [EVASION.md](EVASION.md).** 29 constructed evasions, each with
   an executable test that passes while the case behaves as the file records it.
   A *new* evasion is very much in scope. Adding detail to a catalogued one — a cheaper variant,
   a case where the stated cost is wrong — is welcome as an issue.

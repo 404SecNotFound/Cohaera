@@ -211,7 +211,7 @@ The synthetic evaluation reports:
 |---|---:|
 | False positives per 1000 **benign** sessions | **420.4** |
 | Projected precision at 0.1% attack prevalence | **0.238%** |
-| Ways to defeat it | **28** catalogued, of which **26** still work |
+| Ways to defeat it | **29** catalogued, of which **27** still work |
 | External result | 375 third-party attack sessions scored, zero detections |
 
 The result is a layer mismatch found by measurement: those third-party traces
@@ -228,12 +228,12 @@ the boundary in full.
 
 Repository controls are substantial but do not replace external validation:
 
-- Tests, 1311 collected across unit, hostile-input, content, lab, and
+- Tests, 1508 collected across unit, hostile-input, content, lab, and
   regression coverage. A few skip by design where their data is absent, such
   as commit history on a shallow clone.
 - Sigma content pack, 15 rules, validated and conformance-tested against real
   emitted fields.
-- Adversarial self-test, 34 rows in [EVASION.md](EVASION.md): 28 constructed
+- Adversarial self-test, 35 rows in [EVASION.md](EVASION.md): 29 constructed
   evasions and 6 remedies, so the 34 here and the 28 in the table above are
   the same catalogue counted with and without the remedy rows.
 

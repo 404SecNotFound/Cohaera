@@ -11,7 +11,7 @@ later closes one, the test fails and this file gets updated.
 
 Run it: `PYTHONPATH=src python3 tests/test_evasion.py`
 
-**Current state: 26 of 28 constructed evasions still work.** 2 of them, E02 and E21, are **closed** — and closing E02 opened two narrower ones, E18 and E19, while
+**Current state: 27 of 29 constructed evasions still work.** 2 of them, E02 and E21, are **closed** — and closing E02 opened two narrower ones, E18 and E19, while
 the P1 evidence-trust work opened E20 and E22. All four are in the table, because
 a fix that quietly relocates a weakness is worse than no fix. E22 is the clearest
 example of the pattern: the seen-stream ledger closes replay inside the freshness
@@ -55,7 +55,7 @@ about the half that gives the evasion its name: an attacker who influences which
 sessions are *collected as benign* defines normal, and a signature over the
 resulting file says only that nobody edited it afterwards.
 
-The count goes up when a weakness is found, not only when one is fixed. 26
+The count goes up when a weakness is found, not only when one is fixed. 27
 working evasions is a worse-looking number than the 16 this file started with,
 and a more honest one. (That sentence used to spell the number in words, and it
 read "Twenty" for a revision in which the tracked count was 19 — the same drift
@@ -1448,8 +1448,8 @@ regression tests.
 | CH05 | Orphan terminal events were constructed with `result="success"` and never flagged. | An irreversible action appearing from nowhere was invisible | **Fixed.** `orphan_end` state, reported by CH05. |
 
 The review's C-05 finding, no executable test suite, was accurate at revision
-`45d3bf8`. There are now 1311 tests: unit, hostile-input, content conformance and
-34 evasion characterizations, plus a seeded fuzz smoke test in CI.
+`45d3bf8`. There are now 1508 tests: unit, hostile-input, content conformance and
+35 evasion characterizations, plus a seeded fuzz smoke test in CI.
 
 ### What is still open from the third review
 

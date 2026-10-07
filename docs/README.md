@@ -5,7 +5,7 @@
 
 # Documentation map
 
-37 documents, about 122,000 words. This page exists so you never have to
+37 documents, about 124,000 words. This page exists so you never have to
 guess which one answers your question.
 
 Each row says what question the document answers, not what it contains.
@@ -24,6 +24,7 @@ Each row says what question the document answers, not what it contains.
 | Document | The question it answers |
 |---|---|
 | [REFERENCE](REFERENCE.md) | What fields does it read, what does the output record contain, what do the exit codes mean, and what does every `cohaera score` flag do? |
+| [EMITTING](EMITTING.md) | How does a runtime or collector emit telemetry Cohaera can verify, with `cohaera.emit`, from key generation to a `verified_complete` verdict? |
 | [EVIDENCE-TRUST](EVIDENCE-TRUST.md) | What are the wire formats, from collector integrity through effect receipts, approval binding, the trust store and signed policy files, and what does each actually establish? |
 | [content/README](../content/README.md) | What SIEM content ships, what tier is each rule, and what does each rule mean? |
 | [content/aie/README](../content/aie/README.md) | How would the same detections be built as LogRhythm AIE rules, and what is the build-versus-buy comparison? |
@@ -34,7 +35,7 @@ Each row says what question the document answers, not what it contains.
 
 | Document | The question it answers |
 |---|---|
-| [EVASION](../EVASION.md) | How do I defeat this? 28 constructed evasions, 26 still working, each with an executable test that passes while the evasion does. |
+| [EVASION](../EVASION.md) | How do I defeat this? 29 constructed evasions, 27 still working, each with an executable test that passes while the evasion does. |
 | [THREAT-MODEL](THREAT-MODEL.md) | What does it trust, and what survives an attacker who controls the telemetry? |
 | [SECURITY](../SECURITY.md) | How do I report something, what is in scope, and what does the supply chain look like? |
 | [EXTERNAL-RESULTS](EXTERNAL-RESULTS.md) | It was run against somebody else's data. What happened? Zero detections across 375 attack sessions, and a computed bound on what any structure-reading detector could have scored there. |
