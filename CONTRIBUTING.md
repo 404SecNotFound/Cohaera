@@ -46,7 +46,7 @@ The individual commands, if you want them one at a time:
 ```bash
 python -m pytest tests/ -q          # ~1m50s cold
 python tests/test_evasion.py        # the catalogued evasions must still work
-ruff check src tests eval tools
+ruff check src tests eval tools lab demo
 python tools/readme_facts.py --check
 python lab/local/run.py --check
 ```
@@ -167,7 +167,7 @@ issue before the pull request.
 
 ## Style
 
-`ruff check src tests eval tools` is the gate; the rule set is pinned in
+`ruff check src tests eval tools lab demo` is the gate; the rule set is pinned in
 `pyproject.toml`. Beyond that:
 
 - Comments explain **why**, and especially why something looks wrong. The

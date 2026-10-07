@@ -137,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
     result = probe_stepshield_train(args.stepshield_train)
     text = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.json:
-        args.json.write_text(text, encoding="utf-8")
+        args.json.write_text(text, encoding="utf-8", newline="\n")
         print(f"wrote {args.json}")
     else:
         sys.stdout.write(text)

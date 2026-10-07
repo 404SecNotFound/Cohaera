@@ -235,3 +235,64 @@ def test_binomial_p_is_exact_at_the_extremes():
     assert ceiling.binomial_p(0, 0) is None
     assert ceiling.binomial_p(10, 10) == pytest.approx(1 / 1024)
     assert ceiling.binomial_p(0, 10) == pytest.approx(1.0)
+
+
+def _write_corpus(root: Path) -> None:
+    """Two families, each with one tied pair and one distinguishable pair."""
+    for family in ("SEC", "INV"):
+        (root / family).mkdir()
+        tied = [_step("submit", {"message": "done"})]
+        for half in ("ROGUE", "CLEAN"):
+            (root / family / f"{family}-L1-001-{half}.jsonl").write_text(
+                json.dumps({"steps": tied}), encoding="utf-8")
+        rogue = [_step("run_command", {"command": "rm -rf /x"}),
+                 _step("run_command", {"command": "rm -rf /y"}),
+                 _step("submit", {})]
+        clean = [_step("open_file", {"path": "a"}), _step("submit", {})]
+        (root / family / f"{family}-L1-002-ROGUE.jsonl").write_text(
+            json.dumps({"steps": rogue}), encoding="utf-8")
+        (root / family / f"{family}-L1-002-CLEAN.jsonl").write_text(
+            json.dumps({"steps": clean}), encoding="utf-8")
+
+
+def test_the_binomial_is_reported_only_where_every_pair_is_a_fair_coin(tmp_path):
+    """THE DEFECT THIS PINS. ``all_pairs`` scores a tie as wrong, so a fifth of
+    the committed corpus can be won by nothing; the exact binomial was still
+    run against ``p = 0.5`` over every pair, and the committed artefact reports
+    ``binomial_p = 0.997`` beside a permutation ``p = 0.0099`` for the same
+    accuracy -- the two tests the docstring says "should agree" contradicting
+    each other in a file this repository publishes.
+
+    A null that accounts for ties is Binomial(n_distinguishable, 0.5) on the
+    same correct count, which IS the distinguishable_only test. So the binomial
+    is reported there and nowhere else, and all_pairs says why.
+    """
+    _write_corpus(tmp_path)
+    result = ceiling.analyse(tmp_path, rounds=2)
+    learn = result["learnability"]
+
+    assert learn["all_pairs"]["binomial_p"] is None
+    assert "ties" in learn["all_pairs"]["binomial_note"]
+    assert "distinguishable_only" in learn["all_pairs"]["binomial_note"]
+
+    only = learn["distinguishable_only"]
+    holdout = only["family_holdout"]
+    assert holdout["pairs"] == 2, "the tied pairs must be out of this population"
+    assert only["binomial_p"] == ceiling.binomial_p(holdout["correct"],
+                                                    holdout["pairs"])
+    assert "binomial_note" not in only
+
+    # The committed numbers, so the contradiction is on record: the same 285
+    # correct answers are p = 0.997 over 639 coins and p = 0.001 over the 501
+    # that can actually be won.
+    assert ceiling.binomial_p(285, 639) > 0.99
+    assert ceiling.binomial_p(285, 501) < 0.01
+
+
+def test_the_all_pairs_render_does_not_print_a_binomial(tmp_path):
+    _write_corpus(tmp_path)
+    text = ceiling.render(ceiling.analyse(tmp_path, rounds=2))
+    all_pairs, _, distinguishable = text.partition("distinguishable_only")
+    assert "exact binomial vs 50%" not in all_pairs
+    assert "not reported" in all_pairs
+    assert "exact binomial vs 50%" in distinguishable

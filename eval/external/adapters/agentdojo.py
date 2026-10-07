@@ -302,13 +302,56 @@ def _result_text(message: dict[str, Any]) -> str:
     return text[:MAX_RESULT_CHARS]
 
 
-def _call_key(call: dict[str, Any]) -> str:
-    """A stable identity for pairing an assistant's call with its result."""
+def _call_id(call: dict[str, Any]) -> str | None:
+    """The call's own id, or None when the trace did not record one."""
     cid = call.get("id")
-    if isinstance(cid, str) and cid:
-        return cid
-    function = call.get("function")
-    return f"fn:{function}" if isinstance(function, str) else "fn:?"
+    return cid if isinstance(cid, str) and cid else None
+
+
+class _OpenCalls:
+    """Calls awaiting a result, paired by id where there is one and in FIFO
+    order per function name where there is not.
+
+    ``FunctionCall.id`` is optional in AgentDojo's own model, and a provider
+    that does not issue call ids leaves it null on every call. The first
+    version keyed an id-less call as ``fn:<name>``, which is one slot per
+    function: two calls to the same function in one assistant turn overwrote
+    each other, the first result attached to the SECOND call's span and the
+    second result was dropped as unmatched. On a benign trace that is one
+    unpaired call for CH05 and one invented ``tool_end`` on the wrong span for
+    CH02 -- two findings manufactured by the adapter out of a trace in which
+    every call was answered, in order.
+
+    AgentDojo appends tool results in the order the calls were made (the
+    runtime iterates ``tool_calls`` and appends one ``ChatToolResultMessage``
+    each), so first-in-first-out per function name is the pairing the file
+    actually encodes when no id says otherwise.
+    """
+
+    def __init__(self) -> None:
+        self._by_id: dict[str, tuple[str, str]] = {}
+        self._by_function: dict[str, list[tuple[str, str]]] = {}
+
+    def add(self, call: dict[str, Any], span: str, function: str) -> None:
+        cid = _call_id(call)
+        if cid is not None:
+            self._by_id[cid] = (span, function)
+        else:
+            self._by_function.setdefault(function, []).append((span, function))
+
+    def take(self, cid: str | None, function: Any) -> tuple[str, str] | None:
+        """The call this result answers, removed from the open set, or None."""
+        if cid is not None:
+            return self._by_id.pop(cid, None)
+        if not isinstance(function, str):
+            return None
+        queue = self._by_function.get(function)
+        if not queue:
+            return None
+        return queue.pop(0)
+
+    def __len__(self) -> int:
+        return len(self._by_id) + sum(len(q) for q in self._by_function.values())
 
 
 def adapt_trace(record: Any, *, source_name: str = "<memory>",
@@ -342,7 +385,7 @@ def adapt_trace(record: Any, *, source_name: str = "<memory>",
     notes: list[str] = []
     ts = EPOCH
     scanner_marked_any = False
-    open_calls: dict[str, tuple[str, str]] = {}   # key -> (span, tool name)
+    open_calls = _OpenCalls()
     last_assistant_text: str | None = None
     dangling_before_result = 0
 
@@ -376,7 +419,6 @@ def adapt_trace(record: Any, *, source_name: str = "<memory>",
                     function = raw_call.get("function")
                     if not isinstance(function, str) or not function:
                         continue
-                    key = _call_key(raw_call)
                     span = f"sp-{sid}-{index}-{offset}"
                     start_data: dict[str, Any] = {"action": "invoke_tool"}
                     args = raw_call.get("args")
@@ -389,16 +431,16 @@ def adapt_trace(record: Any, *, source_name: str = "<memory>",
                     events.append(cim_event(sid, ts, "tool_start", source=CORPUS,
                                             tool=function, span=span,
                                             **start_data))
-                    open_calls[key] = (span, function)
+                    open_calls.add(raw_call, span, function)
             ts += STEP_SECONDS
             continue
 
         if role == "tool":
             raw_call = message.get("tool_call")
             call = raw_call if isinstance(raw_call, dict) else {}
-            key = _call_key({"id": message.get("tool_call_id"),
-                             "function": call.get("function")})
-            span_and_name = open_calls.pop(key, None)
+            span_and_name = open_calls.take(
+                _call_id({"id": message.get("tool_call_id")}),
+                call.get("function"))
             if span_and_name is None:
                 # A result with no start. Real AgentDojo does not produce this;
                 # a truncated or hand-edited file can. Counted rather than

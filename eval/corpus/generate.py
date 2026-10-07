@@ -1864,7 +1864,15 @@ def manifest_for(family: Family, condition: str) -> dict:
 
 
 def write(out_dir: Path, seed: int = SEED) -> dict[str, object]:
-    """Write telemetry, labels and manifests for every condition."""
+    """Write telemetry, labels and manifests for every condition.
+
+    Every file is written with ``newline="\\n"``. The whole directory is
+    digested into the evaluation card (``run_eval.corpus_digest``), and text
+    mode's default newline translation made that digest -- and therefore the
+    card -- a function of the host's line-ending convention: a Windows run
+    produced CRLF files, a different digest, and a card diff for a corpus that
+    had not changed.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "manifests").mkdir(exist_ok=True)
     summary: dict[str, object] = {"seed": seed, "conditions": {}}
@@ -1874,11 +1882,11 @@ def write(out_dir: Path, seed: int = SEED) -> dict[str, object]:
         events = [e for s in specs for e in s.events]
         (out_dir / f"{condition}.jsonl").write_text(
             "".join(json.dumps(e, sort_keys=True) + "\n" for e in events),
-            encoding="utf-8",
+            encoding="utf-8", newline="\n",
         )
         (out_dir / f"{condition}.labels.jsonl").write_text(
             "".join(json.dumps(s.label(), sort_keys=True) + "\n" for s in specs),
-            encoding="utf-8",
+            encoding="utf-8", newline="\n",
         )
 
         cond_dir = out_dir / "manifests" / condition
@@ -1887,7 +1895,7 @@ def write(out_dir: Path, seed: int = SEED) -> dict[str, object]:
             (cond_dir / f"{family.name}.json").write_text(
                 json.dumps(manifest_for(family, condition), indent=2, sort_keys=True)
                 + "\n",
-                encoding="utf-8",
+                encoding="utf-8", newline="\n",
             )
         # One combined manifest, because the CLI takes a single --tool-manifest
         # and a collector watching several agents needs the union.
@@ -1900,7 +1908,8 @@ def write(out_dir: Path, seed: int = SEED) -> dict[str, object]:
         for family in FAMILIES:
             combined["tools"].update(manifest_for(family, condition)["tools"])
         (cond_dir / "_all.json").write_text(
-            json.dumps(combined, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            json.dumps(combined, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8", newline="\n",
         )
 
         # The keys the second collector stream was signed under, written out of
@@ -1909,7 +1918,8 @@ def write(out_dir: Path, seed: int = SEED) -> dict[str, object]:
         # declares, which the telemetry cannot talk them out of.
         (cond_dir / "trust-store.json").write_text(
             json.dumps(trust_store_for(condition, _ROTATION_AT[condition]),
-                       indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                       indent=2, sort_keys=True) + "\n",
+            encoding="utf-8", newline="\n")
 
         attacks = sum(1 for s in specs if s.is_attack)
         summary["conditions"][condition] = {
@@ -1944,10 +1954,10 @@ def write_sample(specs: list[SessionSpec], out_dir: Path) -> int:
             chosen.append(spec)
     (out_dir / "sample.jsonl").write_text(
         "".join(json.dumps(e, sort_keys=True) + "\n"
-                for s in chosen for e in s.events), encoding="utf-8")
+                for s in chosen for e in s.events), encoding="utf-8", newline="\n")
     (out_dir / "sample.labels.jsonl").write_text(
         "".join(json.dumps(s.label(), sort_keys=True) + "\n" for s in chosen),
-        encoding="utf-8")
+        encoding="utf-8", newline="\n")
     return len(chosen)
 
 

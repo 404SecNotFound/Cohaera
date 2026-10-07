@@ -25,6 +25,7 @@ makes the wheel a function of the build rather than of the source.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -45,9 +46,23 @@ print(f"PEP 561 marker present at {marker}")
 """
 
 
+def _venv_bin(venv: Path, name: str) -> Path:
+    """The path of an executable inside a virtual environment, per platform.
+
+    ``venv/bin/pip`` on POSIX; ``venv\\Scripts\\pip.exe`` on Windows, where the
+    hard-coded POSIX layout made this gate fail before it had built anything.
+    """
+    if os.name == "nt":
+        return venv / "Scripts" / f"{name}.exe"
+    return venv / "bin" / name
+
+
 def _run(cmd: list[str] | str, *, cwd: Path = REPO, **kw: object
          ) -> subprocess.CompletedProcess:
+    # encoding named: `text=True` alone decodes with the console code page on
+    # Windows, and pip and the CLI both emit UTF-8.
     proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace",
                           shell=isinstance(cmd, str), check=False, **kw)  # type: ignore[call-overload]
     if proc.returncode != 0:
         sys.stderr.write(proc.stdout + proc.stderr)
@@ -76,7 +91,7 @@ def main() -> int:
         # local gate.
         _run([sys.executable, "-m", "build", "--outdir", str(dist), str(REPO)],
              cwd=work,
-             env={**__import__("os").environ, "SOURCE_DATE_EPOCH": stamp})
+             env={**os.environ, "SOURCE_DATE_EPOCH": stamp})
 
         wheels = sorted(dist.glob("*.whl"))
         if len(wheels) != 1:
@@ -89,7 +104,7 @@ def main() -> int:
         print("installing into a clean virtual environment...")
         venv = work / "venv"
         _run([sys.executable, "-m", "venv", str(venv)])
-        pip = venv / "bin" / "pip"
+        pip = _venv_bin(venv, "pip")
         _run([str(pip), "install", "-q", str(wheels[0])])
 
         frozen = _run([str(pip), "list", "--format=freeze"]).stdout.split()
@@ -103,7 +118,7 @@ def main() -> int:
         print("installed with zero runtime dependencies")
 
         print("scoring a fixture with the INSTALLED entry point...")
-        scored = _run([str(venv / "bin" / "cohaera"), "score",
+        scored = _run([str(_venv_bin(venv, "cohaera")), "score",
                        "tests/fixtures/suspect.jsonl",
                        "--baseline", "tests/fixtures/benign.jsonl"])
         rows = [json.loads(line) for line in scored.stdout.splitlines() if line]
@@ -116,7 +131,7 @@ def main() -> int:
             raise SystemExit("a verdict carries no verdict_id")
         print(f"{len(rows)} verdict record(s) emitted from the installed wheel")
 
-        _run([str(venv / "bin" / "python"), "-c", PY_TYPED_PROBE])
+        _run([str(_venv_bin(venv, "python")), "-c", PY_TYPED_PROBE])
 
     print("wheel gate passed")
     return 0

@@ -62,6 +62,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -69,9 +70,6 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO))
-sys.path.insert(0, str(HERE))
-
-import scenarios  # noqa: E402
 
 from cohaera import (  # noqa: E402
     __version__,
@@ -88,6 +86,11 @@ from cohaera.evidence import (  # noqa: E402
     chain_step,
     signing_input,
 )
+
+# Imported by its path from the repository root rather than as a bare
+# `scenarios` off a sys.path entry, so that the same name resolves for mypy
+# (which checks this file under `lab.local.run`) and at runtime.
+from lab.local import scenarios  # noqa: E402
 from tools.collector_sign import key_id_for, sign_stream  # noqa: E402
 
 # A LAB KEY. It is committed on purpose and it is worth nothing: the whole
@@ -123,8 +126,16 @@ def _sha256(path: Path) -> str:
 
 
 def _write(path: Path, text: str) -> Path:
+    """Write exactly these bytes, on every platform.
+
+    Not ``write_text``. Text mode translates ``\\n`` to the platform's line
+    ending, so on Windows every input file came out with CRLF, every digest in
+    ``inputs`` moved, and the committed manifest -- written on a POSIX host --
+    could never match. The files written here are hashed and compared as
+    bytes, so they are written as bytes.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    path.write_bytes(text.encode("utf-8"))
     return path
 
 
@@ -165,8 +176,10 @@ def _score(work: Path, telemetry: Path, *, store: Path,
     env.pop(SECRET_ENV, None)
     if secret is not None:
         env[SECRET_ENV] = secret
-    proc = subprocess.run(argv, capture_output=True, text=True, env=env,
-                          cwd=str(work), timeout=300, check=False)
+    # encoding named, because `text=True` alone decodes with the console
+    # code page on Windows and the verdict JSON is UTF-8 wherever it is run.
+    proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                          env=env, cwd=str(work), timeout=300, check=False)
     records = [json.loads(line) for line in proc.stdout.splitlines()
                if line.strip()]
     return proc.returncode, records, proc.stderr
@@ -356,8 +369,23 @@ def main(argv: list[str] | None = None) -> int:
                     help="Fail if the run differs from the committed manifest.")
     args = ap.parse_args(argv)
 
+    if args.check:
+        # READ-ONLY. A check used to run in `--out` itself, so `work` was the
+        # committed `runs/latest/inputs` and every check rewrote the committed
+        # input files and the ledger on its way to comparing the manifest. On
+        # a POSIX host the bytes came out identical and nobody noticed; on
+        # Windows the same check wrote every committed input back with CRLF
+        # line endings and then reported that the manifest did not match.
+        # lab/ch06 already generates into a temporary directory; this now
+        # does the same, and the committed tree is only ever READ.
+        with tempfile.TemporaryDirectory(prefix="cohaera-lab-check-") as temp:
+            return _run(Path(temp), args.out, check=True)
+    return _run(args.out, args.out, check=False)
+
+
+def _run(out: Path, committed: Path, *, check: bool) -> int:
+    """Produce the run under ``out``; compare against or write ``committed``."""
     started = time.monotonic()
-    out = args.out
     work = out / "inputs"
     work.mkdir(parents=True, exist_ok=True)
 
@@ -423,7 +451,7 @@ def main(argv: list[str] | None = None) -> int:
         })
 
     # ---- replay and fork, which need a ledger to have an opinion at all ----
-    ledger = out / "inputs" / "seen-streams.json"
+    ledger = work / "seen-streams.json"
     ledger.unlink(missing_ok=True)
     normal = work / "01-normal.jsonl"
 
@@ -482,16 +510,19 @@ def main(argv: list[str] | None = None) -> int:
         "contract": contract,
     }
 
-    manifest_path = out / "RUN-MANIFEST.json"
     text = json.dumps(document, indent=2, sort_keys=True) + "\n"
     elapsed = time.monotonic() - started
 
-    if args.check:
+    if check:
+        manifest_path = committed / "RUN-MANIFEST.json"
         if not manifest_path.exists():
             print(f"no committed manifest at {manifest_path}", file=sys.stderr)
             return 1
-        committed = manifest_path.read_text(encoding="utf-8")
-        if committed != text:
+        # Compared as BYTES, like every input digest above. read_text would
+        # quietly fold a CRLF checkout back to LF and pass a file whose bytes
+        # on disk differ from the ones this run produced -- and .gitattributes
+        # pins the checkout to LF precisely so that there is nothing to fold.
+        if manifest_path.read_bytes() != text.encode("utf-8"):
             print("the lab run no longer matches the committed manifest.\n"
                   "Re-run `python lab/local/run.py` and read the diff before "
                   "committing it: a change here is a change in what a verdict "
@@ -503,7 +534,7 @@ def main(argv: list[str] | None = None) -> int:
               f"{sys.version_info.major}.{sys.version_info.minor})")
         return 0
 
-    _write(manifest_path, text)
+    manifest_path = _write(out / "RUN-MANIFEST.json", text)
     _jsonl(out / "verdicts.jsonl", verdicts)
     _write(out / "RESULTS.md", _results_markdown(document))
     # Relative when it can be, absolute when --out points outside the tree.
@@ -635,11 +666,14 @@ def _results_markdown(doc: dict) -> str:
         "demonstrates that the evidence path works end to end and keeps",
         "working; it says nothing about how often these checks are right on",
         "real traffic. The numbers that speak to that are in",
-        "[`eval/EVALUATION-CARD.md`](../../../eval/EVALUATION-CARD.md), and",
+        # Four levels up, not three: this file lives at
+        # lab/local/runs/latest/RESULTS.md, and `../../../` from there is
+        # lab/, not the repository root. Both links were dead.
+        "[`eval/EVALUATION-CARD.md`](../../../../eval/EVALUATION-CARD.md), and",
         "they are considerably less flattering than these six sessions.",
         "",
         "It also shows nothing about network isolation. That is the VMware lab",
-        "in [`LAB.md`](../../../LAB.md), which has not yet produced a committed",
+        "in [`LAB.md`](../../../../LAB.md), which has not yet produced a committed",
         "build record.",
         "",
     ]

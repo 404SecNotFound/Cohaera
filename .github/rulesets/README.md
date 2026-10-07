@@ -37,7 +37,7 @@ Equivalent UI path: **Settings → Rules → Rulesets → New branch ruleset**.
 | `deletion` | `main` cannot be deleted |
 | `non_fast_forward` | no force pushes |
 | `pull_request` | changes arrive through a PR; **squash is the only merge method**; stale reviews dismissed on push; review threads must be resolved |
-| `required_status_checks` | all nine CI checks must pass, and the branch must be up to date with `main` first |
+| `required_status_checks` | every CI check must pass, and the branch must be up to date with `main` first |
 
 ## Why squash is the only merge method
 
@@ -85,7 +85,7 @@ merge something that was never tested against what it actually lands on.
 
 ## Keeping the check names honest
 
-The nine `context` values must match the job names GitHub reports, which come
+The `context` values must match the job names GitHub reports, which come
 from `name:` in **every** file under `.github/workflows/` with the matrix
 expanded. Today that is `ci.yml` alone; the loop reads the whole directory
 rather than one file, so a second workflow's gate cannot go unrequired.

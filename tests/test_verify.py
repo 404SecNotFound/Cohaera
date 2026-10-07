@@ -29,6 +29,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 
+import verify_wheel  # noqa: E402
 from verify import GATES, Gate, _missing  # noqa: E402
 
 CI = REPO / ".github" / "workflows" / "ci.yml"
@@ -54,6 +55,13 @@ NOT_A_LOCAL_GATE = {
     "The SBOM describes the wheel, and the wheel has no dependencies":
         "Same. Its zero-dependency half is covered locally by the "
         "'runtime-deps' gate and by the 'wheel' gate's install probe.",
+    "The lab checks hold on Windows":
+        "The same two commands as the 'lab' gate and tests/test_ch06_lab.py, "
+        "on a Windows runner. The property is the PLATFORM, which a local run "
+        "already has or does not; running the gate locally on whatever you "
+        "are on is the 'lab' gate.",
+    "The lab tests hold on Windows":
+        "A subset of the 'tests' gate, on a Windows runner. Same reason.",
 }
 
 
@@ -153,6 +161,20 @@ def test_a_present_directory_does_not_count_as_an_installed_distribution():
     fake_dist = Gate("synthetic", "job", "step", "x" * 50, ["true"],
                      requires_dists=("build-directory-not-a-distribution",))
     assert _missing(fake_dist) is not None
+
+
+def test_the_wheel_gate_finds_the_venv_executables_on_each_platform(monkeypatch):
+    """``venv/bin/pip`` was hard-coded. A virtual environment on Windows puts
+    its executables under ``Scripts\\`` with an ``.exe`` suffix, so the local
+    wheel gate failed there before it had built anything, on a path rather
+    than on the wheel."""
+    venv = Path("some-venv")
+    monkeypatch.setattr(verify_wheel.os, "name", "posix")
+    assert verify_wheel._venv_bin(venv, "pip") == venv / "bin" / "pip"
+    assert verify_wheel._venv_bin(venv, "cohaera") == venv / "bin" / "cohaera"
+    monkeypatch.setattr(verify_wheel.os, "name", "nt")
+    assert verify_wheel._venv_bin(venv, "pip") == venv / "Scripts" / "pip.exe"
+    assert verify_wheel._venv_bin(venv, "python") == venv / "Scripts" / "python.exe"
 
 
 @pytest.mark.parametrize("gate", GATES, ids=lambda g: g.key)

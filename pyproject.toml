@@ -12,9 +12,11 @@ version = "0.3.0"
 description = "Passive security monitoring and detection engineering for AI agent telemetry."
 readme = "README.md"
 # R-18. Bounded ABOVE as well as below. ">=3.10" with no ceiling claimed every
-# future Python, including 3.14 which is released and which this project has
-# never run. Raise the ceiling when the matrix does, not before.
-requires-python = ">=3.10,<3.14"
+# future Python sight unseen. The ceiling moves WITH the CI matrix and never
+# ahead of it: 3.14 was added to both together, once it had a stable release,
+# and 3.15 joins the same way. Raise the ceiling when the matrix does, not
+# before.
+requires-python = ">=3.10,<3.15"
 # R-20. SPDX expression rather than the table form and the classifier, both
 # of which setuptools now warns are deprecated under PEP 639.
 license = "Apache-2.0"
@@ -30,6 +32,7 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Security",
 ]
 # Deliberately zero runtime dependencies. It must run on a locked-down
@@ -120,11 +123,32 @@ select = [
 # review has found here.
 [tool.mypy]
 python_version = "3.10"
-files = ["src/cohaera"]
+# src, and the two labs. The labs are the scripts whose output is COMMITTED
+# and re-derived by CI, so a type error there is a wrong artefact rather than
+# a wrong log line; they sat outside the only type check that runs. tests/ and
+# demo/ stay out: the hostile suite constructs ill-typed values on purpose,
+# and the demos are shown, not shipped.
+files = ["src/cohaera", "lab"]
+# Both lab scripts are called run.py and neither directory is a package, so
+# without explicit bases mypy sees two modules named `run` and stops. With
+# them, module names come from the path under one of these roots: `cohaera`
+# under src/, `lab.local.run` and `lab.ch06.run` under the repository root.
+explicit_package_bases = true
+mypy_path = ["src", "."]
 strict_optional = true
 warn_redundant_casts = true
 no_implicit_optional = true
 check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# lab/ch06/baseline.py carries two findings (a `str | None` reaching
+# `_chain_seed`, and the same union assigned to a `str`) in a file that is
+# deliberately independent of the product and was outside the scope of the
+# change that brought lab/ under mypy. Declared here, by name, so the hole is
+# a line somebody can delete rather than a gate that quietly never ran. Fix
+# the two lines and remove this block.
+module = "lab.ch06.baseline"
+ignore_errors = true
 
 # Two flags are deliberately OFF, and both were tried before being switched off.
 #

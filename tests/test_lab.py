@@ -549,7 +549,8 @@ def test_the_run_manifest_carries_no_environment_facts():
             f"machine rather than the run; a manifest that depends on the "
             f"environment cannot assert a property of the detector")
 
-    for host_fact in ("3.10", "3.11", "3.12", "3.13", "elapsed", "duration"):
+    for host_fact in ("3.10", "3.11", "3.12", "3.13", "3.14", "elapsed",
+                      "duration"):
         assert f'"{host_fact}"' not in raw, (
             f"{host_fact!r} appears as a value in the compared manifest")
 
@@ -606,6 +607,35 @@ def test_the_lab_run_ignores_a_correlation_secret_in_the_environment():
     assert proc.returncode == 0, (
         "the committed lab run depends on the operator's environment:\n"
         + proc.stdout + proc.stderr)
+
+
+def _tree_snapshot(root: Path) -> dict[str, tuple[int, bytes]]:
+    return {str(p.relative_to(root)): (p.stat().st_mtime_ns, p.read_bytes())
+            for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def test_the_lab_check_reads_the_committed_run_and_writes_nothing_to_it():
+    """``--check`` used to run IN ``runs/latest``: its working directory was
+    the committed ``inputs/``, so every check rewrote every committed input
+    and the ledger before comparing the manifest. On POSIX the bytes came out
+    the same and the only trace was a changed mtime; on Windows the same
+    check wrote every input back with CRLF and then failed on the digests it
+    had just moved. A check that edits the thing it checks is not a check.
+
+    Asserted on mtimes as well as bytes, because identical bytes are exactly
+    how this went unnoticed.
+    """
+    latest = LAB / "local" / "runs" / "latest"
+    before = _tree_snapshot(latest)
+    proc = subprocess.run(
+        [sys.executable, str(LAB / "local" / "run.py"), "--check"],
+        cwd=str(REPO), capture_output=True, text=True, encoding="utf-8",
+        timeout=300, check=False)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    after = _tree_snapshot(latest)
+    assert after == before, (
+        "--check touched the committed run: "
+        f"{sorted(k for k in after if after[k] != before.get(k))}")
 
 
 def test_the_correlation_secret_the_lab_uses_is_a_committed_constant():

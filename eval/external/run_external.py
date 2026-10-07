@@ -345,10 +345,35 @@ def load(args: argparse.Namespace
     return "atbench", atbench.load_path(Path(args.atbench)), {}
 
 
+def refuse_duplicate_session_ids(sessions: list[AdaptedSession]) -> None:
+    """Two adapted sessions with one id are one session to every rate below.
+
+    The internal loader (``eval.harness.load_corpus``) refuses duplicate
+    session ids; this path did not, and it manufactures them: every adapter
+    runs its corpus identifier through ``safe_id``, which folds any run of
+    non-identifier characters to a single ``-``, so ``case 1`` and ``case/1``
+    both arrive as ``case-1``. Downstream, two outcomes carrying one id are
+    two rows in a confusion matrix and one cluster in the bootstrap, and a
+    task-disjoint split keyed on ids derived the same way can put the two
+    halves of one collision on opposite sides. Refused by name, like the
+    internal loader, rather than scored as if the ids were distinct.
+    """
+    seen: dict[str, int] = Counter(s.session_id for s in sessions)
+    duplicates = sorted(sid for sid, n in seen.items() if n > 1)
+    if duplicates:
+        raise AdapterError(
+            f"{len(duplicates)} session id(s) occur more than once after "
+            f"safe_id normalisation: {duplicates[:5]}. Two corpus ids that "
+            "differ only in punctuation or whitespace collapse to one, and "
+            "every rate this harness reports would then count one session "
+            "twice. Refusing to score. Make the ids distinct at the source.")
+
+
 def run(sessions: list[AdaptedSession], corpus: str,
         limits: Limits = DEFAULT_LIMITS,
         source_report: dict[str, Any] | None = None) -> dict[str, Any]:
     """Fit, score and summarise. The whole measurement, as one dict."""
+    refuse_duplicate_session_ids(sessions)
     train, test = split_tasks(sessions)
     if not test:
         raise AdapterError(
@@ -392,7 +417,9 @@ def run(sessions: list[AdaptedSession], corpus: str,
             "External corpora label a trajectory unsafe, not which check is "
             "responsible for catching it. target_precision_pct and "
             "target_attributable_recall are therefore structurally zero here "
-            "and must be read as UNAVAILABLE, not as a measured zero.",
+            "and must be read as UNAVAILABLE, not as a measured zero. "
+            "summary.recall_where_evaluable is null for the same reason, with "
+            "summary.recall_where_evaluable_note saying so.",
         "coverage": cov_report,
         "scope_audit": scope_audit(cov_report),
         "task_clustering": {
@@ -557,7 +584,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         Path(args.json).write_text(
             json.dumps(result, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8")
+            encoding="utf-8", newline="\n")
         print(f"\nwrote {args.json}")
     return 0
 

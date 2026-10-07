@@ -123,21 +123,42 @@ FIELD_MAP: dict[str, tuple[str, ...]] = {
     "assistant_text": ("agent_response", "content", "text", "thought"),
 }
 
-# Values that mean "this trajectory is unsafe". Anything outside the safe and
-# unsafe sets is refused rather than bucketed.
-_UNSAFE = frozenset({"unsafe", "false", "0", "risky", "harmful"})
-_SAFE = frozenset({"safe", "true", "1", "benign"})
+# Label words that carry their own meaning, whichever key they sit under.
+# Anything outside these two sets is refused rather than bucketed.
+_UNSAFE_WORDS = frozenset({"unsafe", "risky", "harmful"})
+_SAFE_WORDS = frozenset({"safe", "benign"})
+
+# Truth-shaped tokens -- a bool, a 0/1, or the words for them. These mean
+# NOTHING on their own: ``1`` is "safe" under a key named ``is_safe`` and
+# "unsafe" under the equally common "1 = unsafe" convention of a key named
+# ``label``. The first version read every candidate key with one polarity and
+# so turned ``label: 1`` into a safe trajectory, which is the one error the
+# module docstring says this adapter must not make. So the polarity belongs to
+# the KEY, declared here, and a truth-shaped value under a key whose polarity
+# is not declared is refused with the reason recorded.
+_TRUE_TOKENS = frozenset({"true", "1"})
+_FALSE_TOKENS = frozenset({"false", "0"})
+
+# Keys whose name states what a true value means. ``is_safe: true`` is safe.
+# No key named ``label`` or ``safety`` can appear here, because neither name
+# says which way its 1 points.
+_TRUE_MEANS_SAFE: frozenset[str] = frozenset({"is_safe"})
 
 STEP_SECONDS = 1.0
 EPOCH = 1_760_000_000.0
 
 
-def _pick(record: dict[str, Any], logical: str) -> Any:
-    """First present key for a logical field, or None."""
+def _pick_key(record: dict[str, Any], logical: str) -> tuple[str | None, Any]:
+    """First present key for a logical field and its value, or (None, None)."""
     for key in FIELD_MAP[logical]:
         if key in record:
-            return record[key]
-    return None
+            return key, record[key]
+    return None, None
+
+
+def _pick(record: dict[str, Any], logical: str) -> Any:
+    """First present key for a logical field, or None."""
+    return _pick_key(record, logical)[1]
 
 
 def _missing(record: dict[str, Any], logical: str, where: str) -> AdapterError:
@@ -152,16 +173,45 @@ def _missing(record: dict[str, Any], logical: str, where: str) -> AdapterError:
         "correct. Do NOT work around this by defaulting the field.")
 
 
-def _is_attack(value: Any, where: str) -> bool:
-    """Read the trajectory-level safety label, refusing anything ambiguous."""
+def _is_attack(key: str, value: Any, where: str) -> bool:
+    """Read the trajectory-level safety label, refusing anything ambiguous.
+
+    ``key`` is the record key the value was read from, because the value's
+    meaning depends on it. A word -- ``safe``, ``unsafe``, ``harmful`` -- says
+    what it means under any key. A truth-shaped value -- a bool, ``0``/``1``,
+    ``"true"``/``"false"`` -- says nothing until the key's polarity is known,
+    and only ``is_safe`` declares one. Under ``label`` or ``safety`` it is
+    refused: ATBench's real convention could not be verified (see the module
+    docstring), both conventions are common, and guessing wrong flips every
+    session between the numerator and the denominator of every rate.
+    """
     if isinstance(value, bool):
-        # A bare bool is 'is_safe', per the FIELD_MAP candidate of that name.
-        return not value
-    token = str(value).strip().lower()
-    if token in _UNSAFE:
+        token = "true" if value else "false"
+    elif isinstance(value, int | float):
+        token = str(int(value)) if value in (0, 1) else repr(value)
+    else:
+        token = str(value).strip().lower()
+
+    if token in _UNSAFE_WORDS:
         return True
-    if token in _SAFE:
+    if token in _SAFE_WORDS:
         return False
+
+    if token in _TRUE_TOKENS or token in _FALSE_TOKENS:
+        if key in _TRUE_MEANS_SAFE:
+            return token in _FALSE_TOKENS
+        raise AdapterError(
+            f"{where}: safety label {value!r} under key {key!r} is "
+            "AMBIGUOUS. A boolean or 0/1 label means 'safe' under one common "
+            "convention and 'unsafe' under another, and the key name "
+            f"{key!r} does not say which. Refusing to bucket it: reading it "
+            "with the wrong polarity moves every session between the "
+            "numerator and the denominator of every rate this harness "
+            "reports. Confirm the convention against the real download and "
+            "either rename the key to one with a declared polarity "
+            f"({sorted(_TRUE_MEANS_SAFE)}) or add the key to _TRUE_MEANS_SAFE "
+            "in eval/external/adapters/atbench.py with the evidence.")
+
     raise AdapterError(
         f"{where}: safety label {value!r} is neither safe nor unsafe. "
         "Refusing to bucket it -- a mislabelled trajectory silently moves a "
@@ -216,10 +266,10 @@ def adapt_trajectory(record: Any, *, source_name: str = "<memory>"
         raise _missing(rec, "id", source_name)
     sid = safe_id(str(raw_id))
 
-    label = _pick(rec, "label")
-    if label is None:
+    label_key, label = _pick_key(rec, "label")
+    if label_key is None or label is None:
         raise _missing(rec, "label", source_name)
-    is_attack = _is_attack(label, f"{source_name}:{raw_id}")
+    is_attack = _is_attack(label_key, label, f"{source_name}:{raw_id}")
 
     turns = _pick(rec, "trajectory")
     if not isinstance(turns, list) or not turns:

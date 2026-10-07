@@ -21,6 +21,7 @@ whole run be re-executed and compared byte for byte.
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
@@ -307,7 +308,11 @@ def long_run(sid: str = "lab-05-partial-attestation", calls: int = 11
     return out
 
 
-STATES = [
+# One scenario: key, title, builder, and what the state demonstrates. Typed so
+# that run.py's call of the builder is checked rather than a call of Any.
+Builder = Callable[[], list[dict]]
+
+STATES: list[tuple[str, str, Builder, str]] = [
     ("01-normal", "Normal", normal,
      "Known agent, expected tool, exactly bound approval, effect completes, "
      "response discloses it."),
@@ -427,7 +432,7 @@ def anonymous(sid: str = "lab-08-anonymous") -> list[dict]:
 # The prerequisite each one is about, in the order run.py scores them. The
 # fourth element is the question the pair answers, not a description of the
 # telemetry: the telemetry is deliberately unremarkable in all three.
-CONTRACT_STATES = [
+CONTRACT_STATES: list[tuple[str, str, Builder, str]] = [
     ("06-no-manifest", "Capability manifest", undeclared_action,
      "What can CH02, CH03 and CH04 say about a tool nothing declares?"),
     ("07-chained-unsigned", "Collector signature", unsigned_stream,

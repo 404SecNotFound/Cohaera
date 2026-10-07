@@ -298,11 +298,38 @@ def binomial_p(correct: int, total: int) -> float | None:
     0.048, which looks like a result and is really the resolution limit. This
     one is exact and free, and it assumes independent pairs, which the family
     structure mildly violates. Neither alone; both, and they should agree.
+
+    ONLY VALID WHERE EVERY PAIR IS A COIN. ``total`` must count pairs a rule
+    could actually win, because a tie is scored WRONG (see ``_accuracy``) and a
+    tied pair is a coin that always lands tails. The first version of
+    :func:`analyse` ran this test over ``all_pairs`` with ``total`` = every
+    pair, so the null said "50% of 639" while a fifth of those pairs could not
+    be won by anything: the committed run reports p = 0.997 for an accuracy
+    the permutation test puts at p = 0.0099, and the two "should agree" clause
+    above was being contradicted by the artefact itself.
+
+    The null that accounts for ties is not a different number to compute: a
+    tie contributes exactly zero correct answers under every relabelling, so
+    the count of correct answers over all pairs is Binomial(n_distinguishable,
+    0.5), which is precisely the ``distinguishable_only`` test. So the
+    binomial is reported for that population alone, and ``all_pairs`` carries
+    a note saying so rather than a number that reads as "no signal".
     """
     if not total:
         return None
     tail = sum(math.comb(total, k) for k in range(correct, total + 1))
     return tail / (2 ** total)
+
+
+# Why the all-pairs block carries no exact binomial. Kept as data, in the
+# artefact, so a reader of the JSON gets the reason and not just a null.
+ALL_PAIRS_BINOMIAL_NOTE = (
+    "not reported: ties are scored wrong, so a 50% null over every pair is "
+    "wrong by construction (a tied pair cannot be won by any rule). The exact "
+    "test under a null that accounts for ties is Binomial(n_distinguishable, "
+    "0.5) on the same correct count, which is distinguishable_only.binomial_p. "
+    "Use the permutation p-value here; its null is fitted over the same "
+    "tie-bearing population.")
 
 
 def permutation_test(rows: list[Sample], observed: float, *,
@@ -419,13 +446,23 @@ def analyse(root: pathlib.Path, *, rounds: int) -> dict:
     for label, only in (("all_pairs", False), ("distinguishable_only", True)):
         ho = family_holdout(rows, distinguishable_only=only)
         acc = ho.get("accuracy")
-        learnability[label] = {
+        block: dict = {
             "family_holdout": ho,
             "permutation": permutation_test(
                 rows, acc, rounds=rounds,
                 distinguishable_only=only) if acc is not None else {},
-            "binomial_p": binomial_p(ho.get("correct", 0), ho.get("pairs", 0)),
         }
+        if only:
+            # Every pair in this population can be won, so every pair is a
+            # fair coin under the null and the exact test applies.
+            block["binomial_p"] = binomial_p(ho.get("correct", 0),
+                                             ho.get("pairs", 0))
+        else:
+            # See binomial_p: a 50% null over a population with unwinnable
+            # pairs is not a null for this statistic.
+            block["binomial_p"] = None
+            block["binomial_note"] = ALL_PAIRS_BINOMIAL_NOTE
+        learnability[label] = block
 
     return {
         "corpus": "stepshield",
@@ -468,6 +505,9 @@ def render(result: dict) -> str:
         bp = block.get("binomial_p")
         if bp is not None:
             out.append(f"    exact binomial vs 50%: p = {bp:.3g}")
+        elif block.get("binomial_note"):
+            out.append("    exact binomial: not reported (ties scored wrong; "
+                       "see distinguishable_only)")
     return "\n".join(out)
 
 
@@ -485,7 +525,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n",
-                             encoding="utf-8")
+                             encoding="utf-8", newline="\n")
         print(f"\nwrote {args.json}")
     return 0
 
