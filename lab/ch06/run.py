@@ -410,7 +410,11 @@ def _generate(destination: Path) -> dict[str, Any]:
         latest / "RESULTS.md", _results_markdown(results).encode(),
     )
     fixture_digests = {
-        str(path.relative_to(destination)): _sha256(path)
+        # as_posix, not str: the manifest is committed and compared byte for
+        # byte on every platform, and str() of a relative Path spells this key
+        # with backslashes on Windows. Found by the Windows CI job on its
+        # first run, after the Linux check had passed for months.
+        path.relative_to(destination).as_posix(): _sha256(path)
         for path in sorted((destination / "fixtures").rglob("*.json*"))
     }
     manifest = {
