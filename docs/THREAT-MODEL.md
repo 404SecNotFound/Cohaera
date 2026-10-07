@@ -145,7 +145,8 @@ covers nothing (`Session.approvals_for` and `Session.covering_approval`,
 [`src/cohaera/model.py`](../src/cohaera/model.py);
 [EVIDENCE-TRUST.md](EVIDENCE-TRUST.md) §4).
 
-Two anchors are missing, and neither is exotic.
+Two anchors matter, and neither is exotic. The first is missing. The second is
+built, as an opt-in control that is off by default.
 
 **The tool definition.** Binding the name and the arguments does not bind *what
 the tool is*. An MCP server can serve one tool definition when approval is
@@ -158,12 +159,18 @@ no test covers it.
 
 **Single use, and a window that is not the producer's to choose.** Inside one
 session an approval is indexed by span, so it covers exactly one call, and the
-corpus measures the reuse case (`attack_reused_approval`). Across runs there is
-nothing: approvals are never consumed, there is no approval ledger the way there
-is a seen-stream ledger for replay ([EVIDENCE-TRUST.md](EVIDENCE-TRUST.md) §2d),
-and `expires_at` is a number the producer writes against a clock Cohaera has no
-trusted view of ([EVIDENCE-TRUST.md](EVIDENCE-TRUST.md) §2a). "Time-bounded"
-today means *bounded by a window the producer chose*.
+corpus measures the reuse case (`attack_reused_approval`). Across runs the
+controls exist and are opt-in: `cohaera.approval:1` can carry a detached issuer
+signature and a `nonce`, the signing input covers `expires_at` and requires it,
+`--seen-approvals` keeps a spent-nonce ledger between runs the way
+`--seen-streams` does for replay ([EVIDENCE-TRUST.md](EVIDENCE-TRUST.md) §2d),
+and `--require-signed-approvals` stops an unsigned approval covering a call
+([EVIDENCE-TRUST.md](EVIDENCE-TRUST.md) §4). None of that is on by default. In
+a default deployment approvals are never consumed, and `expires_at` is a number
+the producer writes against a clock Cohaera has no trusted view of
+([EVIDENCE-TRUST.md](EVIDENCE-TRUST.md) §2a). "Time-bounded" there means
+*bounded by a window the producer chose*. Where the ledger is on, it is a
+local, unsigned, per-host file, which is E22 again.
 
 Two controls in the wild already do the second, which is the argument for
 treating it as table stakes rather than as a research direction:
@@ -531,12 +538,19 @@ switched off.
 Three consequences, and they are corrections to how `cohaera.integrity:1` should
 be talked about:
 
-1. **Its near-term value is detecting absence and truncation, not forgery.** A
-   stream that stops, a sequence that skips, a session only partly attested
-   (E21) — those are the shapes the observed anti-forensics makes. CH06 reports
-   them, and `NO_INTEGRITY_EVIDENCE` names the state of a deployment that could
-   not have reported anything at all. That is the claim worth making, and it is
-   smaller and more defensible than "tamper-evident telemetry".
+1. **Its near-term value is detecting absence, deletion and modification, not
+   forgery — and not a stream that simply stops.** A sequence that skips, a
+   record that does not chain, a session only partly attested (E21) — those
+   are the shapes the observed anti-forensics makes, and CH06 reports them.
+   Tail truncation is not among them: cut the last records off a signed stream
+   and what remains is a contiguous, chained, fully signed prefix that reports
+   `attested` with `signature_covers_final: true`, because nothing in
+   `cohaera.integrity:1` says how long the stream was meant to be (E30).
+   Closing that needs a signed end-of-stream or heartbeat record carrying the
+   record count and the collector's clock, which nothing emits yet.
+   `NO_INTEGRITY_EVIDENCE` names the state of a deployment that could not have
+   reported anything at all. That is the claim worth making, and it is smaller
+   and more defensible than "tamper-evident telemetry".
 2. **The in-process caveat is the load-bearing one, and stays load-bearing.**
    Where the adapter runs inside the agent, the agent holds the signing key
    ([EVIDENCE-TRUST.md](EVIDENCE-TRUST.md) §7). Against an adversary who does not
@@ -653,7 +667,7 @@ Things that would change this document and have not been done.
 
 - **No real-traffic evaluation.** Every number is from a synthetic corpus
   written by the detector's author.
-- **No adaptive attacker in the corpus.** Exactly 1 of 28 catalogued
+- **No adaptive attacker in the corpus.** Exactly 1 of 29 catalogued
   evasions appears in it, and only because a fix could not be graded otherwise.
 - **No fuzzing of the CLI argument surface**, only of the record surface.
 - **No measurement of Cohaera under concurrent or streaming load.** The
@@ -673,9 +687,10 @@ Things that would change this document and have not been done.
   neutralisation to test. B4.
 - **The two assumptions in §10a have no tests**, so their status is "believed
   to hold because it is written down".
-- **The tool-definition digest and single-use approvals of B2a are unbuilt**,
-  so the approval binding measured at 100% recall on `attack_reused_approval` is
-  measuring reuse *within one session* only.
+- **The tool-definition digest of B2a is unbuilt, and single-use approvals
+  are opt-in and off by default**, so the approval binding measured at 100%
+  recall on `attack_reused_approval` is measuring reuse *within one session*
+  only, in the default configuration.
 - **The absence of published attacks on signed agent traces (§8) is
   searched-and-not-found, from an environment that could not read the sources.**
   It should be re-checked by somebody with unrestricted egress before it is

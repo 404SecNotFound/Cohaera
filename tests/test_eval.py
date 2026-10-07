@@ -78,6 +78,7 @@ from eval.harness import (
     leakage_experiment,
     load_corpus,
     run_condition,
+    same_test_set,
     split,
 )
 from eval.metrics import (
@@ -1022,11 +1023,58 @@ def test_the_leakage_experiment_scores_one_fixed_test_set():
     rows = corpus()
     manifest = in_memory_manifest()
     clean, leaky, prov = leakage_experiment(rows, gen.SEED, manifest)
-    assert prov["test_set_identical"]
+    # The published field, and the fact it is derived from. The first assert
+    # used to be `assert prov["test_set_identical"]` against a hard-coded
+    # `True`, which could not fail; it is now computed from the two runs, and
+    # the test below shows the computation can say no.
+    assert prov["test_set_identical"] is True
     assert [o.session_id for o in clean] == [o.session_id for o in leaky], (
         "the two runs no longer score the same sessions, so the paired "
         "difference is confounded again")
     assert prov["sibling_sessions_leaked"] > 0
+
+
+def test_test_set_identical_is_derived_and_can_be_false():
+    """The card publishes ``test_set_identical``. It was the literal ``True``
+    -- a claim nothing could falsify, which is exactly the kind of number this
+    project says it does not ship. Now it is ``same_test_set`` over what was
+    actually scored, and that function has to be able to return False."""
+    a = _outcome(True, True)
+    b = Outcome(session_id="other", family="f", task_id="t", kind="k",
+                is_attack=True, target_check="CH01_sequence_order",
+                flagged=True, fired_checks=frozenset(), completeness=1.0,
+                target_evaluable=True)
+    assert same_test_set([a, b], [a, b]) is True
+    assert same_test_set([a, b], [b, a]) is False, "order is part of the pairing"
+    assert same_test_set([a, b], [a]) is False
+    assert same_test_set([], []) is True
+
+
+def test_recall_where_evaluable_is_null_when_no_attack_names_a_responsible_check():
+    """Structurally zero is not zero.
+
+    ``recall_where_evaluable`` restricts recall to attacks whose RESPONSIBLE
+    check could run. External corpora label a trajectory unsafe and never name
+    a responsible check, so ``target_check`` is empty on every attack,
+    ``attributed`` is false on every attack, and the figure came out as 0/N
+    with a Wilson interval -- a measured zero for a quantity that was never
+    defined there. Null, with the reason beside it, is the honest shape.
+    """
+    unlabelled = Outcome(
+        session_id="s", family="f", task_id="t", kind="k", is_attack=True,
+        target_check="", flagged=True,
+        fired_checks=frozenset({"CH02_concealment_gap"}),
+        completeness=1.0, target_evaluable=True)
+    s = summarise([unlabelled, _outcome(False, False)])
+    assert s["recall_where_evaluable"] is None
+    assert s["recall_where_evaluable_note"].startswith("UNAVAILABLE")
+
+    # Where the label exists the figure is a rate as before, and the note key
+    # is absent so the internal card does not change shape.
+    labelled = summarise([_outcome(True, True), _outcome(True, False)])
+    assert labelled["recall_where_evaluable"]["value"] == pytest.approx(0.5)
+    assert labelled["recall_where_evaluable"]["denominator"] == 2
+    assert "recall_where_evaluable_note" not in labelled
 
 
 @pytest.mark.parametrize("condition", CONDITIONS)

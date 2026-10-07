@@ -123,6 +123,10 @@ def test_only_an_exact_closed_marker_counts_as_closed():
 # this project publishes.
 
 REPO = Path(__file__).resolve().parent.parent
+# Archived with the other dated records; the tests below still hold it to its
+# promises, because a response document that quietly drops a finding is worse
+# than none whatever directory it sits in.
+REVIEW_RESPONSE = REPO / "docs" / "archive" / "REVIEW-RESPONSE.md"
 
 _REQUIRED_DOCS = {
     "SECURITY.md": "how to report a vulnerability privately",
@@ -207,8 +211,9 @@ def test_the_parser_field_map_declares_the_schema_the_detector_emits():
 # ---------------------------------------------------------------------------
 
 # Each entry is (pattern, why it overstates). Matched case-insensitively across
-# tracked Markdown. POSITIONING.md is exempt because it is the file that LISTS
-# them; a rule that forbids naming the rule cannot be written down.
+# tracked Markdown. DIRECTION.md is exempt because it is the file that LISTS
+# them; a rule that forbids naming the rule cannot be written down. The archived
+# POSITIONING.md, where the list used to live, keeps the same exemption.
 _OVERSTATEMENTS = [
     (r"validated detector",
      "nothing here has been validated against traffic this project did not "
@@ -222,13 +227,13 @@ _OVERSTATEMENTS = [
      "no adapter reconciles an identifier with the provider that minted it. "
      "It is provider-RETURNED until something asks the provider"),
     (r"missing behaviou?ral layer",
-     "that layer ships. See POSITIONING.md"),
+     "that layer ships. See docs/DIRECTION.md"),
     (r"verified session",
      "a session is verified_complete or verified_prefix, and the distinction "
      "is what R-05 was about"),
 ]
 
-_EXEMPT = {"POSITIONING.md", "CHANGELOG.md"}
+_EXEMPT = {"DIRECTION.md", "POSITIONING.md", "CHANGELOG.md"}
 
 
 def _tracked_markdown() -> list[Path]:
@@ -239,13 +244,14 @@ def _tracked_markdown() -> list[Path]:
 
 
 def test_documentation_does_not_use_the_language_it_bans():
-    """R-19. POSITIONING.md lists the phrases this project will not use about
-    its own results. A style rule nothing enforces is a preference, and the
-    whole argument of this repository is that a claim should be kept true by
-    something other than the author's memory.
+    """R-19. docs/DIRECTION.md lists the phrases this project will not use
+    about its own results. A style rule nothing enforces is a preference, and
+    the whole argument of this repository is that a claim should be kept true
+    by something other than the author's memory.
 
-    CHANGELOG.md is exempt alongside POSITIONING.md: a changelog entry
-    describing the removal of a phrase has to be able to name it.
+    CHANGELOG.md is exempt alongside DIRECTION.md: a changelog entry
+    describing the removal of a phrase has to be able to name it. The archived
+    POSITIONING.md carried the list first and keeps its exemption.
     """
     found = []
     for path in _tracked_markdown():
@@ -256,24 +262,26 @@ def test_documentation_does_not_use_the_language_it_bans():
                 found.append(f"{path.relative_to(REPO)}:{line} "
                              f"{match.group(0)!r} -- {why}")
     assert not found, (
-        "documentation uses language POSITIONING.md rules out:\n  "
+        "documentation uses language docs/DIRECTION.md rules out:\n  "
         + "\n  ".join(found))
 
 
-def test_the_positioning_file_says_what_this_is_not():
-    """The file is load-bearing: the README points at it for the correction to
-    its own opening story. A stub would be worse than nothing."""
-    text = (REPO / "POSITIONING.md").read_text(encoding="utf-8")
+def test_the_direction_file_says_what_this_is_not():
+    """The file is load-bearing: it is the one strategy document, and the
+    README points at it for the product boundary and the claims policy. A
+    stub would be worse than nothing."""
+    text = (REPO / "docs" / "DIRECTION.md").read_text(encoding="utf-8")
     assert len(text.split()) > 400, "too short to carry the argument"
-    for required in ("Agent Behavior Analytics", "Evidence quality",
-                     "Do not use", "EVALUATION-CARD.md"):
-        assert required in text, f"POSITIONING.md no longer mentions {required}"
+    for required in ("Agent Behavior Analytics", "Explicit non-goals",
+                     "Do not use", "EVALUATION-CARD.md",
+                     "archive/POSITIONING.md"):
+        assert required in text, f"DIRECTION.md no longer mentions {required}"
 
 
-def test_the_readme_points_at_the_correction():
+def test_the_readme_points_at_the_direction():
     readme = (REPO / "README.md").read_text(encoding="utf-8")
-    assert "POSITIONING.md" in readme, (
-        "the README's opening argument needs its correction reachable from "
+    assert "docs/DIRECTION.md" in readme, (
+        "the README's boundary and claims policy need to be reachable from "
         "the same page")
 
 
@@ -315,7 +323,7 @@ def test_the_review_response_accounts_for_every_finding():
     review's 22, while presenting itself as the place every finding is
     accounted for. Exactly the failure it exists to prevent.
     """
-    text = (REPO / "REVIEW-RESPONSE.md").read_text(encoding="utf-8")
+    text = REVIEW_RESPONSE.read_text(encoding="utf-8")
     for n in range(1, 22):
         assert f"R-{n:02d}" in text, f"REVIEW-RESPONSE.md does not mention R-{n:02d}"
     for n in range(1, 23):
@@ -407,9 +415,9 @@ def test_no_count_is_spelled_as_a_word_where_a_checker_cannot_read_it():
         ("CHANGELOG.md", "twenty-one"),
         # Likewise: these describe what two external reviews raised, not what
         # the repository currently contains.
-        ("REVIEW-RESPONSE.md", "sixteen"),
-        ("REVIEW-RESPONSE.md", "twenty-one"),
-        ("REVIEW-RESPONSE.md", "twenty-two"),
+        ("docs/archive/REVIEW-RESPONSE.md", "sixteen"),
+        ("docs/archive/REVIEW-RESPONSE.md", "twenty-one"),
+        ("docs/archive/REVIEW-RESPONSE.md", "twenty-two"),
         ("docs/EVIDENCE-TRUST.md", "twenty-two"),
         ("docs/THREAT-MODEL.md", "twenty-two"),
         # Not a count of anything tracked -- it is the heading over the short
@@ -468,7 +476,7 @@ def test_every_commit_the_review_response_cites_exists():
     full history so the check is real where it matters; anyone with a shallow
     clone sees a named skip.
     """
-    text = (REPO / "REVIEW-RESPONSE.md").read_text(encoding="utf-8")
+    text = REVIEW_RESPONSE.read_text(encoding="utf-8")
     linked = sorted(set(re.findall(
         r"\[`([0-9a-f]{7,40})`\]\(https://github\.com/[^)]+/commit/([0-9a-f]{7,40})\)",
         text)))

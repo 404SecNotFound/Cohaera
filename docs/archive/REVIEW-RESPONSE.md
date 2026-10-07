@@ -5,6 +5,8 @@
 
 # Response to the external reviews
 
+> **Archived.** This is a dated record, superseded by [DIRECTION.md](../DIRECTION.md) for position and roadmap. It reflects the response to two external code reviews, written in August 2026 against the commits it cites. The finding-by-finding accounting is kept unchanged because tests still check it; the open list at the end describes that date, not the current tree, which [OUTSTANDING.md](../OUTSTANDING.md) tracks.
+
 ## The first review, of `f3acbf53`
 
 An external reviewer read the whole repository at
@@ -80,7 +82,7 @@ in one file and installed in an air-gapped analysis VM.
 Swapping a demonstrated-correct component for an unproven integration is not a
 security improvement. The availability concern is real and is bounded directly
 instead: a wall-clock budget, a count budget charged before the work, and the
-measured envelope in [SECURITY.md](SECURITY.md). The side-channel argument does
+measured envelope in [SECURITY.md](../../SECURITY.md). The side-channel argument does
 not apply to this code — it is a *verifier* handling public data. The signer
 already says on its face that it is not constant-time and is a format reference.
 
@@ -150,7 +152,7 @@ Named here rather than left to be discovered:
   in this document was reproduced and fixed by the same person who wrote the
   code it was found in.
 - **The isolated lab has never been built.** Its assertions are text assertions.
-  [`lab/local/`](lab/local/) is the reproducible half and is explicit that it
+  [`lab/local/`](../../lab/local/) is the reproducible half and is explicit that it
   proves nothing about network isolation.
 - **No signed release or attestation.** The build is reproducible; nothing signs
   it yet.

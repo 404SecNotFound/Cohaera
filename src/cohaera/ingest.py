@@ -48,6 +48,7 @@ from .limits import (
     REJECT_NESTING_TOO_DEEP,
     REJECT_NOT_AN_OBJECT,
     REJECT_RATIO_EXCEEDED,
+    REJECT_RECORD_UNREADABLE,
     REJECT_TOO_MANY_BYTES,
     REJECT_TOO_MANY_EVENTS,
     REJECT_TOO_MANY_KEYS,
@@ -410,7 +411,17 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
                     f"{limits.max_record_keys}", payload)
             continue
 
-        e = Event(raw=obj, limits=limits)
+        try:
+            e = Event(raw=obj, limits=limits)
+            # Forced here, inside the guard, rather than at the note_defects
+            # call below: this is what parses every field and every sidecar,
+            # and it is the only place a reader that was supposed to flag and
+            # instead raised can be turned into one quarantined record.
+            defects = e.defects
+        except Exception as exc:  # the backstop; see REJECT_RECORD_UNREADABLE
+            _reject(lineno, REJECT_RECORD_UNREADABLE,
+                    f"{type(exc).__name__}: {exc}", payload)
+            continue
         retained_bytes += len(record)
         retained_containers += shape.containers
         retained_keys += shape.keys
@@ -423,7 +434,7 @@ def read_events(path: str | Path, limits: Limits = DEFAULT_LIMITS,
             retained_containers * RESIDENT_BYTES_PER_CONTAINER
             + retained_keys * RESIDENT_BYTES_PER_KEY)
         rep.note_bytes(record, b"A")
-        rep.note_defects(e.defects)
+        rep.note_defects(defects)
         rep.accepted += 1
         yield e
 
@@ -440,8 +451,16 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
              quiet: bool = False,
              keys: TrustStore = EMPTY_STORE,
              freshness: Freshness = NO_FRESHNESS,
-             ledger: StreamLedger | None = None) -> list[Session]:
+             ledger: StreamLedger | None = None,
+             approval_ledger: Any = None,
+             require_signed_approvals: bool = False) -> list[Session]:
     """Group a flat event stream into Sessions.
+
+    ``keys`` is handed to each session as its trust store when it holds any
+    key, so an approval's issuer signature is verified by the same store that
+    verifies the collector's. ``approval_ledger`` and
+    ``require_signed_approvals`` are the E26 controls; both were accepted by
+    the CLI for a release without reaching here, which made the flags inert.
 
     Keyed on session_id, then trace_id, then a scoped anonymous key, then
     isolation. See :class:`cohaera.identity.Correlator` for why the last two are
@@ -484,7 +503,10 @@ def assemble(events: Iterable[Event], limits: Limits = DEFAULT_LIMITS,
                 dropped_sessions += 1
                 continue
             s = Session(session_id=key.value, correlation=key, limits=limits,
-                        manifest=manifest)
+                        manifest=manifest,
+                        trust_store=keys if keys.loaded else None,
+                        approval_ledger=approval_ledger,
+                        require_signed_approvals=require_signed_approvals)
             buckets[key.value] = s
         if len(s.events) >= limits.max_events_per_session:
             dropped_events += 1
@@ -541,7 +563,9 @@ def load(path: str | Path, limits: Limits = DEFAULT_LIMITS,
          keys: TrustStore = EMPTY_STORE,
          freshness: Freshness = NO_FRESHNESS,
          ledger: StreamLedger | None = None,
-         fh: BinaryIO | None = None) -> list[Session]:
+         fh: BinaryIO | None = None,
+         approval_ledger: Any = None,
+         require_signed_approvals: bool = False) -> list[Session]:
     """Read and group one telemetry file. The report is filled in as a side effect.
 
     ``fh``, when given, is an open descriptor for ``path`` that the caller has
@@ -552,4 +576,6 @@ def load(path: str | Path, limits: Limits = DEFAULT_LIMITS,
     events = list(read_events(path, limits=limits, report=rep, quiet=quiet, fh=fh))
     return assemble(events, limits=limits, correlator=correlator,
                     manifest=manifest, report=rep, quiet=quiet, keys=keys,
-                    freshness=freshness, ledger=ledger)
+                    freshness=freshness, ledger=ledger,
+                    approval_ledger=approval_ledger,
+                    require_signed_approvals=require_signed_approvals)

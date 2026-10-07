@@ -50,13 +50,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.10 is the floor declared in pyproject. Test the floor, or the floor
-        # is a claim rather than a fact.
-        python: ["3.10", "3.11", "3.12", "3.13"]
+        # 3.10 is the floor declared in pyproject and 3.14 is one below its
+        # ceiling. Test both ends, or the range is a claim rather than a fact:
+        # R-18's point was that ">=3.10" with no ceiling claimed versions
+        # nobody had run, and a ceiling raised ahead of the matrix is the same
+        # claim with a number on it. Adding a version here means adding its
+        # `tests (pyX.Y)` context to .github/rulesets/main.json in the same
+        # commit; tests/test_ci_config.py fails otherwise.
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Full history, because one test resolves the commits REVIEW-RESPONSE.md
+          # Full history, because one test resolves the commits docs/archive/REVIEW-RESPONSE.md
           # cites and the default single-commit fetch has none of them. Without
           # this the check skips itself with a reason, which is honest and is
           # also a check that never runs.
@@ -102,14 +107,16 @@ jobs:
           # first question is always "which ruff", and it should not take a
           # re-run to answer it.
           ruff --version
-          # src tests eval tools -- the same four that CONTRIBUTING names as
-          # the gate. It used to be `src tests`, so `eval/` and `tools/` were
-          # documented as linted and were not: readme_facts.py, the release
-          # gate and the whole evaluation harness sat outside the only lint
-          # that runs. A gate a document promises and CI does not run is the
-          # same defect class as a number nothing derives, and it is now
-          # asserted by tests/test_verify.py rather than trusted.
-          ruff check src tests eval tools
+          # src tests eval tools lab demo -- the same six that CONTRIBUTING
+          # names as the gate. It used to be `src tests`, so `eval/` and
+          # `tools/` were documented as linted and were not: readme_facts.py,
+          # the release gate and the whole evaluation harness sat outside the
+          # only lint that runs. Then `lab/` and `demo/` were: the two scripts
+          # whose output is committed and re-derived here, and the two that
+          # get shown to people. A gate a document promises and CI does not
+          # run is the same defect class as a number nothing derives, and it
+          # is asserted by tests/test_verify.py rather than trusted.
+          ruff check src tests eval tools lab demo
       - name: Type check
         run: |
           # COH-R15. The review raised this as unverified because mypy was not
@@ -117,10 +124,13 @@ jobs:
           # pyproject's [tool.mypy], including the two flags that are switched
           # off and why, for the same reason the ruff selection does.
           #
-          # src only. The test suite constructs deliberately ill-typed values
-          # by the hundred -- that is what tests/test_hostile.py IS -- and type
-          # checking it would mean annotating hostile input as hostile, which
-          # proves nothing about the shipped package.
+          # src and lab, per [tool.mypy] files in pyproject. The labs produce
+          # the committed artefacts the content job re-derives, so a type
+          # error there is a wrong artefact. The test suite stays out: it
+          # constructs deliberately ill-typed values by the hundred -- that is
+          # what tests/test_hostile.py IS -- and type checking it would mean
+          # annotating hostile input as hostile, which proves nothing about
+          # the shipped package.
           mypy --version
           mypy
       - name: Unit and hostile tests
@@ -192,8 +202,9 @@ jobs:
         # here is a real behaviour change and never flake.
         #
         # A step inside an existing job rather than a job of its own, so the
-        # ruleset's required checks stay the same nine -- see
-        # tests/test_ci_config.py.
+        # ruleset's required checks do not grow by one -- see
+        # tests/test_ci_config.py. (The Windows job below is the deliberate
+        # exception: it has to be its own job because it is its own runner.)
         run: python lab/local/run.py --check
 
       - name: The release is internally consistent
@@ -211,9 +222,36 @@ jobs:
         # listed one roadmap item twice. A number nothing keeps true is the one
         # kind of defect this project cannot ship, so the counts are derived
         # from the tree and checked here. Named as its own step, inside an
-        # existing job, so the ruleset's nine required checks stay nine --
-        # see tests/test_ci_config.py.
+        # existing job, so the ruleset's required checks do not grow by one
+        # -- see tests/test_ci_config.py.
         run: python tools/readme_facts.py --check
+
+  windows:
+    name: lab checks on windows
+    # The two lab checks compare committed bytes against regenerated bytes,
+    # and both failed on Windows for a reason that had nothing to do with the
+    # detector: text-mode writes produced CRLF, every digest moved, and
+    # --check then REWROTE the committed inputs on its way to reporting the
+    # mismatch. Linux runners cannot see any of that. This job is the only
+    # thing in the pipeline that can, so it runs the two checks and the tests
+    # that read their committed output, on one interpreter -- the point is
+    # the platform, and the version matrix is the tests job's business.
+    #
+    # Its own job because it is its own runner, which is why the ruleset
+    # gains a required check here and tests/test_ci_config.py expects it.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: The lab checks hold on Windows
+        run: |
+          python lab/local/run.py --check
+          python lab/ch06/run.py --check
+      - name: The lab tests hold on Windows
+        run: python -m pytest tests/test_lab.py tests/test_ch06_lab.py -q
 
   perf:
     name: amplification regression

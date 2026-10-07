@@ -30,12 +30,14 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO))
-sys.path.insert(0, str(HERE))
-
-from baseline import BaselineResult  # noqa: E402
-from baseline import verify as baseline_verify  # noqa: E402
 
 from cohaera import ed25519  # noqa: E402
+
+# Imported by its path from the repository root rather than as a bare
+# `baseline` off a sys.path entry, so that the same name resolves for mypy
+# (which checks this file under `lab.ch06.run`) and at runtime.
+from lab.ch06.baseline import BaselineResult  # noqa: E402
+from lab.ch06.baseline import verify as baseline_verify  # noqa: E402
 from tools.collector_sign import (  # noqa: E402
     key_id_for,
     keys_document,
@@ -153,9 +155,11 @@ def _score(fixture: Path, *, trust_store: Path | None,
     if trust_store is not None:
         argv += ["--trust-store", str(trust_store)]
     env = dict(os.environ, PYTHONPATH=str(REPO / "src"))
+    # encoding named: `text=True` alone decodes with the console code page on
+    # Windows, and the verdict JSON is UTF-8 wherever it is run.
     process = subprocess.run(
         argv, cwd=REPO, env=env, capture_output=True, text=True,
-        timeout=60, check=False,
+        encoding="utf-8", timeout=60, check=False,
     )
     records = [
         json.loads(line) for line in process.stdout.splitlines() if line.strip()
@@ -308,7 +312,8 @@ def _compare_tree(expected: Path, actual: Path) -> list[str]:
 
 
 def _generate(destination: Path) -> dict[str, Any]:
-    expectations = json.loads((HERE / "expectations.json").read_text())
+    expectations = json.loads(
+        (HERE / "expectations.json").read_text(encoding="utf-8"))
     raw, pristine, cases = _build_fixtures()
     source = destination / "fixtures" / "source"
     case_dir = destination / "fixtures" / "cases"
@@ -405,7 +410,11 @@ def _generate(destination: Path) -> dict[str, Any]:
         latest / "RESULTS.md", _results_markdown(results).encode(),
     )
     fixture_digests = {
-        str(path.relative_to(destination)): _sha256(path)
+        # as_posix, not str: the manifest is committed and compared byte for
+        # byte on every platform, and str() of a relative Path spells this key
+        # with backslashes on Windows. Found by the Windows CI job on its
+        # first run, after the Linux check had passed for months.
+        path.relative_to(destination).as_posix(): _sha256(path)
         for path in sorted((destination / "fixtures").rglob("*.json*"))
     }
     manifest = {

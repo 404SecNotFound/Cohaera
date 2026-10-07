@@ -207,9 +207,9 @@ def verify(records: list[dict[str, Any]], *, public_key: bytes | None,
         issues.add("sequence_replay")
         affected.update(sessions)
 
-    key_id = next((
-        sidecar.get("key_id") for _, _, sidecar in ordered
-        if isinstance(sidecar.get("key_id"), str)
+    key_id: str = next((
+        k for _, _, sidecar in ordered
+        if isinstance(k := sidecar.get("key_id"), str)
     ), "")
     head = (_chain_seed(stream_id, key_id) if first_seq == 0
             else str(ordered[0][2].get("prev") or ""))
@@ -220,8 +220,8 @@ def verify(records: list[dict[str, Any]], *, public_key: bytes | None,
     signature_present = False
 
     for seq, record, sidecar in ordered:
-        session_id = (record.get("session_id")
-                      if isinstance(record.get("session_id"), str) else "")
+        session_id: str = (str(record["session_id"])
+                           if isinstance(record.get("session_id"), str) else "")
         if seq > expected_seq:
             issues.add("sequence_gap")
             affected.update(key for key in (previous_session, session_id) if key)
@@ -243,7 +243,7 @@ def verify(records: list[dict[str, Any]], *, public_key: bytes | None,
                 affected.update(
                     key for key in (previous_session, session_id) if key
                 )
-        head = declared_chain if isinstance(declared_chain, str) else expected_chain
+        head = str(declared_chain) if isinstance(declared_chain, str) else expected_chain
         previous_session = session_id
 
         signature_text = sidecar.get("sig")

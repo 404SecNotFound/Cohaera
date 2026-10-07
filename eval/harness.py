@@ -661,8 +661,22 @@ def leakage_experiment(corpus: list[Labelled], seed: int,
         "leaky_baseline_hash": leaky_grammar.fingerprint(),
         # The two runs score the SAME sessions. If this ever stops being true
         # the experiment has silently gone back to comparing two populations.
-        "test_set_identical": True,
+        # COMPUTED from what was scored, not typed: this used to be the
+        # literal `True`, which is a claim published in the card that nothing
+        # could have falsified.
+        "test_set_identical": same_test_set(clean, leaky),
     }
+
+
+def same_test_set(clean: list[Outcome], leaky: list[Outcome]) -> bool:
+    """Did the two runs score the same sessions, in the same order?
+
+    Order matters as well as membership: the leakage figure is a PAIRED
+    difference, so the i-th outcome of one run must be the i-th session of the
+    other, or the pairing is between unrelated sessions and the difference
+    means nothing.
+    """
+    return [o.session_id for o in clean] == [o.session_id for o in leaky]
 
 
 def load_manifest(data_dir: Path, condition: str,

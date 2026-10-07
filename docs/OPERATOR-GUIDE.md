@@ -170,7 +170,9 @@ python3 demo/approval-replay/run.py
 ```
 
 The first shows an agent citing a control that does not exist. The second shows
-why an approval needs exact action binding, expiry, and replay state.
+why an approval needs exact action binding, expiry, and replay state, and what
+a default deployment, with the opt-in signature and ledger controls off, still
+lets through.
 
 Treat the demos as explanations of a failure mode. Treat the labs as the
 reproducible evidence that a declared input produces a declared result.
@@ -206,7 +208,12 @@ time:
 4. collector signatures and a trust store for CH06;
 5. a freshness window and retained stream ledger for replay;
 6. effect receipts for CH07;
-7. signed approvals and the approval ledger for blocking-control conclusions.
+7. an approval ledger (`--seen-approvals`) and, where an issuer signs
+   approvals, `--require-signed-approvals` for blocking-control conclusions.
+   There is no approval-signing helper under `tools/`. The issuer has to sign
+   the field list in [EVIDENCE-TRUST.md](EVIDENCE-TRUST.md) §4 itself, so
+   leave `--require-signed-approvals` off until one does; with it on and no
+   approval keys issued, every authorised action reads as a bypass.
 
 Full lab-style run:
 
@@ -227,7 +234,9 @@ cohaera score my-agent.jsonl \
 
 Do not add a trust store merely to remove a warning. It is a security input: it
 names keys and the roles they are authorised to attest. The reference signing
-tools under `tools/` are for controlled tests and format integration.
+tools under `tools/` are for controlled tests and format integration. They
+cover telemetry (`collector_sign.py`) and policy files (`policy_sign.py`);
+nothing under `tools/` signs approvals.
 
 ## 7. Triage a verdict
 

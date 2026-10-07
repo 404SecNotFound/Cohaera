@@ -43,6 +43,7 @@ from typing import Any
 from .limits import (
     DEFAULT_LIMITS,
     DEFECT_DATA_TYPE,
+    DEFECT_EVENT_ID_TYPE,
     DEFECT_EVENT_TYPE_TYPE,
     DEFECT_IDENTITY_TYPE,
     DEFECT_INJECTION_MARKERS_TYPE,
@@ -254,6 +255,30 @@ def semantic_text(value: Any, max_chars: int,
     return value, ()
 
 
+def as_finite_float(value: Any) -> float | None:
+    """``float(value)`` for a real int or float, or None if that cannot be done.
+
+    The one place in the package that converts a producer-written number to a
+    float, because the conversion itself can raise. ``_bounded_int`` admits an
+    integer of up to MAX_JSON_INT_DIGITS digits and ``float()`` overflows past
+    about 309 of them, so a record carrying ``"timestamp": 1e400`` written out
+    in full raised ``OverflowError`` out of a validator whose contract is
+    "never raises", and the whole run died with no output. C-08 closed the
+    ``float()`` on a string; this is the same hole with an int.
+
+    Booleans are refused because ``True`` is not a number here, and a
+    non-finite result is refused because nothing downstream can order or
+    compare one.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        v = float(value)
+    except OverflowError:
+        return None
+    return v if math.isfinite(v) else None
+
+
 def timestamp(value: Any) -> tuple[float, tuple[str, ...]]:
     """Return a finite positive epoch seconds value, or NaN plus a defect code.
 
@@ -265,7 +290,7 @@ def timestamp(value: Any) -> tuple[float, tuple[str, ...]]:
     if isinstance(value, bool):
         return _NAN, (DEFECT_TIMESTAMP,)      # True is not a timestamp
     if isinstance(value, (int, float)):
-        v = float(value)
+        v = as_finite_float(value)
     elif isinstance(value, str):
         try:
             v = float(value)
@@ -273,7 +298,7 @@ def timestamp(value: Any) -> tuple[float, tuple[str, ...]]:
             return _NAN, (DEFECT_TIMESTAMP,)
     else:
         return _NAN, (DEFECT_TIMESTAMP,)
-    if not math.isfinite(v) or v <= 0:
+    if v is None or not math.isfinite(v) or v <= 0:
         # Rejects "inf", "nan", "-1" and 0. An epoch of zero is not a clock,
         # it is a default that somebody forgot to fill in.
         return _NAN, (DEFECT_TIMESTAMP,)
@@ -284,10 +309,8 @@ def finite_number(value: Any) -> tuple[float | None, tuple[str, ...]]:
     """A finite int/float, or None. Booleans are not numbers here."""
     if value is None:
         return None, ()
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None, (DEFECT_NUMERIC_NONFINITE,)
-    v = float(value)
-    if not math.isfinite(v):
+    v = as_finite_float(value)
+    if v is None:
         return None, (DEFECT_NUMERIC_NONFINITE,)
     return v, ()
 
@@ -376,6 +399,10 @@ class RecordView:
     framework: str | None
     ts: float
     defects: tuple[str, ...] = ()
+    # The producer's own identity for this record, read only to recognise the
+    # same record delivered twice. Bounded like a span, and absent-and-flagged
+    # rather than stringified when it is not a string: see DEFECT_EVENT_ID_TYPE.
+    event_id: str | None = None
 
     @property
     def has_identity(self) -> bool:
@@ -417,6 +444,11 @@ def view(raw: dict[str, Any], limits: Limits = DEFAULT_LIMITS) -> RecordView:
                                  DEFECT_SPAN_TYPE, DEFECT_SPAN_LENGTH))
     tool_name = take(identity_text(raw.get("tool_name"), limits.max_tool_name_chars,
                                    DEFECT_TOOL_NAME_TYPE, DEFECT_TOOL_NAME_LENGTH))
+    # One code for both type and length, as session_id has: an over-long id is
+    # no more usable for recognising a redelivery than a non-string one, and it
+    # is deliberately not truncated to make it usable (module docstring).
+    event_id = take(identity_text(raw.get("event_id"), limits.max_span_chars,
+                                  DEFECT_EVENT_ID_TYPE, DEFECT_EVENT_ID_TYPE))
 
     ident = {}
     for key in ("host", "user", "agent_name", "framework"):
@@ -449,7 +481,7 @@ def view(raw: dict[str, Any], limits: Limits = DEFAULT_LIMITS) -> RecordView:
         raw=raw, event_type=event_type, session_key=session_key, trace_key=trace_key,
         span_id=span_id, tool_name=tool_name, host=ident["host"], user=ident["user"],
         agent_name=ident["agent_name"], framework=ident["framework"], ts=ts,
-        defects=tuple(dict.fromkeys(defects)),
+        defects=tuple(dict.fromkeys(defects)), event_id=event_id,
     )
 
 
@@ -483,6 +515,12 @@ class Reject:
         }
 
 
+# How many rejected records the quarantine ledger RETAINS as rows. The counts
+# are exact regardless; only the per-record rows are bounded, because a file of
+# a million bad lines must not become a million-row ledger on the collector.
+REJECT_LEDGER_KEEP = 1000
+
+
 @dataclass
 class IngestReport:
     """What the reader accepted, refused, and stopped short of.
@@ -490,6 +528,13 @@ class IngestReport:
     The CLI turns this into an exit code. Before this existed, ``cmd_score``
     returned 0 unconditionally, so a pipeline could lose every record but two
     and still be marked successful.
+
+    The ledger rows are bounded by ``REJECT_LEDGER_KEEP`` and the bound used to
+    be silent: 1,500 bad lines produced a ledger of 1,001 rows whose summary
+    said 1,500, and nothing in the file explained the difference. The bound is
+    now stated by the summary (``rejects_truncated``, ``rejects_omitted``) and
+    by a marker row the CLI writes ahead of it, so a reader counting rows
+    learns they were cut rather than inferring a counting bug.
     """
 
     source: str = ""
@@ -534,11 +579,20 @@ class IngestReport:
         """Identity of what was actually READ, not of the summary counts."""
         return self._content.hexdigest()[:32]
 
-    def add_reject(self, r: Reject, keep: int = 1000) -> None:
+    def add_reject(self, r: Reject, keep: int = REJECT_LEDGER_KEEP) -> None:
         self.rejected += 1
         self.reject_codes[r.code] = self.reject_codes.get(r.code, 0) + 1
         if len(self.rejects) < keep:
             self.rejects.append(r)
+
+    @property
+    def rejects_omitted(self) -> int:
+        """Rejected records the ledger holds no row for. Zero until the bound."""
+        return self.rejected - len(self.rejects)
+
+    @property
+    def rejects_truncated(self) -> bool:
+        return self.rejects_omitted > 0
 
     def note_defects(self, codes: tuple[str, ...]) -> None:
         if codes:
@@ -560,6 +614,12 @@ class IngestReport:
             "records_accepted": self.accepted,
             "records_rejected": self.rejected,
             "records_with_defects": self.defective,
+            # The per-record rows are bounded; these say whether the bound hit
+            # and by how much, so `records_rejected` and a row count can be
+            # reconciled from the ledger alone.
+            "rejects_retained": len(self.rejects),
+            "rejects_omitted": self.rejects_omitted,
+            "rejects_truncated": self.rejects_truncated,
             "reject_ratio": round(self.reject_ratio, 6),
             "reject_codes": dict(sorted(self.reject_codes.items())),
             "defect_codes": dict(sorted(self.defect_codes.items())),
@@ -569,19 +629,12 @@ class IngestReport:
             "content_digest": self.content_digest,
         }
 
-    def merge(self, other: IngestReport) -> IngestReport:
-        self.accepted += other.accepted
-        self.rejected += other.rejected
-        self.defective += other.defective
-        self.rejects.extend(other.rejects)
-        for k, v in other.reject_codes.items():
-            self.reject_codes[k] = self.reject_codes.get(k, 0) + v
-        for k, v in other.defect_codes.items():
-            self.defect_codes[k] = self.defect_codes.get(k, 0) + v
-        self.note_bytes(other.content_digest.encode("ascii"), b"MERGE")
-        self.aborted = self.aborted or other.aborted
-        self.abort_reason = self.abort_reason or other.abort_reason
-        return self
+    # There is deliberately no `merge` here. One existed, nothing called it,
+    # and it extended `rejects` without honouring the ledger bound -- so the one
+    # path that could have produced an unbounded ledger was the one no caller
+    # exercised. Each file gets its own report; the CLI keeps the baseline's
+    # and the telemetry's apart on purpose, because provenance records which
+    # file each count came from.
 
 
 def digest_bytes(blob: bytes) -> str:
@@ -633,7 +686,27 @@ def json_safe(o: Any, _depth: int = 0, _max_depth: int = 100) -> Any:
 # C0 controls except nothing (all of them), DEL, and the C1 range. Kept as an
 # explicit class rather than str.isprintable() because the latter also strips
 # legitimate non-ASCII text an analyst may need to read.
-_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+#
+# Plus the Unicode characters that change how a terminal LAYS OUT what follows
+# without printing anything themselves, which is the same forgery as a C0
+# control one code page up. Escaping C0 alone left every one of these through:
+#
+#   U+202A..U+202E  bidi embeddings and overrides. An RLO reverses the visual
+#                   order of the rest of the line, so "0 finding(s)" can be
+#                   rendered out of a session_id that reads backwards.
+#   U+2066..U+2069  bidi isolates, the same trick with a terminator.
+#   U+2028, U+2029  line and paragraph separators. A terminal that honours
+#                   them starts a new line, which is the SEC-08 newline again.
+#   U+200B..U+200F  zero-width space, joiners and marks: invisible, so a
+#                   session_id can be made to look identical to another.
+#   U+FEFF          zero-width no-break space, the BOM as an in-line character.
+_CONTROL = re.compile(
+    r"[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]")
+
+
+def _visible_escape(m: re.Match[str]) -> str:
+    code = ord(m.group())
+    return f"\\x{code:02x}" if code < 0x100 else f"\\u{code:04x}"
 
 
 def sanitise_display(value: Any, max_chars: int = 200) -> str:
@@ -649,10 +722,12 @@ def sanitise_display(value: Any, max_chars: int = 200) -> str:
     and the human-readable half is the one somebody reads at 3am.
 
     Control characters become visible escapes rather than disappearing, because
-    an identifier that CONTAINS a newline is itself a finding.
+    an identifier that CONTAINS a newline is itself a finding. Bidirectional
+    overrides, line separators and zero-width characters are escaped the same
+    way and for the same reason: see ``_CONTROL``.
     """
     text = value if isinstance(value, str) else repr(value)
-    text = _CONTROL.sub(lambda m: f"\\x{ord(m.group()):02x}", text)
+    text = _CONTROL.sub(_visible_escape, text)
     if len(text) > max_chars:
         text = text[:max_chars] + f"...(+{len(text) - max_chars} chars)"
     return text

@@ -20,10 +20,10 @@ python eval/run_eval.py            # score everything, rewrite the card
 |---|---|
 | `vocabulary.py` | The tool vocabulary, in two naming conditions, and the audit that proves the `unseen` one is unseen |
 | `corpus/generate.py` | Session generation by task family, with label-integrity checks |
-| `corpus/sample.jsonl` | 104 sessions, one per family x kind, committed so the corpus can be read without running anything |
+| `corpus/sample.jsonl` | 184 sessions, one per family x kind, committed so the corpus can be read without running anything |
 | `corpus/data/` | The full corpus. **Not committed** — about 41 MB, deterministic from the seed |
 | `corpus/data/manifests/` | Per-agent capability manifests, the ground truth for the `manifest` condition |
-| `corpus/signatures.py` | A content-addressed cache for the corpus's Ed25519 signatures. **Not committed**, safe to delete, and explained below |
+| `corpus/signatures.py` | A content-addressed cache for the corpus's Ed25519 signatures. The module is committed; the cache file it writes, `corpus/.signature-cache.json`, is **not committed**, safe to delete, and explained below |
 | `harness.py` | Split, fit, score. The split assertions live here |
 | `metrics.py` | Wilson intervals, FP per 1000, coverage-adjusted recall |
 | `run_eval.py` | The grid, and the card |
@@ -554,5 +554,5 @@ The card's own "What this does not measure" section is the authoritative list.
 The short version: the corpus is synthetic and written by the detector's author,
 attack prevalence is an absurd 33%, and there is no adaptive attacker. One
 catalogued evasion from `EVASION.md` now appears in it, `attack_dilution` for
-E02, and it is there because a fix could not be graded without it — the other 27 of 28 still do not. It is a large improvement on twelve fixtures and it is not
+E02, and it is there because a fix could not be graded without it — the other 28 of 29 still do not. It is a large improvement on twelve fixtures and it is not
 real agent traffic.

@@ -106,12 +106,14 @@ GATES: tuple[Gate, ...] = (
          requires_dists=("cohaera",)),
     Gate("lint", "tests", "Lint",
          "The rule set is pinned in pyproject, so a version bump cannot "
-         "silently change what this gate means.",
-         ["ruff", "check", "src", "tests", "eval", "tools"],
+         "silently change what this gate means. Six directories: the labs "
+         "and demos used to sit outside the only lint that runs.",
+         ["ruff", "check", "src", "tests", "eval", "tools", "lab", "demo"],
          requires=("ruff",)),
     Gate("typecheck", "tests", "Type check",
-         "src only. The hostile suite constructs ill-typed values by the "
-         "hundred; type checking it would prove nothing about the package.",
+         "src and lab, per pyproject's [tool.mypy] files. The hostile suite "
+         "constructs ill-typed values by the hundred; type checking it would "
+         "prove nothing about the package.",
          ["mypy"], requires=("mypy",)),
     Gate("tests", "tests", "Unit and hostile tests",
          "The suite. Necessary, and on its own not sufficient -- see this "
@@ -210,12 +212,18 @@ def run_gate(gate: Gate, *, fast: bool) -> tuple[str, str, float]:
         return SKIP, reason, 0.0
 
     started = time.monotonic()
+    # encoding named, with replacement: `text=True` alone decodes with the
+    # console code page on Windows, and a gate's output is only ever shown,
+    # never parsed, so an undecodable byte must not turn into a crash that
+    # reads as the gate failing.
     if gate.shell:
         proc = subprocess.run(gate.shell, cwd=REPO, shell=True,
-                              capture_output=True, text=True, check=False)
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", check=False)
     else:
         proc = subprocess.run(gate.command, cwd=REPO,
-                              capture_output=True, text=True, check=False)
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", check=False)
     elapsed = time.monotonic() - started
 
     if proc.returncode == 0:

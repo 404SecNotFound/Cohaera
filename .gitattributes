@@ -1,0 +1,20 @@
+# Every text file is checked out with LF line endings on every platform.
+#
+# Three committed artefacts are compared BYTE FOR BYTE against what a fresh run
+# produces: lab/local/runs/latest/RUN-MANIFEST.json and its inputs (each input
+# is SHA-256 digested into the manifest), everything under lab/ch06/fixtures and
+# lab/ch06/runs/latest, and the evaluation card. With Git's default
+# `core.autocrlf=true` on Windows those files are checked out with CRLF, the
+# digests move, and both lab checks fail on a clean clone for a reason that has
+# nothing to do with the detector. The scripts now write LF bytes on every
+# platform; this is the other half, which makes the checkout match.
+#
+# `text=auto` lets Git detect binaries by content. There are no binary files
+# in the tree today; a committed binary must be listed below with `-text` so
+# that detection is never the only thing standing between it and a line-ending
+# rewrite.
+* text=auto eol=lf
+
+# No binaries are committed. When one is added, declare it here, for example:
+#   *.png -text
+#   *.ico -text

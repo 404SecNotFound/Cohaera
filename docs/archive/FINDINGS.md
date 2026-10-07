@@ -1,5 +1,7 @@
 # Findings against observra v1.1.0
 
+> **Archived.** This is a dated record. It reflects a reading of observra v1.1.0 at HEAD 2026-08-06 and has not been re-checked against later releases. The project position that framed these findings is superseded by [DIRECTION.md](../DIRECTION.md); the findings themselves are still cited from EVASION.md and SECURITY.md as the source-verified basis for E09 and F-01.
+
 Source-verified observations from reading `open-agent-ai-security/observra` at
 `main`, HEAD 2026-08-06, v1.1.0, 321 files. Every finding cites a file and line
 that can be re-checked.

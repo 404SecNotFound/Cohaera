@@ -32,8 +32,10 @@ Implementation is in [`src/cohaera/evidence.py`](../src/cohaera/evidence.py) and
 [`src/cohaera/ed25519.py`](../src/cohaera/ed25519.py); the reference producers are
 [`tools/collector_sign.py`](../tools/collector_sign.py) (telemetry) and
 [`tools/policy_sign.py`](../tools/policy_sign.py) (manifest and baseline); the
-tests are [`tests/test_evidence.py`](../tests/test_evidence.py). What it measured
-is §8, and §9 is what stage 4 is still not.
+tests are [`tests/test_evidence.py`](../tests/test_evidence.py). There is no
+reference producer for `cohaera.approval:1` issuer signatures; §4 states what
+an issuer has to sign. What it measured is §8, and §9 is what stage 4 is still
+not.
 
 Three external reviews have put the same item at the top and it has been open
 each time: *independent effect receipts, collector-side signing and hash
@@ -132,6 +134,17 @@ sequence, one key reference per stream):
    the capability manifest is — `--collector-keys keys.json`, with both a file
    digest and a semantic digest recorded in provenance, for the same reasons
    C4-10 gives.
+4. **Key.** The key whose signature first *verifies* on a stream is pinned to
+   it, and every later verified signature must be under that key or under one
+   the trust store records as its successor (`replaces`, followed
+   transitively). Anything else is `INTEGRITY_STREAM_KEY_CHANGED` and
+   inadmissible, and the verdict carries both key ids under
+   `stream_key_changes`. The pin is taken on verification rather than from the
+   first record's `key_id`, because that field is producer-written. Until this
+   existed (EH-02), "one key reference per stream" was a sentence in this
+   document and not a check: any key with the collector role could sign any
+   `stream_id`, including re-signing records 3 to 5 of another collector's
+   stream with the chain intact, and the session reported `attested`.
 
 Failure is not a check finding of the same kind as CH01–CH05. Those are
 statements about the agent's behaviour; this is a statement about whether the
@@ -187,8 +200,10 @@ A new surface `event_integrity`, and reason codes:
 | `NO_COLLECTOR_KEYS` | Records are signed, but no key file was supplied, so signatures were parsed and not verified |
 | `INTEGRITY_SEQUENCE_GAP` | Records are missing from this stream |
 | `INTEGRITY_CHAIN_BROKEN` | A record does not match the chain |
+| `INTEGRITY_CHAIN_UNANCHORED` | A record past sequence zero declared no `prev` and nothing before it was seen, so its content is bound to no chain and its signature attests nothing about it. Inadmissible, because the record claims attestation while withholding the field that would let the claim be checked |
 | `INTEGRITY_SIGNATURE_INVALID` | A signature did not verify under the supplied key |
 | `INTEGRITY_KEY_UNKNOWN` | `key_id` is not in the supplied key set |
+| `INTEGRITY_STREAM_KEY_CHANGED` | A verified signature under a different collector key than the one pinned to the stream, with no `replaces` succession recorded in the trust store |
 
 `NO_INTEGRITY_EVIDENCE` is the important one. It is what turns "Cohaera did not
 detect tampering" from a silent pass into a stated absence — the same move the
@@ -205,9 +220,10 @@ verdict says which of those it is not doing.
 
 **BUILT, as `cohaera.trust_store:1`.** The flat map of key id to bytes became a
 document where a key carries four more things, and each one is a deployment
-rather than a hypothetical: `roles` (a collector key attests telemetry, an
-operator key attests policy, and one key doing both hands the watched thing
-authority over the rules), `not_before`/`not_after` (rotation), `revoked_at`
+rather than a hypothetical: `roles` (a `collector` key attests telemetry, a
+`policy` key attests the manifest and baseline, an `approval` key issues
+`cohaera.approval:1` signatures, and one key doing more than one job hands the
+watched thing authority over the rules), `not_before`/`not_after` (rotation), `revoked_at`
 (compromise), and `replaces` (succession, so an auditor can reconstruct a
 rotation rather than infer it). `cohaera.collector_keys:1` still loads, as
 collector-role keys with no window, because deployments wrote one.
@@ -656,6 +672,18 @@ one that pays for the whole mechanism:
    also carry a `scope` naming the account, region, tenant, project or
    repository the identifier lives in, because "stripe" is a company rather
    than an authority and a charge id is unique within one account.
+
+   The verifier reads both fields (EH-05). It used to drop them at parse time,
+   so a `client_claimed` Message-ID bound to a failed call produced the same
+   `bound` receipt trust, and the same CH07 finding, as a provider-returned
+   one. The declared assurance is now a **ceiling** on the trust tier:
+   `client_claimed` caps at `claimed`, `provider_returned_object` at `bound`,
+   and `provider_returned_operation` does not cap. An absent assurance does
+   not cap either, because the field is optional and every receipt written
+   before R-17 lacks it. An *unreadable* one, a value outside the vocabulary,
+   is absent-and-flagged (`INVALID_EFFECT_RECEIPT`) and caps at `claimed`, so
+   a typo cannot read as the strongest level. The receipt in the verdict
+   carries `assurance`, `assurance_unreadable`, `trust_ceiling` and `scope`.
 2. **Presence.** A consequential call reporting `success` and carrying no
    receipt is now a *stated* gap rather than an accepted claim
    (`NO_EFFECT_RECEIPT`). Reported through coverage, not as a finding, because
@@ -717,9 +745,18 @@ corpus's false positives, and CH04's alert precision is 50%.
   "expires_at":     1785700330.0,
   "policy_id":      "email-external-recipients",
   "policy_digest":  "sha256:1a2b3c…",
-  "enforcement":    "blocking"
+  "enforcement":    "blocking",
+  "nonce":          "a7c1f0…",
+  "signature":      {"key_id": "approver-2026", "sig": "base64(Ed25519)"}
 }
 ```
+
+`scheme`, `decision` (`allow` or `deny`) and a `subject` naming at least a
+`span_id` are required; an approval naming no span is rejected as a defect.
+Everything else is optional. `nonce` and `signature` arrived with the E26
+remedy (item 5 below) and are absent from every stream produced before it;
+`arg_digest` and `policy_digest` are `sha256:` followed by 64 hex characters,
+and no other digest form is accepted.
 
 ### What Cohaera verifies
 
@@ -761,6 +798,71 @@ corpus's false positives, and CH04's alert precision is 50%.
    matching approval** is a bypass and can be called one. After an **advisory**
    event it is normal operation and should not fire at all — which is the direct
    fix for the corpus's largest single false-positive source.
+5. **Issuer signature, nonce and spent-nonce ledger** (E26, built 22 August
+   2026, opt-in). The `signature` is Ed25519 over a fixed field list joined by
+   `\x1f`: `cohaera.approval:1`, `decision`, `subject.span_id`,
+   `subject.tool_id`, `subject.arg_digest`, `nonce`, `granted_at`,
+   `expires_at`, in that order, with absent strings empty and numbers
+   formatted by Python `repr` (`approval_signing_input` in
+   [`src/cohaera/evidence.py`](../src/cohaera/evidence.py)). It is checked only
+   against a trust-store key holding the `approval` role, only if that key is
+   not revoked and covers `granted_at`, and only when `expires_at` is present:
+   an approval signed without an expiry does not verify, so an issuer cannot
+   mint an eternal signed approval. The result is a tier, reported on every
+   approval in the verdict as `approval_assurance`: `claimed` (parsed),
+   `bound` (the subject names span, tool and digest), `authenticated` (the
+   signature verified), `single_use` (authenticated, and the nonce was not
+   already in the `--seen-approvals` ledger). A nonce on an unsigned approval
+   does not raise the tier, because an attacker who can rewrite the span can
+   rewrite the nonce in the same edit.
+
+   None of this gates by default. An unsigned approval still covers a call,
+   and the verdict says which tier it reached. With
+   `--require-signed-approvals`, an approval below `authenticated` does not
+   cover, and CH04 reports the bypass. The ledger file
+   (`cohaera.approval_ledger:1`, written by `--seen-approvals`) is local,
+   unsigned and per host, so it inherits E22 whole. The tests are
+   [`tests/test_approval_trust.py`](../tests/test_approval_trust.py).
+
+   **There is no approval-signing helper under `tools/`.**
+   `collector_sign.py` signs telemetry and `policy_sign.py` signs the manifest
+   and baseline; nothing in the repository produces a signed approval for an
+   operator. An issuer has to build the signing input above and an Ed25519
+   signature itself, and the `_signed` helper in `tests/test_approval_trust.py`
+   is the only worked example. Until a helper exists, turning on
+   `--require-signed-approvals` in a real deployment is not practical, and the
+   operator guide says so.
+
+### What the signature covers, and what it does not
+
+A signed approval (`signature.key_id`, `signature.sig`) is verified over a
+fixed field list rather than canonical JSON: `scheme`, `decision`,
+`subject.span_id`, `subject.tool_id`, `subject.arg_digest`, `nonce`,
+`granted_at`, `expires_at`, in that order, joined by the octet `0x1f`. Those
+are the fields an attacker rewrites to move an approval onto another call
+(E26), and `expires_at` is required so that no signed approval is eternal.
+
+**Not signed:** `granted_by`, `policy_id`, `policy_digest`, `enforcement` and
+`signature.key_id` itself. They appear in the verdict beside
+`approval_assurance: authenticated`, and the signature says nothing about
+them: a holder of an authenticated approval can rewrite who granted it and
+under which policy without disturbing the signature. The signing input is not
+widened to cover them, because every approval issued to date would stop
+verifying. Instead the verdict carries `signed_fields`, the list above, so a
+reader of one verdict can tell an attested field from a claimed one without
+this paragraph (EH-03). An issuer that needs the grantor attested can fold it
+into `policy_id`, which is unsigned too, or into the nonce, which is signed.
+
+**Control characters are refused.** The separator cannot be allowed inside a
+field. A `tool_id` of `wire_transfer_send<0x1f>sha256:…` with no `arg_digest`
+and nonce `n` signed to the same bytes as `wire_transfer_send` *with* that
+digest and nonce `<0x1f>n`, and a signature over the first verified the second.
+`validate.identity_text` admits the byte, so `Approval.parse` refuses any
+identity or nonce field carrying a C0 control character or DEL
+(`INVALID_APPROVAL_OBJECT`; the approval is absent), and
+`approval_signing_input` raises on the issuer's side so that one cannot be
+minted. The wire format is unchanged: every approval validly signed before
+still verifies.
 
 ### Who has to change
 
@@ -849,6 +951,38 @@ The kinds that were built are `attack_omitted_call`, `attack_denied_effect`,
 
 ---
 
+## 7. What P1 is worth, honestly
+
+The fourth review holds this project at 3.5/10 largely on this item. Completing
+all three stages does not make the telemetry trustworthy. It makes the following
+statements true — **against a stream that carries the evidence**, which is the
+clause that does all the work and which no deployment satisfies by default:
+
+- deleting an event from a signed stream is **detectable**, not merely
+  occasionally unlucky;
+- modifying a record in transit is **detectable**;
+- a `success` with no receipt is **stated**, and a `failure` contradicted by a
+  receipt is **detected**;
+- a continuation past a blocking control with no bound approval can be called a
+  **bypass** rather than a coincidence;
+- and every one of those, when the evidence is absent, is reported as absent
+  rather than passed over.
+
+An attacker who holds the collector's signing key, or who compromises the
+collector process, defeats all of it. That attacker is strictly more expensive
+than today's, which requires only that the agent emit whatever it likes. Raising
+the price is what a control at this layer can do; anything stronger has to come
+from outside the agent, and that is [E13](../EVASION.md) and stays open.
+
+And the price is only raised where the collector sits outside the agent's blast
+radius. Where the adapter runs in-process — which is how observra is most often
+deployed — the agent can reach the signing key, and a perfectly verified chain
+is a perfectly verified chain of whatever the agent chose to say. CH06's
+coverage contract states that as an assumption on every session it evaluates,
+rather than letting a green tick imply otherwise.
+
+---
+
 ## 8. What it measured
 
 Unseen vocabulary, task-disjoint split, with a capability manifest. Full numbers
@@ -908,38 +1042,6 @@ thing a governed agent does. Same tool, same argument digest, previous attempt
 unsuccessful is now not a novel route, which took CH01 from 77.8% to 81.1% alert
 precision and cannot launder an attack: the failed first copy sits at the end of
 the same novel transition and is still counted.
-
----
-
-## 7. What P1 is worth, honestly
-
-The fourth review holds this project at 3.5/10 largely on this item. Completing
-all three stages does not make the telemetry trustworthy. It makes the following
-statements true — **against a stream that carries the evidence**, which is the
-clause that does all the work and which no deployment satisfies by default:
-
-- deleting an event from a signed stream is **detectable**, not merely
-  occasionally unlucky;
-- modifying a record in transit is **detectable**;
-- a `success` with no receipt is **stated**, and a `failure` contradicted by a
-  receipt is **detected**;
-- a continuation past a blocking control with no bound approval can be called a
-  **bypass** rather than a coincidence;
-- and every one of those, when the evidence is absent, is reported as absent
-  rather than passed over.
-
-An attacker who holds the collector's signing key, or who compromises the
-collector process, defeats all of it. That attacker is strictly more expensive
-than today's, which requires only that the agent emit whatever it likes. Raising
-the price is what a control at this layer can do; anything stronger has to come
-from outside the agent, and that is [E13](../EVASION.md) and stays open.
-
-And the price is only raised where the collector sits outside the agent's blast
-radius. Where the adapter runs in-process — which is how observra is most often
-deployed — the agent can reach the signing key, and a perfectly verified chain
-is a perfectly verified chain of whatever the agent chose to say. CH06's
-coverage contract states that as an assumption on every session it evaluates,
-rather than letting a green tick imply otherwise.
 
 ---
 

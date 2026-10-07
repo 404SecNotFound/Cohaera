@@ -46,7 +46,9 @@ EVAL_README = REPO / "eval" / "README.md"
 THREAT_MODEL = REPO / "docs" / "THREAT-MODEL.md"
 EXABEAM_STACK = REPO / "docs" / "EXABEAM-STACK.md"
 OUTSTANDING = REPO / "docs" / "OUTSTANDING.md"
-REVIEW_RESPONSE = REPO / "REVIEW-RESPONSE.md"
+REVIEW_RESPONSE = REPO / "docs" / "archive" / "REVIEW-RESPONSE.md"
+ROLE_REVIEWS = REPO / "docs" / "archive" / "REVIEWS-2026-08.md"
+EVAL_SAMPLE = REPO / "eval" / "corpus" / "sample.jsonl"
 EXTERNAL_RESULTS = REPO / "docs" / "EXTERNAL-RESULTS.md"
 EXTERNAL_RUN = REPO / "eval" / "external" / "runs" / "stepshield-2026-08-20"
 CHANGELOG = REPO / "CHANGELOG.md"
@@ -66,10 +68,14 @@ _EVASION_TEST = re.compile(r"^def (test_evasion_\w+)\(", re.MULTILINE)
 
 
 def count_tests() -> int:
-    """Collected tests, which is what "N passing" means when the suite is green.
+    """Collected tests.
 
-    Collection rather than execution: it is the same number, it takes a tenth of
-    the time, and it does not recurse when this runs from inside a test.
+    Collection rather than execution, and the documents say "collected" rather
+    than "passing" for a reason: a handful of tests skip by design when their
+    data is absent (the commit-resolving test on a shallow clone, for one), so
+    the collected count is the only number this can honestly derive. It takes
+    a tenth of the time of a run and does not recurse when this runs from
+    inside a test.
     """
     out = subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q"],
@@ -84,6 +90,38 @@ def count_tests() -> int:
 
 def count_sigma_rules() -> int:
     return len([p for p in SIGMA.glob("*.yml")] + [p for p in SIGMA.glob("*.yaml")])
+
+
+_TIER = re.compile(r"^\s*deployment_tier:\s*(\w+)\s*$", re.M)
+
+
+def count_sigma_tier(tier: str) -> Callable[[], int]:
+    """Rules declaring one deployment tier, read from the YAML itself.
+
+    content/README.md said "7 production, 5 hunt, 2 dashboard" over a pack
+    whose files declare 6 hunt rules. The split was typed once and never
+    re-read; this reads it.
+    """
+    def truth() -> int:
+        rules = list(SIGMA.glob("*.yml")) + list(SIGMA.glob("*.yaml"))
+        return sum(1 for p in rules
+                   for hit in _TIER.findall(p.read_text(encoding="utf-8"))
+                   if hit == tier)
+    return truth
+
+
+def count_sample_sessions() -> int:
+    """Distinct sessions in the committed corpus sample.
+
+    eval/README.md said 104 against a file holding 184. Counted as distinct
+    session ids rather than lines, because the sentence says sessions.
+    """
+    ids = set()
+    with EVAL_SAMPLE.open(encoding="utf-8") as fh:
+        for line in fh:
+            if line.strip():
+                ids.add(json.loads(line).get("session_id"))
+    return len(ids)
 
 
 # R-20. The four states a row can be in, declared per row rather than inferred.
@@ -156,6 +194,16 @@ def count_constructed_evasions() -> int:
 
 def count_closed_evasions() -> int:
     return len([e for e, s in _evasion_rows().items() if s == STATUS_CLOSED])
+
+
+def count_remedy_rows() -> int:
+    """Rows that are a fix exercised rather than an attack constructed.
+
+    The README states the catalogue both ways: the summary table counts
+    constructed evasions and the controls list counts every row. Naming the
+    difference as remedies is what stops the two reading as a contradiction.
+    """
+    return len([e for e, s in _evasion_rows().items() if s == STATUS_REMEDY])
 
 
 def count_working_evasions() -> int:
@@ -653,7 +701,7 @@ def count_roadmap_open() -> str:
 
 def count_role_review_open() -> str:
     """Findings in the three role reviews still marked Open or Recorded."""
-    text = (REPO / "docs" / "REVIEWS-2026-08.md").read_text(encoding="utf-8")
+    text = ROLE_REVIEWS.read_text(encoding="utf-8")
     return str(len(re.findall(r"\| \*\*(?:Open|Recorded)", text)))
 
 
@@ -663,12 +711,20 @@ def kernel_lines(name: str) -> str:
 
 
 CLAIMS = (
-    Claim("README tests passing", README,
-          re.compile(r"Tests, (\d+) passing across unit"), count_tests),
+    Claim("README tests collected", README,
+          re.compile(r"Tests, (\d+) collected across unit"), count_tests),
     Claim("README Sigma rules", README,
           re.compile(r"Sigma content pack, (\d+) rules"), count_sigma_rules),
     Claim("README catalogued evasions", README,
-          re.compile(r"Adversarial self-test, (\d+) evasions"), count_evasions),
+          re.compile(r"Adversarial self-test, (\d+) rows in"), count_evasions),
+    # The same sentence breaks the total down, so the 34 and the summary
+    # table's 28 stop reading as a contradiction. All three parts are derived.
+    Claim("README constructed evasions in controls list", README,
+          re.compile(r"rows in \[EVASION\.md\]\(EVASION\.md\): (\d+) constructed"),
+          count_constructed_evasions),
+    Claim("README remedy rows", README,
+          re.compile(r"constructed\s+evasions and (\d+) remedies"),
+          count_remedy_rows),
     # EVASION.md carries the same count in prose and drifted the same way.
     Claim("EVASION.md tests", EVASION,
           re.compile(r"There are now (\d+) tests"), count_tests),
@@ -692,6 +748,18 @@ CLAIMS = (
           card_precision_at_low_base_rate),
     Claim("content Sigma rules", CONTENT_README,
           re.compile(r"sigma/\s+(\d+) Sigma rules"), count_sigma_rules),
+    Claim("content production rules", CONTENT_README,
+          re.compile(r"Sigma rules, tiered: (\d+) production"),
+          count_sigma_tier("production")),
+    Claim("content hunt rules", CONTENT_README,
+          re.compile(r"Sigma rules, tiered: \d+ production, (\d+) hunt"),
+          count_sigma_tier("hunt")),
+    Claim("content dashboard rules", CONTENT_README,
+          re.compile(r"Sigma rules, tiered: \d+ production, \d+ hunt, (\d+) dashboard"),
+          count_sigma_tier("dashboard")),
+    Claim("eval README sample sessions", EVAL_README,
+          re.compile(r"`corpus/sample\.jsonl` \| (\d+) sessions"),
+          count_sample_sessions),
     # R-20. The sentence carries a third number -- how many are closed -- and
     # nothing checked it. That is where the file's arithmetic broke: 20 working
     # and 2 closed cannot both be right against a total of 21, and only two of
@@ -717,6 +785,12 @@ CLAIMS = (
     Claim("SECURITY.md working evasions", SECURITY,
           re.compile(r"catalogues \d+ constructed ways to defeat its checks,\s+(\d+)\s+of which currently work"),
           count_working_evasions),
+    # The out-of-scope list restated the catalogue size and read 22 against a
+    # file of 28 for several revisions; the sentence at the top of the same
+    # file was derived and this one was not.
+    Claim("SECURITY.md out-of-scope evasions", SECURITY,
+          re.compile(r"\*\*Anything in \[EVASION\.md\]\(EVASION\.md\)\.\*\* (\d+) constructed evasions"),
+          count_constructed_evasions),
     # \s+ rather than a literal space: these sentences are hard-wrapped prose and
     # a claim that stops matching when somebody rewraps a paragraph is a claim
     # that silently stops being checked.

@@ -5,9 +5,11 @@
 
 # Three role reviews, and what happened to each finding
 
+> **Archived.** This is a dated record, superseded by [DIRECTION.md](../DIRECTION.md). It reflects three role reviews conducted on 19 August 2026 and the state of the tree at that time. Findings still open are tracked in [OUTSTANDING.md](../OUTSTANDING.md), section B; the position and roadmap they argued about are stated in DIRECTION.md.
+
 **Conducted 19 August 2026, against the tree at the time.**
 
-[REVIEW-RESPONSE.md](../REVIEW-RESPONSE.md) records what happened to 43 findings
+[REVIEW-RESPONSE.md](REVIEW-RESPONSE.md) records what happened to 43 findings
 from two external security reviews. Those reviews read the code. This document
 records something different: three reviews that read the *project*, each from a
 role that would have to make a decision about it.
@@ -65,7 +67,7 @@ when half of it is deployable today.
 
 **Status: acted on.** The Sigma pack now carries an explicit deployment tier
 bound by test to the measured per-check evidence — see
-[content/README.md](../content/README.md).
+[content/README.md](../../content/README.md).
 
 ### 2. CH05 should not ship as an alert
 
@@ -113,7 +115,7 @@ directly monetisable of the three.
 | This is closer to a data-quality product than a detection product. The buyer is the detection-engineering or security-data-platform team, not the SOC — and "we found problems in your telemetry" is the product working, not failing | **Recorded, not acted on.** A positioning change of this size should be a deliberate decision, not a side effect of a review |
 | The `not_evaluated` reason code is a product primitive — an API contract a SIEM can surface to an analyst — and is currently treated as an implementation detail | **Open** |
 | The release gate that fails CI when published numbers drift from measured ones is a trust mechanism worth naming explicitly, in a market where every competitor claims high accuracy and none shows a denominator | **Open** |
-| The unexecuted five-phase VMware lab plan, shipped alongside working code, makes a reader discount the working code | **Acted on** — see [LAB.md](../LAB.md), which now separates what has been run from what has not |
+| The unexecuted five-phase VMware lab plan, shipped alongside working code, makes a reader discount the working code | **Acted on** — see [LAB.md](../../LAB.md), which now separates what has been run from what has not |
 | Success metric for the next year is not recall or false-positive rate. It is how many collectors emit the sidecar, and how many corpora the detector has run against that its author did not write | **Recorded** |
 | Escalated risk: four rounds of real defects were fixed and the evaluation card did not move. The eval is a gate on *claims*, not on *correctness* | **Open, and worth stating in the card itself.** It protects against publishing something false; it is not release QA, and nothing currently distinguishes the two |
 
@@ -128,7 +130,7 @@ adversary attacks the *deployment*.**
 | Finding | Status |
 |---|---|
 | Six entries are free, need no access, and still work — between them defeating four of seven checks. The `Cost` column carries this and is unsorted, so it is invisible | **Acted on** — the table is now tiered by adversary capability and the free-tier count is stated in the file's opening |
-| The capability manifest is the highest-leverage object in the system (recall 100% with it, 34.7% without) and manifest poisoning is **not in the catalogue**. Change control is documented as an assumption and treated as a control | **Acted on** in [docs/THREAT-MODEL.md](THREAT-MODEL.md) as a named unmodelled attack; the evasion entry and its test remain open |
+| The capability manifest is the highest-leverage object in the system (recall 100% with it, 34.7% without) and manifest poisoning is **not in the catalogue**. Change control is documented as an assumption and treated as a control | **Acted on** in [docs/THREAT-MODEL.md](../THREAT-MODEL.md) as a named unmodelled attack; the evasion entry and its test remain open |
 | `$COHAERA_CORRELATION_SECRET` is named as a risk and never tested as one. Unset, session keys are enumerable from the SIEM-side copy — a de-anonymisation issue and potentially a session-splicing primitive | **Acted on** in the threat model; untested, and named as such |
 | E21 is marked `CLOSED` and E13 `half_closed`, both conditional on a *signed* stream — while the evaluation card describes chained-but-unsigned as the realistic first-adoption state. Technically accurate, operationally misleading | **Acted on** — preconditions are now explicit |
 | There is no patient adversary anywhere in the model. All corpus attacks are within-session, and the harness scores one run, so cross-session attacks are not merely unmeasured but unmeasurable | **Acted on** as a reclassification to primary known-unmitigated risk. The measurement gap is open and is the hardest item on the list |
@@ -170,7 +172,7 @@ CI with the build failing on any diff.
 
 - Whether any of it works outside the synthetic corpus. All three said so
   independently, and it remains the project's largest open item — see
-  [docs/EXTERNAL-VALIDATION.md](EXTERNAL-VALIDATION.md).
+  [docs/EXTERNAL-VALIDATION.md](../EXTERNAL-VALIDATION.md).
 - Whether the checks are *correct*, as opposed to well-measured. The reviews
   read the evaluation card and the documentation; four rounds of external code
   review are the record on correctness.

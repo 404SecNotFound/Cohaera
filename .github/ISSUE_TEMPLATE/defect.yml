@@ -38,7 +38,9 @@ body:
     id: version
     attributes:
       label: Version
-      description: "`cohaera --version`, or the commit."
+      description: >-
+        The output of `python -c "import cohaera; print(cohaera.__version__)"`
+        and `pip show cohaera`, or the commit. There is no `--version` flag.
     validations:
       required: true
   - type: dropdown

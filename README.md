@@ -5,24 +5,17 @@
 
 # Cohaera
 
-**Security monitoring and detection engineering for AI agent activity.**
+**Passive security monitoring and detection engineering for AI agent activity.**
 
-Cohaera aims to do for AI agent telemetry what Zeek does for network traffic:
-turn an event stream into structured security records, session-level
-detections, and an explicit account of what could not be observed.
+Cohaera reads exported agent telemetry out of band, reconstructs sessions,
+verifies the evidence, runs deterministic detections, and emits records for a
+SIEM or investigation workflow. Think Zeek for agent telemetry. It is
+pre-alpha research software; the comparison describes the operating model,
+not the maturity.
 
-It is pre-alpha research software. The Zeek comparison describes the operating
-model and direction, not the current maturity.
-
-## Passive by design
-
-**Cohaera is not an AI gateway.** It does not proxy prompts, approve tool calls,
-block actions, run agents, or sit in their availability path.
-
-Agents and collectors emit telemetry. Cohaera reads that telemetry out of band,
-reconstructs sessions, checks the evidence, runs deterministic detections, and
-emits records for a SIEM, data lake, or investigation workflow. A gateway may
-be one telemetry source, but Cohaera does not depend on one.
+**It is not a gateway.** It does not proxy prompts, approve tool calls, block
+actions, or sit in an agent's availability path. A gateway can be one
+telemetry source; Cohaera does not need one.
 
 ```mermaid
 flowchart LR
@@ -45,119 +38,51 @@ flowchart LR
     end
 ```
 
-## Why it exists
+## The one idea
 
-Agent logs create two security questions:
-
-1. Did the session contain suspicious behaviour?
-2. Was there enough trustworthy evidence to answer the first question?
-
-Most detection pipelines answer the first and silently assume the second.
-Cohaera keeps them separate. Each check returns `evaluated`, `degraded`, or
-`not_evaluated` with machine-readable reasons. Missing evidence cannot become a
-clean result.
-
-The project concentrates on security problems that prompt filters and inline
-policy controls do not settle:
-
-- multi-event sequences across a complete agent session;
-- consequential tool use after untrusted content or a guardrail event;
-- actions omitted from the agent's final account;
-- missing, reordered, modified, replayed, or unsigned telemetry;
-- approvals that do not bind to the exact action performed;
-- claimed failures contradicted by provider-returned effect receipts;
-- detection blind spots caused by absent fields, unknown tools, or weak
-  correlation.
+Agent logs raise two questions. Did the session contain suspicious behaviour,
+and was there enough trustworthy evidence to answer that? Most pipelines
+answer the first and assume the second. Cohaera keeps them apart: every check
+returns `evaluated`, `degraded`, or `not_evaluated` with machine-readable
+reasons, and missing evidence can never become a clean result.
 
 ## Try it in five minutes
 
-The local lab needs only Python 3.10–3.13. It uses no network, VM, API key, or
-package installation.
+Python 3.10 to 3.14, no network, no package installation.
 
 ```bash
 git clone https://github.com/404SecNotFound/Cohaera.git
 cd Cohaera
 
-python3 lab/local/run.py --check
+python3 lab/local/run.py --check      # six states of one workflow, end to end
 cat lab/local/runs/latest/RESULTS.md
+
+python3 lab/ch06/run.py --check       # nine tampering conditions on one signed stream
 ```
 
-That run exercises six states of one workflow: normal behaviour, a suspicious
-sequence, evidence failure, an outcome contradiction, a partially bound
-receipt, and partial attestation. It also tests replay, stream forks, and the
-coverage gained from a capability manifest, collector key, and correlation
-secret.
+The **[operator guide](docs/OPERATOR-GUIDE.md)** walks through the inputs,
+the output, and the code path.
 
-Then run the independent evidence-integrity matrix:
+## Score your own telemetry
 
 ```bash
-python3 lab/ch06/run.py --check
-```
-
-It applies nine declared conditions to one signed stream and compares Cohaera
-with a separate standard-library verifier. Both parse the same committed JSONL
-bytes.
-
-For a guided tour of the inputs, output, code path, and experiments, follow the
-**[operator guide](docs/OPERATOR-GUIDE.md)**.
-
-## Score telemetry
-
-Install the command locally:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 python -m pip install -e .
 python tests/make_fixtures.py
-```
 
-Score a suspect stream against a benign sequence baseline:
-
-```bash
 cohaera score tests/fixtures/suspect.jsonl \
   --baseline tests/fixtures/benign.jsonl > verdicts.jsonl
 ```
 
-Add the inputs that make stronger conclusions possible:
+Verdicts go to stdout as JSONL; findings and coverage gaps go to stderr.
+Stronger conclusions need stronger inputs: a capability manifest, a trust
+store for collector and approval keys, the stream and approval ledgers, and a
+freshness bound. Input today is observra-shaped JSONL. Fields read, record
+emitted, exit codes and every flag are in **[docs/REFERENCE.md](docs/REFERENCE.md)**.
+To make your own runtime emit telemetry Cohaera can verify, see
+**[docs/EMITTING.md](docs/EMITTING.md)**.
 
-```bash
-export COHAERA_CORRELATION_SECRET='replace-with-a-lab-secret'
-
-cohaera score agent-telemetry.jsonl \
-  --baseline benign-telemetry.jsonl \
-  --tool-manifest capability-manifest.json \
-  --trust-store trust-store.json \
-  --seen-streams seen-streams.json \
-  --seen-approvals seen-approvals.json \
-  --evidence-max-age 3600 \
-  --reject-log quarantine.jsonl \
-  --max-reject-ratio 0.01 > verdicts.jsonl
-```
-
-JSONL verdicts go to stdout. Human findings and coverage gaps go to stderr, so
-the machine-readable stream can be piped directly into another security tool.
-Exit codes distinguish a complete run, partial quarantine, strict rejection,
-and incomplete output.
-
-## What it emits
-
-Cohaera currently emits one `cohaera_session_verdict` per assembled session.
-Each record contains:
-
-- stable run, verdict, agent, trace, and session identity;
-- derived tool sequence, effects, timing, cost, and call pairing;
-- findings with severity and supporting evidence;
-- `evidence_status`, from `verified_complete` through `inadmissible`;
-- a coverage contract for every CH01–CH07 check;
-- configuration and input provenance for reproduction and deduplication.
-
-The longer-term record model is described in
-**[project direction](docs/DIRECTION.md)**. The intended shape is a small set of
-stable activity logs plus notices, similar to the separation between Zeek's
-protocol logs and its notice stream.
-
-## Detections available today
+## Detections
 
 | ID | Security question |
 |---|---|
@@ -169,102 +94,68 @@ protocol logs and its notice stream.
 | **CH06** `evidence_integrity` | Are sequence, chain, signatures, freshness, replay, and fork state admissible? |
 | **CH07** `effect_contradiction` | Does a claimed failure conflict with a receipt, or does the receipt fail to bind? |
 
-CH01–CH05 reason about behaviour recorded in a session. CH06 reasons about the
-record itself. CH07 finds contradictions between claims and effect evidence.
-Every conclusion remains conditional on the coverage and evidence state emitted
-beside it.
-
-## The detection-engineering edge
-
-The gateway and inline enforcement market is already well supplied. Cohaera's
-direction is the security operations layer that remains useful regardless of
-which model, framework, gateway, or collector produced the events:
-
-1. **Activity records before alerts.** Preserve structured facts that analysts
-   can hunt and correlate, even when no bundled rule fires.
-2. **Evidence-aware detections.** Carry integrity and coverage into every
-   conclusion rather than attaching a generic telemetry-health flag later.
-3. **Session and stream reasoning.** Detect sequences, omissions,
-   contradictions, replay, forks, and incomplete observation.
-4. **Open detection content.** Ship portable Sigma rules, LogRhythm AIE
-   specifications, an Exabeam field map, and machine-test every field they use.
-5. **Adversarial measurement.** Keep evasions as executable regressions and
-   publish the false-positive cost of closing them.
-
-Cohaera complements collectors, OpenTelemetry, Exabeam Agent Behavior
-Analytics, and existing enforcement products. It should make their downstream
-security analysis better, rather than become another control point agents must
-traverse. The detailed competitive boundary and claims policy remain in
-[POSITIONING.md](POSITIONING.md) and
-[the Exabeam stack analysis](docs/EXABEAM-STACK.md).
+Each verdict carries findings, an `evidence_status` from `verified_complete`
+to `inadmissible`, a coverage contract per check, and provenance. Portable
+Sigma rules, LogRhythm AIE specifications and an Exabeam field map ship in
+`content/`, and every field they reference is machine-tested against emitted
+output.
 
 ## Evidence before claims
 
-The behavioural detections are currently too noisy for operational alerting.
-The synthetic evaluation reports:
+The behavioural detections are too noisy for operational alerting today.
 
 | Measure | Current result |
 |---|---:|
 | False positives per 1000 **benign** sessions | **420.4** |
 | Projected precision at 0.1% attack prevalence | **0.238%** |
-| Ways to defeat it | **28** catalogued, of which **26** still work |
+| Ways to defeat it | **29** catalogued, of which **27** still work |
 | External result | 375 third-party attack sessions scored, zero detections |
 
-The result is a layer mismatch found by measurement: those third-party traces
-did not preserve the content and evidence needed by Cohaera's checks. It is not
-evidence that the current detections work on outside traffic.
+The external zero is a layer mismatch: those traces do not carry the content
+and evidence the checks read. It is not evidence that the detections work on
+outside traffic. Cohaera is an assurance control, not an adversarial one: it
+reads what the observed agent chose to emit, says how trustworthy that record
+is, and cannot by itself say whether the agent lied.
 
-Repository controls are substantial but do not replace external validation:
-
-- Tests, 1191 passing across unit, hostile-input, content, lab, and regression
-  coverage.
+- Tests, 1542 collected across unit, hostile-input, content, lab, and
+  regression coverage. A few skip by design where their data is absent, such
+  as commit history on a shallow clone.
 - Sigma content pack, 15 rules, validated and conformance-tested against real
   emitted fields.
-- Adversarial self-test, 34 evasions and remedies in [EVASION.md](EVASION.md).
+- Adversarial self-test, 35 rows in [EVASION.md](EVASION.md): 29 constructed
+  evasions and 6 remedies.
 
-Read the generated [evaluation card](eval/EVALUATION-CARD.md) before using a
-behavioural finding as an alert. Read [EVASION.md](EVASION.md) before treating
-the evidence mechanisms as a trust boundary.
+Read the [evaluation card](eval/EVALUATION-CARD.md) before using a behavioural
+finding as an alert, and [EVASION.md](EVASION.md) before treating the evidence
+mechanisms as a trust boundary.
 
 ## Roadmap
 
-- [x] Passive JSONL analysis with bounded ingestion and quarantine
-- [x] Session reconstruction, CH01–CH07, and per-check coverage contracts
-- [x] Evidence integrity, effect receipts, approval binding, and replay state
-- [x] Portable Sigma, LogRhythm AIE, and Exabeam mapping content
-- [x] Reproducible local and CH06 conformance labs
 - [ ] Define a stable 1.0 activity-record family for sessions, tools, evidence, coverage, and notices
 - [ ] Add streaming session state with watermarks while preserving deterministic replay
 - [ ] Add passive adapters for OpenTelemetry and additional exported agent telemetry
 - [ ] Expand content around identity, delegation, credentials, data movement, tool supply chain, and cross-session campaigns
 - [ ] Measure on independently generated traces and complete a live SIEM/Exabeam workflow
 
-The milestones, acceptance gates, and explicit non-goals are in
-[docs/DIRECTION.md](docs/DIRECTION.md).
+Milestones, gates, non-goals and the claims policy are in
+[docs/DIRECTION.md](docs/DIRECTION.md). Cohaera is an independent consumer of
+observra's JSONL and complements, rather than replaces, Exabeam Agent Behavior
+Analytics; [docs/EXABEAM-STACK.md](docs/EXABEAM-STACK.md) draws the boundary.
 
 ## Repository map
 
 ```text
-src/cohaera/       ingestion, session model, evidence verification, checks, CLI
+src/cohaera/       ingestion, session model, evidence verification, checks, CLI, emitter
 lab/local/         executed end-to-end lab; start here
 lab/ch06/          signed-stream conformance matrix and independent baseline
 demo/              two small scenario demonstrations
 eval/              synthetic corpus, runner, and generated evaluation card
 content/           Sigma, LogRhythm AIE, Exabeam mapping, capability manifest
-docs/              threat model, trust design, research, reviews, integration
+docs/              operator guide, reference, direction, threat model, trust design
 tests/             unit, hostile-input, content, evasion, lab, and CI contracts
 ```
 
-Use the [documentation map](docs/README.md) when you need the research and audit
-trail. The root README is deliberately limited to the product boundary, first
-run, current evidence, and next work.
-
-## Relationship to upstream projects
-
-Cohaera is an independent downstream consumer of observra's public JSONL
-output. It is not a fork and has no runtime dependency on observra. It also
-does not replace Exabeam Agent Behavior Analytics or Praxen; each operates at a
-different point in the monitoring and assurance stack.
+The [documentation map](docs/README.md) indexes everything else.
 
 ## License
 

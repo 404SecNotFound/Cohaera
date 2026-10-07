@@ -43,7 +43,7 @@ this repository you can re-check. **Partially executed** means some of it has.
 
 | Phase | What it would establish | Status |
 |---|---|---|
-| **0 · Verify the gap** | observra has no correlation or baselining layer | **EXECUTED, off-lab.** Run on 2026-08-07 against observra at `202683a0`, off the lab because this phase needs no VM. The raw output of every command below is captured verbatim in [docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md), and the findings drawn from it are [FINDINGS.md](FINDINGS.md) F-01 to F-03, each citing a file and a line. **The gate passed**: the gap is real. |
+| **0 · Verify the gap** | observra has no correlation or baselining layer | **EXECUTED, off-lab.** Run on 2026-08-07 against observra at `202683a0`, off the lab because this phase needs no VM. The raw output of every command below is captured verbatim in [docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md), and the findings drawn from it are [FINDINGS.md](docs/archive/FINDINGS.md) F-01 to F-03, each citing a file and a line. **The gate passed**: the gap is real. |
 | **1 · Build and segment the VMs** | Network isolation, without which `egress` has no boundary to cross and means nothing | **Not built.** No VM exists. [`lab/Build-CohaeraLab.ps1`](lab/README.md) would build them unattended and has never been run either; its own page says so in its second paragraph. |
 | **2 · Instrument and smoke test** | Telemetry travelling from an instrumented agent to a collector to a scoring host | **Not built.** One step of it is reproducible on any machine and is exercised on every CI run: 2.2, which installs Cohaera and scores the generated fixtures. Everything involving observra, AgentDojo or a VM is not. |
 | **3 · Generate the corpus** | A labelled corpus of real agent runs under attack | **Not built.** No agent run has been recorded, and `tools/label_corpus.py` — which this page's own step 3.3 calls — does not exist. |
@@ -153,7 +153,7 @@ back into the analysis host.
 > output of the commands below is captured verbatim in
 > [docs/PHASE0-VERIFICATION.md](docs/PHASE0-VERIFICATION.md) so anyone can
 > re-run them and compare. The findings drawn from it are
-> [FINDINGS.md](FINDINGS.md) F-01 to F-03.
+> [FINDINGS.md](docs/archive/FINDINGS.md) F-01 to F-03.
 >
 > **The gate passed**: no behavioural analytics, a single-event rule engine,
 > `detect_suspicious_sequence` unreachable, and injection scanning nowhere near

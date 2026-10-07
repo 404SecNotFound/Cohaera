@@ -826,9 +826,9 @@ def main(argv: list[str] | None = None) -> int:
         "leakage_experiment": leakage,
     }
     CARD_JSON.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n",
-                         encoding="utf-8")
+                         encoding="utf-8", newline="\n")
     CARD_MD.write_text(render_card(results, args.seed, summary, leakage),
-                   encoding="utf-8")
+                   encoding="utf-8", newline="\n")
 
     headline = _cell(results, "unseen", REGIME_TASK_DISJOINT, CAP_MANIFEST)
     blind = _cell(results, "unseen", REGIME_TASK_DISJOINT, CAP_NAME_ONLY)

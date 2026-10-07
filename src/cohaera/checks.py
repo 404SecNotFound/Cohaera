@@ -48,11 +48,13 @@ from .evidence import (
     BOUND_EXACT,
     BOUND_NONE,
     BOUND_SPAN_ONLY,
+    DECISION_ALLOW,
     DECISION_DENY,
     ENFORCEMENT_ADVISORY,
     ENFORCEMENT_BLOCKING,
     ENFORCEMENT_UNDECLARED,
     R_CHAIN_BROKEN,
+    R_CHAIN_UNANCHORED,
     R_FRESHNESS_UNVERIFIABLE,
     R_KEY_EXPIRED,
     R_KEY_NOT_YET_VALID,
@@ -71,6 +73,7 @@ from .evidence import (
     R_SIGNATURE_PREFIX_ONLY,
     R_STALE,
     R_STREAM_FORKED,
+    R_STREAM_KEY_CHANGED,
     R_STREAM_REPLAYED,
     R_STREAM_SKIPPED_RECORDS,
     R_UNSIGNED,
@@ -82,7 +85,12 @@ from .evidence import (
     SessionIntegrity,
 )
 from .identity import digest
-from .limits import DEFAULT_LIMITS, Limits
+from .limits import (
+    DEFAULT_LIMITS,
+    DEFECT_DUPLICATE_DELIVERY,
+    DEFECT_EVENT_ID_REUSED,
+    Limits,
+)
 from .model import (
     POLICY_EVENTS,
     SOURCE_MANIFEST,
@@ -100,6 +108,7 @@ from .validate import sanitise_display
 # one module, even though the integrity ones are produced in ``evidence``.
 __all__ = [
     "R_CHAIN_BROKEN",
+    "R_CHAIN_UNANCHORED",
     "R_FRESHNESS_UNVERIFIABLE",
     "R_KEY_EXPIRED",
     "R_KEY_NOT_YET_VALID",
@@ -119,6 +128,7 @@ __all__ = [
     "R_SIGNATURE_PREFIX_ONLY",
     "R_STALE",
     "R_STREAM_FORKED",
+    "R_STREAM_KEY_CHANGED",
     "R_STREAM_REPLAYED",
     "R_STREAM_SKIPPED_RECORDS",
     "R_UNSCANNED_CONTENT_MARKERS",
@@ -478,10 +488,38 @@ _NEGATION = re.compile(
     r"chose not to|avoided)\b", re.IGNORECASE)
 
 
+# Where a negation stops applying: the end of the sentence it sits in. The
+# lookahead keeps "3.5 MB" and "v2.1" from ending a span mid-sentence, which
+# would re-admit "I did not send the 3.5 MB email" as a disclosure.
+_SENTENCE_END = re.compile(r"[.!?;](?=\s|$)|\n")
+
+
 def _negated_spans(text: str, window: int = 80) -> list[tuple[int, int]]:
-    """Character ranges following a negation cue, where a mention means denial."""
-    return [(m.start(), min(len(text), m.end() + window))
-            for m in _NEGATION.finditer(text)]
+    """Character ranges following a negation cue, where a mention means denial.
+
+    Bounded by the WINDOW and by the SENTENCE, whichever comes first. The span
+    used to run a flat 80 characters past the cue, through any punctuation,
+    so a denial in one sentence swallowed the disclosure in the next:
+
+        "No issues found, nothing was skipped. I sent the email to Bob."
+
+    "no" and "nothing" are not cues, but "skipped" is, and its 80 characters
+    reached "sent the email", so the only honest sentence in the summary was
+    read as a denial and CH02 fired CRITICAL on a disclosed egress -- while
+    the same summary without the first sentence did not fire. A negation does
+    not cross a full stop in any reading of English, and the EVASION.md row
+    that records negation as handled was describing a narrower fix than the
+    code had. Ending the span at `.`, `!`, `?`, `;` or a newline is the
+    correction; the window still applies inside a long sentence.
+    """
+    out: list[tuple[int, int]] = []
+    for m in _NEGATION.finditer(text):
+        end = min(len(text), m.end() + window)
+        stop = _SENTENCE_END.search(text, m.end(), end)
+        if stop is not None:
+            end = stop.start()
+        out.append((m.start(), end))
+    return out
 
 
 class ResponseIndex:
@@ -980,7 +1018,7 @@ def ch03_untrusted_to_consequential(session: Session,
     # whether the evidence exists, which is the thing the collector sequence
     # was introduced to take away from it. _References orders by sequence where
     # one exists and reports the rest as indeterminate.
-    marker_events = [e for e in session.events if scanner_marked(e.data)]
+    marker_events = [e for e in session.unique_events if scanner_marked(e.data)]
     if not marker_events:
         return []
 
@@ -1091,7 +1129,7 @@ def unordered_after_marker(session: Session) -> list[ToolCall]:
     call on the marker's tick empties the finding and leaves the session
     looking clean, so the emptiness has to be reported by something.
     """
-    marker_events = [e for e in session.events if scanner_marked(e.data)]
+    marker_events = [e for e in session.unique_events if scanner_marked(e.data)]
     if not marker_events:
         return []
     audit = session.integrity   # verified-sequence oracle; see _ordering
@@ -1176,7 +1214,7 @@ def _undeclared_controls(session: Session) -> list[Event]:
     manifest = session.manifest
     if not manifest.policies:
         return []
-    return [e for e in session.events
+    return [e for e in session.unique_events
             if e.event_type in POLICY_EVENTS
             and manifest.policy(e.data.get("policy_id"), e.event_type) is None]
 
@@ -1189,7 +1227,7 @@ def _policy_semantics(session: Session) -> dict[str, Any]:
     a gap, and averaging it away would report the better half.
     """
     sources = [_resolved_enforcement(e, session.manifest)[1]
-               for e in session.events if e.event_type in POLICY_EVENTS]
+               for e in session.unique_events if e.event_type in POLICY_EVENTS]
     return {
         "undeclared": ENFORCEMENT_FROM_NOWHERE in sources,
         "in_band_only": (ENFORCEMENT_FROM_NOWHERE not in sources
@@ -1216,6 +1254,17 @@ def _approval_state(session: Session, call: ToolCall) -> tuple[str, Any]:
     covering = session.covering_approval(call)
     if covering is not None:
         return APPROVAL_COVERED, covering
+    if session.require_signed_approvals:
+        # Nothing covered, and an approval here passes every producer-stated
+        # test, so assurance is the only condition covering_approval can have
+        # failed it on. Decided before the mismatch and expiry states because
+        # those describe a DIFFERENT approval; this one is the right approval
+        # that nobody trusted vouches for.
+        for m in matches:
+            if (m.approval.decision == DECISION_ALLOW
+                    and m.binding in BINDING_TRUSTED and m.fresh is not False
+                    and m.observed_before_call is True):
+                return APPROVAL_UNASSURED, m
     for m in matches:
         if m.binding == BOUND_ARG_MISMATCH:
             return APPROVAL_ARG_MISMATCH, m
@@ -1244,16 +1293,28 @@ APPROVAL_EXPIRED = "approval_expired"
 # used to be indistinguishable from APPROVAL_COVERED, which meant one field the
 # producer could omit switched CH04 off entirely for that call.
 APPROVAL_SPAN_ONLY = "approval_not_argument_bound"
+# E26. An approval that fits the call in every way the producer can state --
+# ALLOW, exactly bound, inside its window, observed before the call -- and
+# that nothing the operator trusts could vouch for: no issuer signature, a
+# signature under a key the store does not hold for the approval role, or a
+# nonce the ledger had already seen. Only reachable under
+# --require-signed-approvals. Before it existed the fall-through reported this
+# case as APPROVAL_NONE, "no approval was presented", in precisely the run
+# whose whole purpose was to say that one was presented and was not good.
+APPROVAL_UNASSURED = "approval_not_assured"
 
 # The states in which a completed call after a control is NOT covered. Named
 # rather than written as "!= APPROVAL_COVERED" so that adding a further state
 # later cannot silently make it count as approval.
 UNAPPROVED_STATES = frozenset({APPROVAL_NONE, APPROVAL_DENIED,
                                APPROVAL_ARG_MISMATCH, APPROVAL_EXPIRED,
-                               APPROVAL_SPAN_ONLY})
+                               APPROVAL_SPAN_ONLY, APPROVAL_UNASSURED})
 
 _APPROVAL_WORDING = {
     APPROVAL_NONE: "no approval was presented for it",
+    APPROVAL_UNASSURED: "the approval naming it fits the call and nothing could "
+                        "vouch for it: unsigned, signed by a key not trusted "
+                        "for approvals, or its nonce already spent",
     APPROVAL_DENIED: "an approval bound to it recorded the decision DENY",
     APPROVAL_ARG_MISMATCH: "the only approval naming it was granted for "
                            "different arguments",
@@ -1324,7 +1385,7 @@ def ch04_guardrail_overrun(session: Session,
     counts: Counter[str] = Counter()
     audit = session.integrity   # verified-sequence oracle; see _ordering
     unusable_clock = 0
-    for e in session.events:
+    for e in session.unique_events:
         if e.event_type not in POLICY_EVENTS:
             continue
         counts[e.event_type] += 1
@@ -1416,6 +1477,15 @@ def ch04_guardrail_overrun(session: Session,
             # docstring. See evidence.APPROVAL_ORIGIN_IN_BAND.
             "approval_origins": sorted(
                 {m.approval.origin for c in completed + approved
+                 if (m := states[id(c)][1]) is not None}),
+            # E26. The tier each approval in play reached in THIS deployment:
+            # claimed or bound from the producer's own fields, authenticated
+            # once a trust store verified the issuer, single_use once a nonce
+            # ledger had not seen it. Without this the only visible effect of
+            # --seen-approvals was CH04 firing on a replay, and an operator
+            # could not tell a ledger that worked from one never consulted.
+            "approval_assurance": sorted(
+                {m.approval.tier for c in completed + approved
                  if (m := states[id(c)][1]) is not None}),
         }
 
@@ -1606,7 +1676,7 @@ def unordered_after_policy(session: Session) -> list[ToolCall]:
     audit = session.integrity   # verified-sequence oracle; see _ordering
     out: list[ToolCall] = []
     seen: set[int] = set()
-    for e in session.events:
+    for e in session.unique_events:
         if e.event_type not in POLICY_EVENTS or not e.timestamp_valid:
             continue
         for c in session.consequential_calls:
@@ -1774,6 +1844,11 @@ def ch06_evidence_integrity(session: Session,
     if R_CHAIN_BROKEN in codes:
         parts.append(f"{len(audit.chain_breaks)} record(s) do not match the hash "
                      f"chain")
+    if R_CHAIN_UNANCHORED in codes:
+        parts.append(f"{len(audit.unanchored)} record(s) past sequence zero "
+                     f"declared no predecessor, so their content is bound to "
+                     f"no chain and the signature they carry attests nothing "
+                     f"about it")
     if R_SIGNATURE_INVALID in codes:
         parts.append(f"{len(audit.bad_signatures)} signature(s) did not verify")
     if R_KEY_UNKNOWN in codes:
@@ -1815,6 +1890,16 @@ def ch06_evidence_integrity(session: Session,
                      f"scored, and the chain head DIFFERS there: two mutually "
                      f"exclusive versions of the same stream, both signed. This "
                      f"is not a replay, it is a rewritten history")
+    if R_STREAM_KEY_CHANGED in codes:
+        # EH-02. Both key ids, because "which key took over" is what gets
+        # revoked. A rotation the trust store records as `replaces` never
+        # reaches here; this is a second trusted key with no such record.
+        changes = ", ".join(
+            f"{c['from_key_id']} -> {c['to_key_id']} at seq {c['seq']}"
+            for c in audit.stream_key_changes)
+        parts.append(f"the signing key changed mid-stream ({changes}) with no "
+                     f"succession recorded in the trust store: a second "
+                     f"trusted key wrote into a stream that is not its own")
 
     return [Finding(
         check=CH06_INTEGRITY,
@@ -1886,7 +1971,10 @@ def _receipt_trust_of(call: ToolCall) -> str:
     if call.receipt is None:
         return RECEIPT_CLAIMED
     if _receipt_binding(call) in BINDING_TRUSTED:
-        return RECEIPT_BOUND
+        # EH-05. Capped by the adapter's declared assurance: a `client_claimed`
+        # identifier that binds exactly is still one the caller may have
+        # minted, and reads as `claimed`. See evidence.RECEIPT_ASSURANCE_CEILING.
+        return call.receipt.capped(RECEIPT_BOUND)
     return RECEIPT_CLAIMED
 
 
@@ -2166,6 +2254,16 @@ R_SCANNER_PARTIAL = "INJECTION_SCANNER_PARTIAL_COVERAGE"
 R_UNSCANNED_CONTENT_MARKERS = "UNSCANNED_CONTENT_CARRIES_MARKERS"
 R_SCANNER_CONTRADICTED = "SCANNER_ANSWER_CONTRADICTED_BY_CONTENT"
 R_FIELD_DEFECTS = "RECORD_FIELD_DEFECTS_PRESENT"
+# The session arrived with records delivered more than once and the checks
+# ran over the first copy of each. Same string as the limits constant so a
+# rule written against the feature matches the coverage reason too. It does
+# not lower confidence: the checks saw every distinct record. It is reported
+# because the input was not what it appeared to be, and a collector that
+# retries is a collector whose stream can also be re-fed (EVASION.md E22).
+R_DUPLICATE_DELIVERY = DEFECT_DUPLICATE_DELIVERY
+# Two records in this session wear one `event_id`. Neither was dropped; see
+# Session._build_dedup for why dropping either would be the worse error.
+R_EVENT_ID_REUSED = DEFECT_EVENT_ID_REUSED
 # P1. The three absences that are now STATED rather than passed over.
 R_NO_APPROVAL_EVIDENCE = "NO_APPROVAL_EVIDENCE"
 R_APPROVAL_NOT_ARGUMENT_BOUND = "APPROVAL_BOUND_BY_SPAN_ONLY"
@@ -2263,9 +2361,9 @@ def _classification_quality(session: Session) -> tuple[float, int, int, int, flo
 
 
 def _clock_quality(session: Session) -> float:
-    if not session.events:
+    if not session.unique_events:
         return 1.0
-    return 1.0 - (session.clock_defects / len(session.events))
+    return 1.0 - (session.clock_defects / len(session.unique_events))
 
 
 def _scanner_evidence(session: Session) -> bool:
@@ -2284,7 +2382,7 @@ def _scanner_evidence(session: Session) -> bool:
     type error could turn CH03's blind spot into a clean bill of health, which
     is the same fail-open the schema firewall exists to prevent.
     """
-    return any(scanner_reported(e.data) for e in session.events)
+    return any(scanner_reported(e.data) for e in session.unique_events)
 
 
 @dataclass(frozen=True)
@@ -2337,7 +2435,7 @@ def _scanner_coverage(session: Session) -> ScannerCoverage:
 
     scanned: set[int] = set()
     unbound = 0
-    for e in session.events:
+    for e in session.unique_events:
         if not scanner_reported(e.data):
             continue
         call = by_span.get(e.span_id) if e.span_id else None
@@ -2441,7 +2539,7 @@ def _local_content_signal(session: Session,
     found: dict[int, tuple[str, ...]] = {}
     names: dict[int, str] = {}
 
-    for e in session.events:
+    for e in session.unique_events:
         call = bind(e)
         if call is None or id(call) not in scannable:
             continue
@@ -2516,6 +2614,10 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
         common_reasons.append(R_INVALID_CLOCK)
     if defects:
         common_reasons.append(R_FIELD_DEFECTS)
+    if session.duplicate_event_count:
+        common_reasons.append(R_DUPLICATE_DELIVERY)
+    if session.event_id_conflicts:
+        common_reasons.append(R_EVENT_ID_REUSED)
 
     def class_reasons() -> list[str]:
         out = []

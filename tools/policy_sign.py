@@ -183,6 +183,14 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.out).write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
         print(f"wrote trust store for {key_id} with roles "
               f"{sorted(set(args.roles))}")
+        if ROLE_COLLECTOR in args.roles:
+            # EH-06. This warning sat at the bottom of main(), after this
+            # branch had already returned, and `sign` has no --roles at all,
+            # so it could not print on either path. The only command that can
+            # give one key both roles is this one, so this is where it lives.
+            print("WARNING: this key is also a collector key. Keep policy signing "
+                  "off the collector host; see the module docstring.",
+                  file=sys.stderr)
         return 0
 
     digest = digest_of(Path(args.file))
@@ -196,9 +204,6 @@ def main(argv: list[str] | None = None) -> int:
           f"under {key_id}")
     print(f"verify with: --{'tool-manifest' if args.artifact == 'capability_manifest' else 'baseline'}-sig "
           f"{args.out} --trust-store <store with {key_id} as {ROLE_POLICY}>")
-    if ROLE_COLLECTOR in getattr(args, "roles", []):
-        print("WARNING: this key is also a collector key. Keep policy signing "
-              "off the collector host; see the module docstring.", file=sys.stderr)
     return 0
 
 
