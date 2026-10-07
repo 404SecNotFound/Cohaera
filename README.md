@@ -117,7 +117,7 @@ outside traffic. Cohaera is an assurance control, not an adversarial one: it
 reads what the observed agent chose to emit, says how trustworthy that record
 is, and cannot by itself say whether the agent lied.
 
-- Tests, 1567 collected across unit, hostile-input, content, lab, and
+- Tests, 1571 collected across unit, hostile-input, content, lab, and
   regression coverage. A few skip by design where their data is absent, such
   as commit history on a shallow clone.
 - Sigma content pack, 15 rules, validated and conformance-tested against real

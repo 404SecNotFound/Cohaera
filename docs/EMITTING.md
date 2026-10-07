@@ -98,11 +98,13 @@ reports `verified_complete`. Three things about what just happened:
   becoming a new stream. Rotate by starting a new `stream_id` under the new
   key and recording the succession in the trust store (section 3).
 
-The same thing from a shell, with the key in a file:
+The same thing from a shell, with the key in a file. These are subcommands of
+the `cohaera` command; `python -m cohaera.emit` runs the same parser for a
+collector that would rather invoke the module:
 
 ```bash
-python -m cohaera.emit keygen --out collector.key --roles collector --trust-store trust-store.json
-python -m cohaera.emit sign --key collector.key --stream-id collector-01 --in raw.jsonl --out signed.jsonl
+cohaera keygen --out collector.key --roles collector --trust-store trust-store.json
+cohaera sign --key collector.key --stream-id collector-01 --in raw.jsonl --out signed.jsonl
 ```
 
 `keygen` creates the key file with mode `0600` and refuses to overwrite one.
@@ -148,7 +150,7 @@ key whose roles do not include the thing it signed.
 predecessor, then close the old key's window:
 
 ```bash
-python -m cohaera.emit keygen --out collector-2.key --roles collector \
+cohaera keygen --out collector-2.key --roles collector \
     --trust-store trust-store.json --replaces ed25519:a5a259a421a81bbb
 ```
 
@@ -166,10 +168,10 @@ records shaped as in section 1 (three `tool_start`/`tool_end` pairs with
 distinct spans); the second batch stands in for a collector that was restarted.
 
 ```bash
-python -m cohaera.emit keygen --out collector.key --roles collector --trust-store trust-store.json
-python -m cohaera.emit sign --key collector.key --stream-id collector-01 \
+cohaera keygen --out collector.key --roles collector --trust-store trust-store.json
+cohaera sign --key collector.key --stream-id collector-01 \
     --in batch1.jsonl --out signed.jsonl --state collector-01.state
-python -m cohaera.emit sign --key collector.key --stream-id collector-01 \
+cohaera sign --key collector.key --stream-id collector-01 \
     --in batch2.jsonl --out signed.jsonl --append --state collector-01.state
 cohaera score signed.jsonl --trust-store trust-store.json > verdicts.jsonl
 python -c "import json; v=[json.loads(l) for l in open('verdicts.jsonl') if l.strip()]; print(v[0]['data']['coverage']['evidence_status'])"
@@ -273,7 +275,7 @@ restarted collector cannot reopen it either. From the command line, pass
 `--close` on the last batch:
 
 ```bash
-python -m cohaera.emit sign --key collector.key --stream-id collector-01 \
+cohaera sign --key collector.key --stream-id collector-01 \
   --state collector-01.state --in batch-3.jsonl --out signed.jsonl --append --close
 ```
 
@@ -309,8 +311,8 @@ or the arguments to compute one, because an approval that does not name the
 arguments covers the tool with any arguments; and with a control character in
 any identity field. The result reaches the `authenticated` tier under a trust
 store holding the key, `single_use` once a `--seen-approvals` ledger is in
-force, and rewriting its `span_id` breaks the signature. `python -m
-cohaera.emit issue-approval` is the same thing from a shell.
+force, and rewriting its `span_id` breaks the signature. `cohaera issue-approval` is the
+same thing from a shell.
 
 **A receipt** is an identifier the target system returned, bound to the exact
 call. The per-provider knowledge of where that identifier lives stays in

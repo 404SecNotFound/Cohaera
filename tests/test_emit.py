@@ -37,6 +37,8 @@ from cohaera.checks import (
     ch04_guardrail_overrun,
     evidence_status,
 )
+from cohaera.cli import PRODUCER_COMMANDS
+from cohaera.cli import main as cli_main
 from cohaera.emit import (
     ASSURANCE_LEVELS,
     ASSURANCE_OPERATION,
@@ -59,6 +61,7 @@ from cohaera.emit import (
     write_private_key,
     write_state,
 )
+from cohaera.emit.command import COMMANDS
 from cohaera.evidence import (
     APPROVAL_AUTHENTICATED,
     APPROVAL_BOUND,
@@ -960,11 +963,97 @@ def test_the_verifier_never_imports_the_emitter():
     assert done.stdout.strip() == "ok"
 
 
-def test_no_verifier_module_names_the_emitter_in_source():
-    for path in (SRC / "cohaera").glob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        assert "cohaera.emit" not in text and "from .emit" not in text \
-            and "from . import emit" not in text, path
+def _emit_imports(tree: ast.Module) -> list[tuple[ast.AST, str]]:
+    """Every import of the emit package in a module, with where it sits."""
+    found: list[tuple[ast.AST, str]] = []
+
+    def visit(node: ast.AST, scope: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            inner = (child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                     else scope)
+            if isinstance(child, ast.ImportFrom):
+                mod = child.module or ""
+                if (child.level and (mod == "emit" or mod.startswith("emit."))) \
+                        or mod.startswith("cohaera.emit") \
+                        or (child.level and mod == "" and any(a.name == "emit"
+                                                              for a in child.names)):
+                    found.append((child, scope))
+            elif isinstance(child, ast.Import):
+                if any(a.name.startswith("cohaera.emit") for a in child.names):
+                    found.append((child, scope))
+            visit(child, inner)
+
+    visit(tree, "<module>")
+    return found
+
+
+def test_no_verifier_module_imports_the_emitter_except_the_deferred_dispatch():
+    """The source-level half of the boundary. No verifier module imports the
+    emit package at all, with one exception: cli.py imports it inside
+    ``_producer``, which runs only after a producer command name was given.
+    Checked on the syntax tree, so a mention in a comment or help string is
+    not an import and a module-level import anywhere fails."""
+    for path in sorted((SRC / "cohaera").glob("*.py")):
+        imports = _emit_imports(ast.parse(path.read_text(encoding="utf-8")))
+        if path.name == "cli.py":
+            assert [scope for _node, scope in imports] == ["_producer"], imports
+        else:
+            assert not imports, (path.name, imports)
+
+
+def test_scoring_through_the_cli_never_loads_the_emitter(tmp_path):
+    """The runtime half, on the path that matters: a full `cohaera score`
+    run, in a fresh interpreter, leaves no emit module loaded."""
+    tel = tmp_path / "t.jsonl"
+    tel.write_text(_raw_lines(_records(3)), encoding="utf-8")
+    script = (
+        "import sys, contextlib, io\n"
+        "from cohaera.cli import main\n"
+        "with contextlib.redirect_stdout(io.StringIO()), "
+        "contextlib.redirect_stderr(io.StringIO()):\n"
+        f"    rc = main(['score', {str(tel)!r}])\n"
+        "loaded = sorted(m for m in sys.modules if m.startswith('cohaera.emit'))\n"
+        "assert rc == 0 and not loaded, (rc, loaded)\n"
+        "print('ok')\n"
+    )
+    done = subprocess.run([sys.executable, "-c", script], cwd=ROOT, capture_output=True,
+                          text=True, check=False, env={**os.environ, "PYTHONPATH": str(SRC)})
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "ok"
+
+
+def test_the_cli_names_exactly_the_commands_the_emitter_owns():
+    assert PRODUCER_COMMANDS == COMMANDS
+
+
+def test_cohaera_help_lists_the_producer_commands(capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        cli_main(["--help"])
+    assert exit_info.value.code == 0
+    out = capsys.readouterr().out
+    for name in ("score", "keygen", "sign", "issue-approval"):
+        assert name in out, name
+
+
+def test_the_producer_commands_run_under_the_cohaera_name(tmp_path, capsys):
+    """keygen, sign and a score of the result, all through cohaera.cli.main,
+    and the help a producer command prints names `cohaera`, not the module."""
+    with pytest.raises(SystemExit):
+        cli_main(["sign", "--help"])
+    assert capsys.readouterr().out.startswith("usage: cohaera sign")
+
+    key, store = tmp_path / "c.key", tmp_path / "ts.json"
+    assert cli_main(["keygen", "--out", str(key), "--roles", "collector",
+                     "--trust-store", str(store)]) == 0
+    raw, signed = tmp_path / "raw.jsonl", tmp_path / "signed.jsonl"
+    raw.write_text(_raw_lines(_records(4)), encoding="utf-8")
+    assert cli_main(["sign", "--key", str(key), "--stream-id", "s",
+                     "--in", str(raw), "--out", str(signed), "--close"]) == 0
+    capsys.readouterr()
+    assert cli_main(["score", str(signed), "--trust-store", str(store),
+                     "--require-closed-streams"]) == 0
+    rows = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.strip()]
+    assert {r["data"]["coverage"]["evidence_status"] for r in rows} == {"verified_complete"}
 
 
 def test_the_emitter_imports_only_the_standard_library_and_cohaera():
