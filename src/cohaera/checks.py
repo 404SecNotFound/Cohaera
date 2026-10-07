@@ -73,6 +73,7 @@ from .evidence import (
     R_SIGNATURE_PREFIX_ONLY,
     R_STALE,
     R_STREAM_FORKED,
+    R_STREAM_KEY_CHANGED,
     R_STREAM_REPLAYED,
     R_STREAM_SKIPPED_RECORDS,
     R_UNSIGNED,
@@ -122,6 +123,7 @@ __all__ = [
     "R_SIGNATURE_PREFIX_ONLY",
     "R_STALE",
     "R_STREAM_FORKED",
+    "R_STREAM_KEY_CHANGED",
     "R_STREAM_REPLAYED",
     "R_STREAM_SKIPPED_RECORDS",
     "R_UNSCANNED_CONTENT_MARKERS",
@@ -1855,6 +1857,16 @@ def ch06_evidence_integrity(session: Session,
                      f"scored, and the chain head DIFFERS there: two mutually "
                      f"exclusive versions of the same stream, both signed. This "
                      f"is not a replay, it is a rewritten history")
+    if R_STREAM_KEY_CHANGED in codes:
+        # EH-02. Both key ids, because "which key took over" is what gets
+        # revoked. A rotation the trust store records as `replaces` never
+        # reaches here; this is a second trusted key with no such record.
+        changes = ", ".join(
+            f"{c['from_key_id']} -> {c['to_key_id']} at seq {c['seq']}"
+            for c in audit.stream_key_changes)
+        parts.append(f"the signing key changed mid-stream ({changes}) with no "
+                     f"succession recorded in the trust store: a second "
+                     f"trusted key wrote into a stream that is not its own")
 
     return [Finding(
         check=CH06_INTEGRITY,
@@ -1926,7 +1938,10 @@ def _receipt_trust_of(call: ToolCall) -> str:
     if call.receipt is None:
         return RECEIPT_CLAIMED
     if _receipt_binding(call) in BINDING_TRUSTED:
-        return RECEIPT_BOUND
+        # EH-05. Capped by the adapter's declared assurance: a `client_claimed`
+        # identifier that binds exactly is still one the caller may have
+        # minted, and reads as `claimed`. See evidence.RECEIPT_ASSURANCE_CEILING.
+        return call.receipt.capped(RECEIPT_BOUND)
     return RECEIPT_CLAIMED
 
 

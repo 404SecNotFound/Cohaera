@@ -88,6 +88,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import tempfile
 import time
 from collections.abc import Iterator
@@ -106,6 +107,7 @@ from .limits import (
     Limits,
 )
 from .validate import as_finite_float, identity_text, strict_json_loads
+from .validate import timestamp as record_clock
 
 INTEGRITY_SCHEMA = "cohaera.integrity:1"
 RECEIPT_SCHEMA = "cohaera.receipt:1"
@@ -191,6 +193,41 @@ ARGS_UNBINDABLE = frozenset({ARGS_CONTRADICTED})
 
 DIGEST_PREFIX = "sha256:"
 
+# EH-08. Exactly sixty-four lowercase hex digits. Every digest field here used
+# to be checked with ``int(value, 16)``, which is a NUMBER parser and accepts a
+# good deal that is not hex: a ``0x`` prefix, ``_`` digit separators, a leading
+# sign, surrounding whitespace, and any Unicode decimal digit (``int`` reads
+# U+0661, ARABIC-INDIC DIGIT ONE, as 1). Each of those is a string that
+# compares unequal to the digest
+# Cohaera computes while passing the shape check -- a chain ``prev`` of
+# ``0xabc...`` read as a well-formed predecessor that matched nothing, which
+# downstream is a chain break charged to the producer's formatting. Matched
+# AFTER ``.lower()`` so that uppercase hex, which hashlib never emits but a
+# hand-written sidecar might, is still read rather than refused.
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+
+
+def _hex64(value: str) -> str | None:
+    """``value`` lowercased if it is exactly 64 hex digits, else None."""
+    lowered = value.lower()
+    return lowered if _HEX64.fullmatch(lowered) else None
+
+
+# EH-03. The octet that separates fields in every signing input here is
+# ``\x1f``, and ``validate.identity_text`` admits it inside a value. So an
+# identity carrying one shifts every field after it: a ``tool_id`` of
+# ``wire_transfer_send\x1fsha256:D`` with no ``arg_digest`` and nonce ``n``
+# signs to the same bytes as ``wire_transfer_send`` WITH that digest and nonce
+# ``\x1fn``, and a signature over the first verifies the second. Refusing the
+# whole C0 range plus DEL rather than the one separator, because a value with a
+# control character in it is not an identity anybody minted on purpose, and a
+# narrower rule would be relitigated the next time a separator changed.
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def has_control_char(value: str | None) -> bool:
+    return value is not None and _CONTROL.search(value) is not None
+
 
 def arg_digest(args: Any) -> str:
     """Content digest of one call's arguments, in the wire format.
@@ -217,14 +254,8 @@ def digest_text(value: Any) -> str | None:
         return None
     if not value.startswith(DIGEST_PREFIX):
         return None
-    body = value[len(DIGEST_PREFIX):]
-    if len(body) != 64:
-        return None
-    try:
-        int(body, 16)
-    except ValueError:
-        return None
-    return value.lower()
+    body = _hex64(value[len(DIGEST_PREFIX):])
+    return None if body is None else DIGEST_PREFIX + body
 
 
 def _short(value: Any, limits: Limits) -> str | None:
@@ -381,6 +412,52 @@ RECEIPT_AUTHENTIC = frozenset({RECEIPT_AUTHENTICATED, RECEIPT_RECONCILED})
 """The tiers that support a high-confidence accusation. Empty in practice
 today, which is the honest state and is asserted by test."""
 
+# Strongest last. Used only to compare tiers; the strings themselves are the
+# wire vocabulary and stay as they are.
+RECEIPT_TIER_ORDER = (RECEIPT_CLAIMED, RECEIPT_BOUND, RECEIPT_AUTHENTICATED,
+                      RECEIPT_RECONCILED)
+
+# ---------------------------------------------------------------------------
+# What the ADAPTER said the identifier is worth, which is a third axis.
+#
+# EH-05. ``tools/receipt_adapters.py`` has written ``assurance`` into every
+# receipt since R-17, precisely so that an SMTP ``Message-ID`` the client
+# composed would not read like one the provider returned. The parser threw the
+# field away, so the two read identically: a ``client_claimed`` receipt bound
+# to a failed call produced the same ``bound`` trust, and the same CH07
+# finding, as a provider-minted one. The field is the adapter's own statement
+# that its evidence is weak, and a verifier that drops it is overruling the
+# one party in a position to know.
+#
+# Each level caps the trust tier a receipt may reach. ``client_claimed`` caps
+# at CLAIMED: an identifier the caller may have minted is drawn from a
+# namespace the agent controls, which is the one property the mechanism needs
+# and the one a binding cannot supply. ``provider_returned_object`` caps at
+# BOUND: it can name this call, and it can never attest THIS operation,
+# because the identifier is the same for every write to the object.
+# ``provider_returned_operation`` is uncapped. An ABSENT assurance is uncapped
+# too -- the field is optional, every receipt written before R-17 lacks it,
+# and refusing those would switch CH07 off for a producer that has not
+# upgraded its adapter. An unrecognised value is absent-and-flagged, never
+# read as the strongest level.
+# ---------------------------------------------------------------------------
+
+ASSURANCE_PROVIDER_OPERATION = "provider_returned_operation"
+ASSURANCE_PROVIDER_OBJECT = "provider_returned_object"
+ASSURANCE_CLIENT_CLAIMED = "client_claimed"
+RECEIPT_ASSURANCE_CEILING: dict[str, str] = {
+    ASSURANCE_PROVIDER_OPERATION: RECEIPT_RECONCILED,
+    ASSURANCE_PROVIDER_OBJECT: RECEIPT_BOUND,
+    ASSURANCE_CLIENT_CLAIMED: RECEIPT_CLAIMED,
+}
+VALID_RECEIPT_ASSURANCE = frozenset(RECEIPT_ASSURANCE_CEILING)
+
+
+def weaker_receipt_tier(a: str, b: str) -> str:
+    """The lower of two receipt tiers. Unknown strings rank lowest."""
+    rank = {t: i for i, t in enumerate(RECEIPT_TIER_ORDER)}
+    return a if rank.get(a, -1) <= rank.get(b, -1) else b
+
 
 # R-01/R-10. ``BOUND_SPAN_ONLY`` used to sit in this set, and that single line
 # was the difference between a mechanism and a decoration. A span-only binding
@@ -508,11 +585,7 @@ def _hex_or_none(value: Any) -> str | None:
         return None
     if len(value) != CHAIN_HEX_CHARS:
         return None
-    try:
-        int(value, 16)
-    except ValueError:
-        return None
-    return value.lower()
+    return _hex64(value)
 
 
 def chain_seed(stream_id: str, key_id: str) -> str:
@@ -585,7 +658,22 @@ def approval_signing_input(*, decision: str, span_id: str, tool_id: str | None,
     Floats are formatted with `repr` so that the value that round-trips through
     JSON is the value that was signed. Formatting them any other way makes the
     verifier and the issuer disagree about a number they both hold.
+
+    EH-03. Raises ``ValueError`` if any text field carries a control character,
+    because the join above is only unambiguous while the separator cannot
+    occur inside a field. ``Approval.parse`` refuses such an approval before it
+    gets here; this guard is for the SIGNER, so that no issuer can mint an
+    approval whose bytes also spell a differently-bound one. The wire format is
+    unchanged: every approval that was ever validly signed still verifies.
     """
+    for name, text in (("decision", decision), ("span_id", span_id),
+                       ("tool_id", tool_id), ("arg_digest", arg_digest),
+                       ("nonce", nonce)):
+        if has_control_char(text):
+            raise ValueError(
+                f"approval field {name!r} contains a control character, which "
+                f"would make the signing input ambiguous; refusing to sign")
+
     def num(value: float | None) -> bytes:
         return b"" if value is None else repr(float(value)).encode("ascii")
 
@@ -615,11 +703,50 @@ class EffectReceipt:
     identifier: str
     binding: Binding
     observed_at: float | None = None
+    # EH-05. The adapter's own statement of what the identifier is worth, and
+    # where it lives. Both optional on the wire; see RECEIPT_ASSURANCE_CEILING.
+    assurance: str | None = None
+    scope: dict[str, str] | None = None
+    # True when the adapter wrote an ``assurance`` nothing here could read.
+    # Kept apart from ``assurance`` so the unreadable value is ABSENT (never
+    # coerced to a level the adapter did not state) while still failing
+    # closed: see trust_ceiling.
+    assurance_unreadable: bool = False
+
+    @property
+    def trust_ceiling(self) -> str:
+        """The highest trust tier this receipt's declared assurance supports.
+
+        An absent assurance is uncapped; an UNREADABLE one caps at CLAIMED.
+        The two differ on purpose and in the direction that fails closed: the
+        adapter said something about its own evidence and the statement could
+        not be read, and the one thing that must not happen is for a typo to
+        read as the strongest level.
+        """
+        if self.assurance_unreadable:
+            return RECEIPT_CLAIMED
+        if self.assurance is None:
+            return RECEIPT_RECONCILED
+        return RECEIPT_ASSURANCE_CEILING.get(self.assurance, RECEIPT_CLAIMED)
+
+    def capped(self, tier: str) -> str:
+        """``tier``, lowered to what the declared assurance supports.
+
+        The caller establishes the tier from binding (and one day from a
+        signature); this is the adapter's veto over it. A ``client_claimed``
+        receipt that binds exactly is still a receipt the caller may have
+        minted, and the verdict has to say ``claimed`` for it.
+        """
+        return weaker_receipt_tier(tier, self.trust_ceiling)
 
     def as_dict(self) -> dict[str, Any]:
         return {"authority": self.authority, "kind": self.kind,
                 "identifier": self.identifier, "observed_at": self.observed_at,
-                "binding": self.binding.as_dict()}
+                "binding": self.binding.as_dict(),
+                "assurance": self.assurance,
+                "assurance_unreadable": self.assurance_unreadable,
+                "trust_ceiling": self.trust_ceiling,
+                "scope": dict(self.scope) if self.scope is not None else None}
 
     @classmethod
     def parse(cls, obj: Any, limits: Limits = DEFAULT_LIMITS
@@ -634,9 +761,57 @@ class EffectReceipt:
         binding = Binding.parse(obj.get("binding"), limits)
         if not (authority and kind and identifier) or binding is None:
             return None, (DEFECT_RECEIPT_TYPE,)
+        codes: tuple[str, ...] = ()
+        # EH-05. Absent-and-flagged for both optional fields. A malformed
+        # assurance must not read as the strongest level, and it must not
+        # refuse the receipt either: the receipt still names a call, and what
+        # it is worth is capped at CLAIMED by ``trust_ceiling`` rather than
+        # guessed. ``_short`` already treats a non-string as absent; a string
+        # outside the vocabulary is the case that needs the explicit branch.
+        assurance_raw = obj.get("assurance")
+        assurance: str | None = None
+        unreadable = False
+        if assurance_raw is not None:
+            text = _short(assurance_raw, limits)
+            if text is None or text not in VALID_RECEIPT_ASSURANCE:
+                codes, unreadable = (DEFECT_RECEIPT_TYPE,), True
+            else:
+                assurance = text
+        scope_raw = obj.get("scope")
+        scope: dict[str, str] | None = None
+        if scope_raw is not None:
+            scope = _scope(scope_raw, limits)
+            if scope is None:
+                codes = (DEFECT_RECEIPT_TYPE,)
         return cls(authority=authority, kind=kind, identifier=identifier,
                    binding=binding,
-                   observed_at=_finite(obj.get("observed_at"))), ()
+                   observed_at=_finite(obj.get("observed_at")),
+                   assurance=assurance, scope=scope,
+                   assurance_unreadable=unreadable), codes
+
+
+def _scope(value: Any, limits: Limits) -> dict[str, str] | None:
+    """A receipt's ``scope``: a flat object of bounded identity strings.
+
+    None for anything else. Values are matched for identity -- an account id,
+    a region, a repository -- so they get ``identity_text``'s rules rather than
+    being stringified. A single bad entry makes the whole scope absent, because
+    half a scope would locate the identifier in no account at all while
+    looking as if it had.
+    """
+    if not isinstance(value, dict) or not value:
+        return None
+    if len(value) > limits.max_evidence_items:
+        return None
+    out: dict[str, str] = {}
+    for key, text in value.items():
+        if not isinstance(key, str) or not key or len(key) > limits.max_identity_chars:
+            return None
+        item = _short(text, limits)
+        if item is None:
+            return None
+        out[key] = item
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -655,6 +830,21 @@ class EffectReceipt:
 # incident that none of them do.
 APPROVAL_ORIGIN_IN_BAND = "in_band"
 APPROVAL_ORIGIN_POLICY_ENGINE = "policy_engine"
+
+# EH-03. The fields an approval signature covers, in signing order, named so
+# that the verdict can carry them beside ``approval_assurance``. The verdict
+# prints ``granted_by``, ``policy_id``, ``policy_digest`` and ``enforcement``
+# next to the word "authenticated", and none of the four is signed: an
+# attacker holding an authenticated approval can rewrite who granted it and
+# under which policy without disturbing the signature. The signing input is
+# NOT widened to cover them, because every approval issued to date would stop
+# verifying; the verdict says which fields the signature reaches instead, so
+# an analyst does not have to know this paragraph.
+APPROVAL_SIGNED_FIELDS = ("scheme", "decision", "subject.span_id",
+                          "subject.tool_id", "subject.arg_digest", "nonce",
+                          "granted_at", "expires_at")
+APPROVAL_UNSIGNED_FIELDS = ("granted_by", "policy_id", "policy_digest",
+                            "enforcement", "signature.key_id")
 
 
 @dataclass(frozen=True)
@@ -755,7 +945,12 @@ class Approval:
                 "approval_origin": self.origin,
                 "approval_assurance": self.tier,
                 "nonce_present": self.nonce is not None,
-                "issuer_key_id": self.key_id}
+                "issuer_key_id": self.key_id,
+                # EH-03. What a signature on this approval covers, whether or
+                # not one verified: ``approval_assurance`` says that. Static by
+                # design -- it describes the format, so a reader of one verdict
+                # learns that ``granted_by`` beside "authenticated" is a claim.
+                "signed_fields": list(APPROVAL_SIGNED_FIELDS)}
 
     @classmethod
     def parse(cls, obj: Any, limits: Limits = DEFAULT_LIMITS
@@ -785,18 +980,34 @@ class Approval:
             enforcement = ENFORCEMENT_UNDECLARED
         elif not isinstance(enforcement, str) or enforcement not in VALID_ENFORCEMENT:
             enforcement, codes = ENFORCEMENT_UNDECLARED, (DEFECT_ENFORCEMENT_TYPE,)
+        granted_by = _short(obj.get("granted_by"), limits)
+        policy_id = _short(obj.get("policy_id"), limits)
+        nonce = _short(obj.get("nonce"), limits)
+        key_id = _short(sig.get("key_id"), limits)
+        if any(has_control_char(text) for text in (
+                subject.span_id, subject.tool_id, nonce, granted_by, policy_id,
+                key_id)):
+            # EH-03. A control character inside an identity makes the signing
+            # input ambiguous (see approval_signing_input), and no identity
+            # anybody minted on purpose contains one. Rejection, not defect:
+            # with the signed fields in doubt there is nothing left of the
+            # approval to keep, and keeping the unsigned ones would let a
+            # producer buy a differently-bound approval with a byte. The
+            # unsigned identities are held to the same rule so that the
+            # guarantee is one sentence rather than a table.
+            return None, (DEFECT_APPROVAL_TYPE,)
         return cls(
             decision=decision, subject=subject,
-            granted_by=_short(obj.get("granted_by"), limits),
+            granted_by=granted_by,
             granted_at=_finite(obj.get("granted_at")),
             expires_at=_finite(obj.get("expires_at")),
-            policy_id=_short(obj.get("policy_id"), limits),
+            policy_id=policy_id,
             policy_digest=digest_text(obj.get("policy_digest")),
             enforcement=enforcement,
             # Parsed, never trusted here. `verified` stays False until a key
             # says otherwise, so a producer cannot ship `verified: true`.
-            nonce=_short(obj.get("nonce"), limits),
-            key_id=_short(sig.get("key_id"), limits),
+            nonce=nonce,
+            key_id=key_id,
             signature=_sig_bytes(sig.get("sig")),
         ), codes
 
@@ -1321,11 +1532,10 @@ class PolicySignature:
                 or len(digest) != 64):
             raise PolicySignatureError(
                 "signature 'file_sha256' must be a 64-character hex digest")
-        try:
-            int(digest, 16)
-        except ValueError:
+        # EH-08. Strict, not ``int(digest, 16)``: see _HEX64.
+        if _hex64(digest) is None:
             raise PolicySignatureError(
-                "signature 'file_sha256' is not hexadecimal") from None
+                "signature 'file_sha256' is not hexadecimal")
         signed_at = obj.get("signed_at")
         if isinstance(signed_at, bool) or not isinstance(signed_at, int):
             raise PolicySignatureError(
@@ -1575,6 +1785,17 @@ R_KEY_EXPIRED = "INTEGRITY_KEY_EXPIRED"
 R_KEY_NOT_YET_VALID = "INTEGRITY_KEY_NOT_YET_VALID"
 R_KEY_WRONG_ROLE = "INTEGRITY_KEY_ROLE_NOT_AUTHORISED"
 R_KEY_WINDOW_UNCHECKED = "INTEGRITY_KEY_WINDOW_UNCHECKED"
+# EH-02. A verified signature under a DIFFERENT collector key than the one
+# that first attested this stream, where the trust store does not record the
+# new key as the old one's successor. docs/EVIDENCE-TRUST.md promised "one key
+# reference per stream" and nothing held it: ``_Stream`` had no key field, so
+# any key with the collector role could sign any stream id, including taking
+# one over mid-way -- key B re-signing records 3 to 5 of key A's stream, chain
+# intact, reported ``attested`` with nothing inadmissible. Two collector keys
+# on one stream is either a rotation the operator wrote down (``replaces``, in
+# which case it is accepted and the stream re-pins to the successor) or a
+# second party holding a trusted key writing into a stream that is not theirs.
+R_STREAM_KEY_CHANGED = "INTEGRITY_STREAM_KEY_CHANGED"
 
 # Freshness. A whole stream can be re-fed from an archive, and every check above
 # passes on it, because an old stream is internally perfect -- that is what makes
@@ -1627,7 +1848,8 @@ INADMISSIBLE = frozenset({R_SEQUENCE_GAP, R_CHAIN_BROKEN, R_CHAIN_UNANCHORED,
                           R_KEY_UNKNOWN, R_SEQUENCE_REPLAY, R_PARTIAL_INTEGRITY,
                           R_KEY_REVOKED, R_KEY_EXPIRED, R_KEY_NOT_YET_VALID,
                           R_KEY_WRONG_ROLE, R_STALE, R_FROM_FUTURE,
-                          R_STREAM_REPLAYED, R_STREAM_FORKED})
+                          R_STREAM_REPLAYED, R_STREAM_FORKED,
+                          R_STREAM_KEY_CHANGED})
 
 # R_STREAM_SKIPPED_RECORDS is deliberately NOT inadmissible. Records between the
 # last scored sequence and this run's first one were never scored, which is
@@ -1801,7 +2023,9 @@ class LedgerError(ValueError):
     """The ledger file is not a ledger. Refuse it; do not half-load it."""
 
 
-def _acquire_ledger_lock(handle: Any, lock_file: Path, wait_s: float) -> None:
+def _acquire_ledger_lock(handle: Any, lock_file: Path, wait_s: float,
+                         what: str = "seen-stream ledger",
+                         option: str = "--seen-streams") -> None:
     """Take the exclusive lock, or say why the run is not starting. R-04.
 
     Non-blocking with a deadline rather than a blocking ``flock``: a run that
@@ -1809,6 +2033,10 @@ def _acquire_ledger_lock(handle: Any, lock_file: Path, wait_s: float) -> None:
     working, and a scheduled job that never returns is worse than one that
     fails. The wait exists because the ordinary case is a peer that is nearly
     finished, not a deadlock.
+
+    ``what`` and ``option`` name the ledger in the refusal, because the same
+    lock now guards the approval ledger too (EH-04) and a message blaming the
+    wrong file sends the operator to the wrong flag.
     """
     if not HAVE_FILE_LOCKING:                              # pragma: no cover
         return
@@ -1820,12 +2048,12 @@ def _acquire_ledger_lock(handle: Any, lock_file: Path, wait_s: float) -> None:
         except OSError:
             if time.monotonic() >= deadline:
                 raise LedgerError(
-                    f"{lock_file}: another run has held the seen-stream ledger "
+                    f"{lock_file}: another run has held the {what} "
                     f"for more than {wait_s:g}s. Runs sharing a ledger "
-                    f"serialise on purpose -- two runs scoring the same stream "
-                    f"at once would each read the position before the other "
+                    f"serialise on purpose -- two runs reading the same ledger "
+                    f"at once would each read its state before the other "
                     f"wrote it, and neither would see the replay. Wait for the "
-                    f"other run, or give this one its own --seen-streams file."
+                    f"other run, or give this one its own {option} file."
                 ) from None
             time.sleep(0.05)
 
@@ -2453,6 +2681,14 @@ class ApprovalLedger:
         self._limits = limits
         self._nonces: dict[str, float] = dict(nonces or {})
         self._dirty = False
+        # EH-04. Same guard as StreamLedger.generation: the generation this
+        # instance READ, so a save can refuse to overwrite a file another run
+        # wrote in between. Two runs that both loaded, both spent the same
+        # nonce and both saved used to leave a ledger recording one spend and
+        # two runs each told the nonce was fresh -- the replay E26 point 3
+        # exists to stop, reintroduced by running the tool twice.
+        self.generation = 0
+        self.locked_exclusively = False
         if path is not None and path.exists():
             self._load(path)
 
@@ -2469,6 +2705,43 @@ class ApprovalLedger:
         for key, value in (seen or {}).items():
             if isinstance(key, str) and key:
                 self._nonces[key] = _finite(value) or 0.0
+        # A ledger written before generations existed reads as 0, as the
+        # stream ledger's does, so the first save under this code writes 1.
+        self.generation = _generation_of(raw)
+
+    @staticmethod
+    def lock_path_for(path: str | Path) -> Path:
+        """The lock sidecar. See StreamLedger.lock_path_for for why a sidecar."""
+        return StreamLedger.lock_path_for(path)
+
+    @classmethod
+    @contextlib.contextmanager
+    def locked(cls, path: str | Path, limits: Limits = DEFAULT_LIMITS,
+               wait_s: float = LEDGER_LOCK_WAIT_S) -> Iterator[ApprovalLedger]:
+        """Load the ledger under an exclusive lock held until the block exits.
+
+        EH-04, and the argument is StreamLedger.locked's word for word. A
+        nonce ledger is a serialisation point by definition -- its one job is
+        to answer "has anybody spent this" and two runs answering it
+        concurrently both say no. Held for the whole run rather than around
+        the write, because the spend happens during assembly and the save
+        after emission, and a lock around only the second would let both runs
+        spend between them.
+        """
+        p = Path(path)
+        lock_file = cls.lock_path_for(p)
+        with lock_file.open("a+b") as handle:
+            _acquire_ledger_lock(handle, lock_file, wait_s,
+                                 what="approval ledger",
+                                 option="--seen-approvals")
+            ledger = cls(path=p, limits=limits)
+            ledger.locked_exclusively = HAVE_FILE_LOCKING
+            try:
+                yield ledger
+            finally:
+                if HAVE_FILE_LOCKING:
+                    with contextlib.suppress(OSError):
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     @property
     def enabled(self) -> bool:
@@ -2507,14 +2780,74 @@ class ApprovalLedger:
         """
         if self._path is None or not self._dirty:
             return
-        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        payload = {"schema": APPROVAL_LEDGER_SCHEMA, "nonces": self._nonces}
-        tmp.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
-        tmp.replace(self._path)
+        target = Path(self._path)
+        # EH-04. Refuse to replace a file another run wrote since this one
+        # read it. The alternative is merging two nonce sets, which sounds
+        # harmless and is not: the merge records both runs' spends, and both
+        # runs have already told their callers the nonce was unspent.
+        current = _on_disk_generation(target, self._limits.max_ledger_bytes)
+        if current != self.generation:
+            raise LedgerError(
+                f"{target}: the approval ledger on disk is at generation "
+                f"{current} and this run read generation {self.generation}. "
+                f"Another run wrote it while this one was scoring; the nonces "
+                f"this run treated as unspent may have been spent by that one. "
+                f"Re-run this input; the ledger on disk is the newer of the two."
+                + ("" if HAVE_FILE_LOCKING else
+                   " This host has no file locking, so runs sharing a ledger "
+                   "cannot exclude each other and must not be run concurrently."))
+        payload = {"schema": APPROVAL_LEDGER_SCHEMA, "nonces": self._nonces,
+                   "generation": self.generation + 1}
+        blob = json.dumps(payload, sort_keys=True) + "\n"
+        # A unique temporary name and an fsync before the rename, as the
+        # stream ledger does. The fixed ``.tmp`` name meant two writers shared
+        # one scratch file and could rename each other's half-written bytes
+        # into place; the missing fsync meant a crash after a "successful"
+        # save could leave an empty ledger, which loads as no nonces spent.
+        fd, tmp = tempfile.mkstemp(dir=str(target.parent) or ".",
+                                   prefix=f".{target.name}.", suffix=".partial")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(blob)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, target)
+            _fsync_directory(target.parent)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
+        self.generation += 1
         self._dirty = False
 
     def as_dict(self) -> dict[str, Any]:
         return {"enabled": self.enabled, "nonces_recorded": self.size}
+
+
+def _generation_of(obj: Any) -> int:
+    """The ``generation`` an on-disk ledger declares, or 0. Never negative."""
+    generation = obj.get("generation") if isinstance(obj, dict) else None
+    if isinstance(generation, bool) or not isinstance(generation, int):
+        return 0
+    return generation if generation >= 0 else 0
+
+
+def _on_disk_generation(target: Path, max_bytes: int) -> int:
+    """The generation of the file as it stands right now, or 0 if absent.
+
+    Read fresh rather than remembered: the whole question is whether the file
+    changed under us. Unreadable is -1, not 0, so a corrupt ledger is refused
+    as a generation mismatch rather than overwritten as if it were new.
+    """
+    if not target.exists():
+        return 0
+    try:
+        with target.open("rb") as fh:
+            blob = fh.read(max_bytes + 1)
+        obj = strict_json_loads(blob.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return -1
+    return _generation_of(obj)
 
 
 NO_APPROVAL_LEDGER = ApprovalLedger()
@@ -2585,6 +2918,11 @@ class SessionIntegrity:
     # is the first question asked when a key turns out to be compromised, and
     # answering it from a verdict beats re-scoring the archive.
     signing_key_ids: set[str] = field(default_factory=set)
+    # EH-02. Each point at which a stream feeding this session changed signing
+    # key without the trust store recording a succession: which stream, at
+    # which sequence, from which key to which. The pair of key ids is the
+    # finding -- "which key took over" is what an operator has to revoke.
+    stream_key_changes: list[dict[str, Any]] = field(default_factory=list)
     # Streams this session's records came from that a previous run had already
     # scored. Carried in full because "which stream, which sequence range, and
     # did the history match" is the whole of the finding.
@@ -2728,6 +3066,7 @@ class SessionIntegrity:
             "signatures_verified": self.signatures_verified,
             "records_reordered": self.reordered,
             "signing_key_ids": sorted(self.signing_key_ids)[:cap],
+            "stream_key_changes": self.stream_key_changes[:cap],
             "freshness_checked": self.freshness_checked,
             "oldest_signed_age_s": self.oldest_signed_age_s,
             "furthest_future_s": self.furthest_future_s,
@@ -2795,6 +3134,19 @@ class _Stream:
     # assembly dropped them on max_sessions or max_events_per_session. Their
     # positions were verified and their content was never looked at.
     unscored_records: int = 0
+    # EH-02. The key id of the first signature that VERIFIED on this stream:
+    # the "one key reference per stream" the design promised. Pinned on
+    # verification rather than on the first record's ``key_id`` field, because
+    # that field is producer-written and pinning an unverified claim would let
+    # a forged first record decide which key the genuine ones are judged
+    # against. Re-pinned only to a key the trust store records as this one's
+    # successor.
+    key_id: str | None = None
+    # The key under which the most recent signature verified, pinned or not.
+    # ``stream_key_changes`` records a TRANSITION, so a usurper signing three
+    # records in a row is one change in the verdict and three in the code
+    # count, rather than three identical entries.
+    last_verified_key_id: str | None = None
 
 
 class StreamVerifier:
@@ -2888,7 +3240,19 @@ class StreamVerifier:
         # Read once, here, from the record as it arrived. Not from the assembled
         # Event: the same field is what the chain covers, and the chain is what
         # makes it worth reading at all.
-        when = _finite(record.get("timestamp"))
+        #
+        # EH-01. The same parse as ``validate.timestamp``, so that the clock
+        # the key window and the freshness bound are judged against is the
+        # clock every other check sees. This used to be ``_finite``, which
+        # takes numbers only, while validate accepts a numeric string -- so a
+        # record dated ``"4990.0"`` was ordered by that clock everywhere else
+        # and had NO clock here. A key with ``not_after=1500`` signing it got
+        # KEY_WINDOW_UNCHECKED, a coverage note, instead of KEY_EXPIRED, which
+        # is inadmissible; and the freshness bound was skipped for it. A
+        # producer chose the type of one field and bought its way out of two
+        # checks. A non-numeric string is unreadable here as it is there.
+        clock, clock_defects = record_clock(record.get("timestamp"))
+        when = None if clock_defects else clock
         if integrity.seq == stream.expected:
             self._consume(stream, integrity.seq, body, integrity, session_key, when)
             # A hole was just FILLED, so anything already waiting arrived early
@@ -3265,6 +3629,7 @@ class StreamVerifier:
         if (stream.highest_verified_seq is None
                 or seq > stream.highest_verified_seq):
             stream.highest_verified_seq = seq
+        self._pin_key(stream, seq, key, state)
 
         if key.windowed:
             inside = key.covers_clock(when)
@@ -3276,6 +3641,60 @@ class StreamVerifier:
                            if key.not_before is not None and when is not None
                            and when < key.not_before else R_KEY_EXPIRED)
         self._check_freshness(state, stream, when)
+
+    def _pin_key(self, stream: _Stream, seq: int, key: TrustedKey,
+                 state: SessionIntegrity) -> None:
+        """Hold a stream to the key that first attested it. EH-02.
+
+        Called only after a signature VERIFIED, so the pin is a fact the
+        operator's trust store established rather than a field the producer
+        wrote. The first verified key is pinned; every later verified
+        signature must be under that key or under a key the store records as
+        succeeding it, directly or through a chain of ``replaces``. Anything
+        else is a second trusted party writing into this stream and is
+        inadmissible: the chain can hold perfectly across the takeover, since
+        the usurper continues it from the genuine head, which is exactly why
+        the chain alone was never going to notice.
+
+        Succession is followed FORWARD from the new key only. A stream signed
+        by the successor and then by the retired predecessor is a rollback,
+        not a rotation, and the ``not_after`` on the retired key is the
+        operator's tool for that case rather than this one.
+        """
+        previous, stream.last_verified_key_id = stream.last_verified_key_id, key.key_id
+        if stream.key_id is None:
+            stream.key_id = key.key_id
+            return
+        if key.key_id == stream.key_id:
+            return
+        if self._succeeds(key, stream.key_id):
+            # A rotation the operator wrote down. The stream re-pins to the
+            # successor so that the predecessor cannot sign into it again
+            # without the same question being asked in the other direction.
+            stream.key_id = key.key_id
+            return
+        self._note(state, stream, R_STREAM_KEY_CHANGED)
+        if (key.key_id != previous
+                and len(state.stream_key_changes) < self.limits.max_evidence_items):
+            state.stream_key_changes.append(
+                {"stream_id": stream.stream_id, "seq": seq,
+                 "from_key_id": stream.key_id, "to_key_id": key.key_id})
+
+    def _succeeds(self, key: TrustedKey, predecessor: str) -> bool:
+        """Does ``key`` replace ``predecessor``, directly or transitively?
+
+        Bounded by the number of keys in the store: ``replaces`` is a chain
+        that _store_warnings already flags when it loops, and a loop here
+        would otherwise be a producer-reachable hang.
+        """
+        seen: set[str] = set()
+        current: TrustedKey | None = key
+        while current is not None and current.replaces and current.key_id not in seen:
+            if current.replaces == predecessor:
+                return True
+            seen.add(current.key_id)
+            current = self.keys.get(current.replaces)
+        return False
 
     def _check_freshness(self, state: SessionIntegrity, stream: _Stream,
                          when: float | None) -> None:

@@ -531,12 +531,19 @@ switched off.
 Three consequences, and they are corrections to how `cohaera.integrity:1` should
 be talked about:
 
-1. **Its near-term value is detecting absence and truncation, not forgery.** A
-   stream that stops, a sequence that skips, a session only partly attested
-   (E21) — those are the shapes the observed anti-forensics makes. CH06 reports
-   them, and `NO_INTEGRITY_EVIDENCE` names the state of a deployment that could
-   not have reported anything at all. That is the claim worth making, and it is
-   smaller and more defensible than "tamper-evident telemetry".
+1. **Its near-term value is detecting absence, deletion and modification, not
+   forgery — and not a stream that simply stops.** A sequence that skips, a
+   record that does not chain, a session only partly attested (E21) — those
+   are the shapes the observed anti-forensics makes, and CH06 reports them.
+   Tail truncation is not among them: cut the last records off a signed stream
+   and what remains is a contiguous, chained, fully signed prefix that reports
+   `attested` with `signature_covers_final: true`, because nothing in
+   `cohaera.integrity:1` says how long the stream was meant to be (E30).
+   Closing that needs a signed end-of-stream or heartbeat record carrying the
+   record count and the collector's clock, which nothing emits yet.
+   `NO_INTEGRITY_EVIDENCE` names the state of a deployment that could not have
+   reported anything at all. That is the claim worth making, and it is smaller
+   and more defensible than "tamper-evident telemetry".
 2. **The in-process caveat is the load-bearing one, and stays load-bearing.**
    Where the adapter runs inside the agent, the agent holds the signing key
    ([EVIDENCE-TRUST.md](EVIDENCE-TRUST.md) §7). Against an adversary who does not

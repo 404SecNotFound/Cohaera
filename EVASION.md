@@ -137,6 +137,7 @@ same distinction without splitting the counts four ways.
 | E28 | `working` | T0 | CH03 | Make the durable memory write the consequential call | no manifest entry | Free, the default | Ship a manifest entry for the memory tools |
 | E28b | `remedy` | — | — | The manifest **does** make the memory write consequential | — | — | *the remedy, exercised* |
 | E29 | `working` | T0 | all | Smuggle extra turns inside one logged delegation | none | Free | Yes, and cheaply: duration and tokens against turn count |
+| E30 | `working` | T1 | CH06 | Truncate the END of a signed stream | none | Access to the stream between collector and Cohaera | Yes, a signed end-of-stream or heartbeat record carrying count and time |
 
 ---
 
@@ -818,6 +819,40 @@ pointed at a different feature. That makes it the most tractable open item in
 this table, and it is stated here so that nobody has to rediscover it.
 
 Backed by `test_evasion_29_hidden_turns_inside_one_logged_delegation`.
+
+## E30. Truncate the end of a signed stream
+
+The chain and the signatures establish that every record you were given is the
+record the collector wrote, in the order it wrote them, with nothing missing
+*in between*. They say nothing about where the stream was meant to end. A
+signature covers the chain head at its own sequence, so a stream cut off after
+record 6 of 10 is a contiguous, chained prefix whose every signature verifies:
+no gap, no break, `attested: true`, `signature_covers_final: true`, and no
+code of any kind. The seven records you kept are exactly what the collector
+signed. The three you dropped are the ones in which the agent did the thing.
+
+This is the omission E13 describes, on the one axis a signed stream does not
+cover, and on a signed stream it is cheaper than E13: deleting a record from
+the middle needs the collector's key to re-chain what follows, while deleting
+the end needs nothing but the ability to stop the file early. Which is also
+what an ordinary outage looks like, and that is the problem.
+
+**Why `signature_covers_final` does not catch it.** That field (R-05) asks
+whether a verified signature reaches the last record *Cohaera saw*. It
+separates a stream signed to its middle from one signed to its end, and it
+cannot know about records it never saw. `docs/THREAT-MODEL.md` §8 used to say
+the chain's near-term value was "detecting absence and truncation"; the second
+word was wrong and has been corrected.
+
+**Fix, and it is a producer-side one.** A signed end-of-stream record, or a
+periodic heartbeat, carrying the record count and the collector's clock, so
+that a stream which ends without one, or whose last heartbeat promises more
+records than arrived, reports as truncated rather than as complete. The
+verifier's half is small: a stream that ends without its terminator is
+`signature_covers_final: false` with a reason code. Nothing emits such a
+record yet, so this entry is open.
+
+Backed by `test_evasion_30_truncate_the_end_of_a_signed_stream`.
 
 ---
 

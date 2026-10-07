@@ -132,6 +132,17 @@ sequence, one key reference per stream):
    the capability manifest is — `--collector-keys keys.json`, with both a file
    digest and a semantic digest recorded in provenance, for the same reasons
    C4-10 gives.
+4. **Key.** The key whose signature first *verifies* on a stream is pinned to
+   it, and every later verified signature must be under that key or under one
+   the trust store records as its successor (`replaces`, followed
+   transitively). Anything else is `INTEGRITY_STREAM_KEY_CHANGED` and
+   inadmissible, and the verdict carries both key ids under
+   `stream_key_changes`. The pin is taken on verification rather than from the
+   first record's `key_id`, because that field is producer-written. Until this
+   existed (EH-02), "one key reference per stream" was a sentence in this
+   document and not a check: any key with the collector role could sign any
+   `stream_id`, including re-signing records 3 to 5 of another collector's
+   stream with the chain intact, and the session reported `attested`.
 
 Failure is not a check finding of the same kind as CH01–CH05. Those are
 statements about the agent's behaviour; this is a statement about whether the
@@ -190,6 +201,7 @@ A new surface `event_integrity`, and reason codes:
 | `INTEGRITY_CHAIN_UNANCHORED` | A record past sequence zero declared no `prev` and nothing before it was seen, so its content is bound to no chain and its signature attests nothing about it. Inadmissible, because the record claims attestation while withholding the field that would let the claim be checked |
 | `INTEGRITY_SIGNATURE_INVALID` | A signature did not verify under the supplied key |
 | `INTEGRITY_KEY_UNKNOWN` | `key_id` is not in the supplied key set |
+| `INTEGRITY_STREAM_KEY_CHANGED` | A verified signature under a different collector key than the one pinned to the stream, with no `replaces` succession recorded in the trust store |
 
 `NO_INTEGRITY_EVIDENCE` is the important one. It is what turns "Cohaera did not
 detect tampering" from a silent pass into a stated absence — the same move the
@@ -657,6 +669,18 @@ one that pays for the whole mechanism:
    also carry a `scope` naming the account, region, tenant, project or
    repository the identifier lives in, because "stripe" is a company rather
    than an authority and a charge id is unique within one account.
+
+   The verifier reads both fields (EH-05). It used to drop them at parse time,
+   so a `client_claimed` Message-ID bound to a failed call produced the same
+   `bound` receipt trust, and the same CH07 finding, as a provider-returned
+   one. The declared assurance is now a **ceiling** on the trust tier:
+   `client_claimed` caps at `claimed`, `provider_returned_object` at `bound`,
+   and `provider_returned_operation` does not cap. An absent assurance does
+   not cap either, because the field is optional and every receipt written
+   before R-17 lacks it. An *unreadable* one, a value outside the vocabulary,
+   is absent-and-flagged (`INVALID_EFFECT_RECEIPT`) and caps at `claimed`, so
+   a typo cannot read as the strongest level. The receipt in the verdict
+   carries `assurance`, `assurance_unreadable`, `trust_ceiling` and `scope`.
 2. **Presence.** A consequential call reporting `success` and carrying no
    receipt is now a *stated* gap rather than an accepted claim
    (`NO_EFFECT_RECEIPT`). Reported through coverage, not as a finding, because
@@ -762,6 +786,37 @@ corpus's false positives, and CH04's alert precision is 50%.
    matching approval** is a bypass and can be called one. After an **advisory**
    event it is normal operation and should not fire at all — which is the direct
    fix for the corpus's largest single false-positive source.
+
+### What the signature covers, and what it does not
+
+A signed approval (`signature.key_id`, `signature.sig`) is verified over a
+fixed field list rather than canonical JSON: `scheme`, `decision`,
+`subject.span_id`, `subject.tool_id`, `subject.arg_digest`, `nonce`,
+`granted_at`, `expires_at`, in that order, joined by the octet `0x1f`. Those
+are the fields an attacker rewrites to move an approval onto another call
+(E26), and `expires_at` is required so that no signed approval is eternal.
+
+**Not signed:** `granted_by`, `policy_id`, `policy_digest`, `enforcement` and
+`signature.key_id` itself. They appear in the verdict beside
+`approval_assurance: authenticated`, and the signature says nothing about
+them: a holder of an authenticated approval can rewrite who granted it and
+under which policy without disturbing the signature. The signing input is not
+widened to cover them, because every approval issued to date would stop
+verifying. Instead the verdict carries `signed_fields`, the list above, so a
+reader of one verdict can tell an attested field from a claimed one without
+this paragraph (EH-03). An issuer that needs the grantor attested can fold it
+into `policy_id`, which is unsigned too, or into the nonce, which is signed.
+
+**Control characters are refused.** The separator cannot be allowed inside a
+field. A `tool_id` of `wire_transfer_send<0x1f>sha256:…` with no `arg_digest`
+and nonce `n` signed to the same bytes as `wire_transfer_send` *with* that
+digest and nonce `<0x1f>n`, and a signature over the first verified the second.
+`validate.identity_text` admits the byte, so `Approval.parse` refuses any
+identity or nonce field carrying a C0 control character or DEL
+(`INVALID_APPROVAL_OBJECT`; the approval is absent), and
+`approval_signing_input` raises on the issuer's side so that one cannot be
+minted. The wire format is unchanged: every approval validly signed before
+still verifies.
 
 ### Who has to change
 
