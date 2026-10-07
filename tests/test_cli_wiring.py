@@ -45,14 +45,10 @@ CLI = REPO / "src" / "cohaera" / "cli.py"
 # entry has to go in the same change. An entry without a reason is not allowed
 # to exist, and an entry is not a licence -- it is a defect with a name.
 KNOWN_INERT: dict[str, str] = {
-    "seen_approvals":
-        "Parsed and never read: the approval-nonce ledger EVASION.md E26 "
-        "names as its remedy is never opened. Wiring it is a change to "
-        "src/cohaera/cli.py; delete this entry in that change.",
-    "require_signed_approvals":
-        "Parsed and never read: an unsigned approval still covers a call "
-        "with the flag set. Same change as seen_approvals; delete this "
-        "entry with it.",
+    # Empty, and that is the state to keep it in. The two entries that opened
+    # this list were --seen-approvals and --require-signed-approvals, parsed
+    # for a whole release and read by nothing; wiring them is what created
+    # this test.
 }
 
 

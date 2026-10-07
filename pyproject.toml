@@ -140,16 +140,6 @@ warn_redundant_casts = true
 no_implicit_optional = true
 check_untyped_defs = true
 
-[[tool.mypy.overrides]]
-# lab/ch06/baseline.py carries two findings (a `str | None` reaching
-# `_chain_seed`, and the same union assigned to a `str`) in a file that is
-# deliberately independent of the product and was outside the scope of the
-# change that brought lab/ under mypy. Declared here, by name, so the hole is
-# a line somebody can delete rather than a gate that quietly never ran. Fix
-# the two lines and remove this block.
-module = "lab.ch06.baseline"
-ignore_errors = true
-
 # Two flags are deliberately OFF, and both were tried before being switched off.
 #
 # warn_unreachable fires 16 times, every one of them on a defensive isinstance

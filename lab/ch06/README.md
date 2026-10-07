@@ -12,7 +12,7 @@ This lab answers one bounded question:
 
 ## Run it
 
-From the repository root, with any supported Python 3.10–3.13:
+From the repository root, with any supported Python 3.10 to 3.14:
 
 ```bash
 python lab/ch06/run.py --check

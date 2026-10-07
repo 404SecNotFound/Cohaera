@@ -1448,7 +1448,7 @@ regression tests.
 | CH05 | Orphan terminal events were constructed with `result="success"` and never flagged. | An irreversible action appearing from nowhere was invisible | **Fixed.** `orphan_end` state, reported by CH05. |
 
 The review's C-05 finding, no executable test suite, was accurate at revision
-`45d3bf8`. There are now 1508 tests: unit, hostile-input, content conformance and
+`45d3bf8`. There are now 1542 tests: unit, hostile-input, content conformance and
 35 evasion characterizations, plus a seeded fuzz smoke test in CI.
 
 ### What is still open from the third review
