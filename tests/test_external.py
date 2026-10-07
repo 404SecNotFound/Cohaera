@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -55,11 +56,13 @@ from eval.external.adapters.base import (
     FabricatedEvidenceError,
     assert_no_fabricated_evidence,
     cim_event,
+    safe_id,
 )
 from eval.external.corpus_probe import probe_stepshield_train
 from eval.external.run_external import (
     build_session,
     coverage_report,
+    refuse_duplicate_session_ids,
     run,
     scope_audit,
     split_tasks,
@@ -185,6 +188,52 @@ def test_atbench_refuses_an_unreadable_safety_label():
         atbench.adapt_trajectory({
             "id": "x", "label": "probably fine",
             "trajectory": [{"tool_name": "ls"}]})
+
+
+def _atbench_record(**label) -> dict:
+    return {"id": "x", **label, "trajectory": [{"tool_name": "ls"}]}
+
+
+@pytest.mark.parametrize("label, is_attack", [
+    ({"is_safe": True}, False),
+    ({"is_safe": False}, True),
+    ({"is_safe": 1}, False),
+    ({"is_safe": 0}, True),
+    ({"is_safe": "true"}, False),
+    ({"is_safe": "0"}, True),
+    ({"label": "safe"}, False),
+    ({"label": "unsafe"}, True),
+    ({"safety_label": "harmful"}, True),
+    ({"safety": "benign"}, False),
+])
+def test_atbench_reads_each_label_key_with_its_own_polarity(label, is_attack):
+    """A truth-shaped label is read only under a key whose NAME declares what
+    true means; a word is read under any key, because the word says."""
+    assert atbench.adapt_trajectory(_atbench_record(**label)).is_attack is is_attack
+
+
+@pytest.mark.parametrize("label", [
+    {"label": 1}, {"label": 0}, {"label": True}, {"label": False},
+    {"label": "1"}, {"label": "true"}, {"safety": 1}, {"safety_label": False},
+])
+def test_atbench_refuses_a_truth_shaped_label_under_an_ambiguous_key(label):
+    """THE DEFECT THIS PINS. Every candidate key was read with ONE polarity, so
+    ``label: 1`` -- "1 = unsafe" in the most common convention -- adapted as a
+    safe trajectory, contradicting the module docstring's own warning that a
+    half-recognised schema produces a rate over a population nobody can name.
+
+    Under ``label``, ``safety_label`` or ``safety`` a bool or 0/1 carries no
+    polarity of its own, so it is refused with the reason, not bucketed. The
+    mutation that re-introduces the defect -- adding ``label`` to
+    ``_TRUE_MEANS_SAFE`` -- makes the ``label: 1`` case here adapt as safe and
+    fails this test.
+    """
+    with pytest.raises(AdapterError) as exc:
+        atbench.adapt_trajectory(_atbench_record(**label))
+    message = str(exc.value)
+    assert "AMBIGUOUS" in message
+    assert repr(next(iter(label))) in message, "the refusal must name the key"
+    assert "_TRUE_MEANS_SAFE" in message, "the refusal must say how to fix it"
 
 
 def test_atbench_missing_field_reports_the_keys_it_actually_saw():
@@ -377,8 +426,8 @@ def test_agentdojo_refuses_a_trace_that_recorded_an_error():
     """
     report = _agentdojo()
     assert report.errored_skipped == 1
-    assert report.files_seen == 6
-    assert len(report.sessions) == 5
+    assert report.files_seen == 7
+    assert len(report.sessions) == 6
     # Named, not just counted: an operator has to be able to go and look.
     assert any("user-task-3" in name for name in report.errored_files)
     assert not any("user-task-3" in s.session_id for s in report.sessions)
@@ -525,6 +574,58 @@ def test_agentdojo_drops_a_result_with_no_matching_call():
     adapted = agentdojo.adapt_trace(trace)
     assert not [e for e in adapted.events if e["event_type"] == "tool_end"]
     assert any("no matching call" in note for note in adapted.notes)
+
+
+def test_agentdojo_pairs_id_less_calls_to_the_same_function_in_order():
+    """Two calls to one function in one turn, from a provider that issues no
+    call ids. The fixture is benign and every call is answered, in order.
+
+    THE DEFECT THIS PINS: the adapter keyed an id-less call as ``fn:<name>``,
+    one slot per function, so the second call overwrote the first. The first
+    result then attached to the SECOND call's span and the second result was
+    dropped as unmatched -- one unpaired call for CH05 and a tool_end on the
+    wrong span for CH02, both manufactured by the adapter on a trace in which
+    nothing went wrong. Re-introducing the single-slot keying fails every
+    assertion below.
+    """
+    session = next(s for s in _agentdojo().sessions
+                   if "user-task-5" in s.session_id)
+    assert session.kind == agentdojo.KIND_CLEAN
+
+    starts = [e for e in session.events if e["event_type"] == "tool_start"]
+    ends = [e for e in session.events if e["event_type"] == "tool_end"]
+    assert [e["tool_name"] for e in starts] == ["read_file", "read_file"]
+    assert len(ends) == 2, "the second result was dropped"
+    # Each result lands on the span of the call made in the same position.
+    assert [e["span_id"] for e in ends] == [e["span_id"] for e in starts]
+    assert [e["data"]["tool_result"] for e in ends] == [
+        "Q1 notes: three paragraphs on the launch.",
+        "Q2 notes: one paragraph on the retrospective."]
+
+    assert not any("no matching call" in note for note in session.notes)
+    assert not any("have no result message" in note for note in session.notes)
+
+
+def test_agentdojo_id_less_pairing_is_first_in_first_out_per_function():
+    """The pairing structure on its own, including the mixed case: ids where
+    the trace has them, order where it does not, and never one for the other."""
+    calls = agentdojo._OpenCalls()
+    calls.add({"id": "c1"}, "span-c1", "send")
+    calls.add({"id": None}, "span-a", "read")
+    calls.add({"id": None}, "span-b", "read")
+    calls.add({"id": None}, "span-c", "write")
+    assert len(calls) == 4
+
+    # An id-less result for `read` takes the OLDEST open `read`, not the newest.
+    assert calls.take(None, "read") == ("span-a", "read")
+    assert calls.take(None, "read") == ("span-b", "read")
+    # A third result for `read` has nothing to pair with and says so.
+    assert calls.take(None, "read") is None
+    # An id-less result never consumes an id-bearing call, whatever its name.
+    assert calls.take(None, "send") is None
+    assert calls.take("c1", "send") == ("span-c1", "send")
+    assert calls.take("c1", "send") is None
+    assert len(calls) == 1
 
 
 def test_agentdojo_missing_directory_says_how_to_produce_traces():
@@ -843,6 +944,43 @@ def test_target_precision_is_reported_unavailable_not_zero():
     result = run(stepshield.load_directory(STEPSHIELD_DIR), "stepshield")
     assert result["target_precision_available"] is False
     assert "UNAVAILABLE" in result["target_precision_note"]
+
+
+def test_recall_where_evaluable_is_null_on_an_external_corpus():
+    """``target_check`` is empty on every adapted session, so the figure has no
+    denominator. It used to be published as 0/N with a Wilson interval -- a
+    measured zero for a quantity the corpus cannot define."""
+    sessions = stepshield.load_directory(STEPSHIELD_DIR)
+    # The structural reason, asserted rather than assumed: no adapted session
+    # names a responsible check, so no split of this corpus ever could.
+    assert all(s.target_check == "" for s in sessions)
+    result = run(sessions, "stepshield")
+    summary = result["summary"]
+    assert summary["recall_where_evaluable"] is None
+    assert summary["recall_where_evaluable_note"].startswith("UNAVAILABLE")
+    assert "recall_where_evaluable" in result["target_precision_note"]
+
+
+def test_the_runner_refuses_session_ids_that_collide_after_safe_id():
+    """``case 1`` and ``case/1`` are two corpus ids and one session id.
+
+    ``safe_id`` folds any run of non-identifier characters to one ``-``, so
+    the collision is manufactured by this harness rather than present in the
+    corpus. The internal loader refuses duplicate ids; this path scored them
+    as two rows in the confusion matrix and one cluster in the bootstrap.
+    """
+    assert safe_id("case 1") == safe_id("case/1") == "case-1"
+
+    sessions = stepshield.load_directory(STEPSHIELD_DIR)
+    first, second, *rest = sessions
+    collided = [replace(first, session_id=safe_id("case 1")),
+                replace(second, session_id=safe_id("case/1")), *rest]
+    with pytest.raises(AdapterError, match="more than once") as exc:
+        run(collided, "stepshield")
+    assert "case-1" in str(exc.value), "the refusal must name the id"
+
+    # Distinct ids pass through untouched.
+    refuse_duplicate_session_ids(sessions)
 
 
 def test_summary_carries_both_wilson_and_task_bootstrap():

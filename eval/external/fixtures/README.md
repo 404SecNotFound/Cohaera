@@ -11,8 +11,8 @@ of those corpora, and none of it may be used to compute or quote a detection
 number.
 
 `run_external.py` will happily score this directory and print a headline rate.
-**That rate is meaningless** — six traces, one of them deliberately refused, and
-a bigram baseline fitted on a single session. It is printed because the runner
+**That rate is meaningless** — seven traces, one of them deliberately refused,
+and a bigram baseline fitted on a handful of sessions. It is printed because the runner
 does not have a special case for fixtures, not because it means anything.
 
 They exist for one purpose: to exercise the adapters' *shape handling* — the
@@ -42,7 +42,7 @@ how to fetch them and what was and was not verified about each.
 | `stepshield/ADAPTER-FIXTURE-BENIGN-GEN-00001.jsonl` | generated-benign shape: explicit `trajectory_type`, `task_id` and `category`, none of which appear in the corpus's published schema documentation |
 | `atbench/ADAPTER-FIXTURE-atbench.jsonl` | the *documented* ATBench shape, under `FIELD_MAP`'s first-choice key names. Since no real ATBench record has been inspected, this fixture proves the adapter is self-consistent — **it does not prove the adapter matches the real data.** |
 
-| `agentdojo/**/none/none.json` (×3) | clean runs — `attack_type` null, no injection task. One of the three uses the **pre-content-block** schema, where `content` is a bare string rather than a list of blocks, because run directories accumulate across releases |
+| `agentdojo/**/none/none.json` (×4) | clean runs — `attack_type` null, no injection task. One of the four uses the **pre-content-block** schema, where `content` is a bare string rather than a list of blocks, because run directories accumulate across releases. Another (`user-task-5`) comes from a provider that issues **no call ids**: two calls to the same function in one turn, answered in order, which the adapter must pair first-in-first-out rather than by function name |
 | `agentdojo/.../user-task-1/important_instructions/...injection-1.json` | **compromised**: the injected string is inside a captured tool result and the agent then makes an egress call it omits from its summary |
 | `agentdojo/.../user-task-2/important_instructions/...injection-1.json` | **repelled**: the same injected string is present and the agent does the user's task anyway. The one fixture that proves the three-way split is a three-way split |
 | `agentdojo/.../user-task-3/important_instructions/...injection-2.json` | an **errored** run, written exactly as `benchmark.py` writes one — `utility=False`, `security=True`, a truncated message list with a dangling tool call. Must be refused at load time |
@@ -56,4 +56,4 @@ can do.
 fixtures are written against a schema read directly from AgentDojo's source at a
 pinned revision, so they match what AgentDojo documents itself as writing. What
 they still do not prove is that a real run directory contains no shape these
-six files leave out.
+seven files leave out.

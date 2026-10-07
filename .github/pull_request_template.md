@@ -14,7 +14,7 @@
 - [ ] `python tests/test_evasion.py` still reports every catalogued evasion as
       working. (A failure here means an evasion was closed without updating
       `EVASION.md`.)
-- [ ] `ruff check src tests eval tools` passes.
+- [ ] `ruff check src tests eval tools lab demo` passes.
 - [ ] `python tools/readme_facts.py --check` passes — no hand-typed counts.
 
 ## If this changes detection

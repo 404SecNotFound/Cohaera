@@ -83,9 +83,9 @@ Six hand-written sessions are not a sample of anything. This run
 demonstrates that the evidence path works end to end and keeps
 working; it says nothing about how often these checks are right on
 real traffic. The numbers that speak to that are in
-[`eval/EVALUATION-CARD.md`](../../../eval/EVALUATION-CARD.md), and
+[`eval/EVALUATION-CARD.md`](../../../../eval/EVALUATION-CARD.md), and
 they are considerably less flattering than these six sessions.
 
 It also shows nothing about network isolation. That is the VMware lab
-in [`LAB.md`](../../../LAB.md), which has not yet produced a committed
+in [`LAB.md`](../../../../LAB.md), which has not yet produced a committed
 build record.

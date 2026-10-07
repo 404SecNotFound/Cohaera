@@ -38,11 +38,13 @@
           { "context": "tests (py3.11)" },
           { "context": "tests (py3.12)" },
           { "context": "tests (py3.13)" },
+          { "context": "tests (py3.14)" },
           { "context": "malformed-input fuzz" },
           { "context": "sigma validation and conformance" },
           { "context": "amplification regression" },
           { "context": "build and install the wheel" },
-          { "context": "sbom" }
+          { "context": "sbom" },
+          { "context": "lab checks on windows" }
         ]
       }
     }
