@@ -105,7 +105,7 @@ from .limits import (
     DEFECT_RECEIPT_TYPE,
     Limits,
 )
-from .validate import identity_text, strict_json_loads
+from .validate import as_finite_float, identity_text, strict_json_loads
 
 INTEGRITY_SCHEMA = "cohaera.integrity:1"
 RECEIPT_SCHEMA = "cohaera.receipt:1"
@@ -233,10 +233,9 @@ def _short(value: Any, limits: Limits) -> str | None:
 
 
 def _finite(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    v = float(value)
-    return v if math.isfinite(v) else None
+    # One conversion, shared with validate: a 400-digit ``granted_at`` used to
+    # raise OverflowError here and kill the run. See validate.as_finite_float.
+    return as_finite_float(value)
 
 
 def _index(value: Any) -> int | None:
@@ -766,7 +765,11 @@ class Approval:
         if not isinstance(obj, dict) or obj.get("scheme") != APPROVAL_SCHEMA:
             return None, (DEFECT_APPROVAL_TYPE,)
         decision = obj.get("decision")
-        if decision not in VALID_DECISIONS:
+        # Type before membership. ``in`` against a frozenset hashes its
+        # operand, and a record carrying ``"decision": {}`` raised
+        # ``TypeError: unhashable type`` from a parser whose contract is
+        # absent-and-flagged. Same fault COH-R06 closed in the manifest loader.
+        if not isinstance(decision, str) or decision not in VALID_DECISIONS:
             return None, (DEFECT_APPROVAL_TYPE,)
         subject = Binding.parse(obj.get("subject"), limits)
         if subject is None or not subject.span_id:
@@ -780,7 +783,7 @@ class Approval:
         codes: tuple[str, ...] = ()
         if enforcement is None:
             enforcement = ENFORCEMENT_UNDECLARED
-        elif enforcement not in VALID_ENFORCEMENT:
+        elif not isinstance(enforcement, str) or enforcement not in VALID_ENFORCEMENT:
             enforcement, codes = ENFORCEMENT_UNDECLARED, (DEFECT_ENFORCEMENT_TYPE,)
         return cls(
             decision=decision, subject=subject,
@@ -808,8 +811,10 @@ def enforcement_of(data: dict[str, Any]) -> tuple[str, tuple[str, ...]]:
     value = data.get("enforcement")
     if value is None:
         return ENFORCEMENT_UNDECLARED, ()
-    if value in VALID_ENFORCEMENT:
-        return str(value), ()
+    # Type first: ``"enforcement": {}`` on a policy event hashed a dict here
+    # and the TypeError took the whole run with it, four good sessions and all.
+    if isinstance(value, str) and value in VALID_ENFORCEMENT:
+        return value, ()
     return ENFORCEMENT_UNDECLARED, (DEFECT_ENFORCEMENT_TYPE,)
 
 
@@ -1307,7 +1312,7 @@ class PolicySignature:
             raise PolicySignatureError(
                 f"signature file must declare scheme {POLICY_SIGNATURE_SCHEMA!r}")
         artifact = obj.get("artifact")
-        if artifact not in VALID_POLICY_ARTIFACTS:
+        if not isinstance(artifact, str) or artifact not in VALID_POLICY_ARTIFACTS:
             raise PolicySignatureError(
                 f"signature declares artifact {artifact!r}; valid artifacts are "
                 f"{sorted(VALID_POLICY_ARTIFACTS)}")
@@ -1531,6 +1536,28 @@ R_UNSIGNED = "INTEGRITY_UNSIGNED"
 R_SEQUENCE_GAP = "INTEGRITY_SEQUENCE_GAP"
 R_SEQUENCE_REPLAY = "INTEGRITY_SEQUENCE_REPLAY"
 R_CHAIN_BROKEN = "INTEGRITY_CHAIN_BROKEN"
+# A record past sequence zero was consumed with no chain head to recompute its
+# ``chain`` from, because it declared no ``prev`` and nothing before it was
+# seen: the first record of a batch joined mid-stream, or the first survivor
+# after a gap. Its signature covers the chain value it DECLARED, and with no
+# predecessor that value cannot be tied to the body next to it, so the
+# signature attests nothing about this record's content. Reproduced before
+# this code existed: edit the first record of a later batch, delete its
+# ``prev``, and the session reported ``attested`` with no inadmissible code
+# -- the edited record was the one the signature was taken to vouch for.
+#
+# Inadmissible rather than "could not check", and the distinction is the same
+# one R_PARTIAL_INTEGRITY draws: the record carries a chain value and a
+# signature, which is a CLAIM of attestation, while withholding the one field
+# that makes the claim checkable. A collector that chains writes ``prev`` on
+# every record (tools/collector_sign.py does, and the schema in
+# docs/EVIDENCE-TRUST.md shows it), so a record at seq > 0 without one is
+# either a producer that gave up continuity or an edit that removed it, and
+# the verifier cannot tell those apart. R_STREAM_BOUNDARY_UNVERIFIED is the
+# cross-run version of the same omission and stays non-inadmissible, because
+# the ledger join is a question about a head from a PREVIOUS run; this is
+# about whether the bytes in THIS run are bound to anything at all.
+R_CHAIN_UNANCHORED = "INTEGRITY_CHAIN_UNANCHORED"
 R_SIGNATURE_INVALID = "INTEGRITY_SIGNATURE_INVALID"
 R_KEY_UNKNOWN = "INTEGRITY_KEY_UNKNOWN"
 R_REORDERED = "INTEGRITY_RECORDS_REORDERED"
@@ -1595,7 +1622,8 @@ R_LEDGER_BUDGET = "STREAM_LEDGER_BUDGET_EXHAUSTED"
 # with a critical finding is the false-positive engine this project exists to
 # argue against -- the same reason NO_INTEGRITY_EVIDENCE is a coverage code and
 # not a finding.
-INADMISSIBLE = frozenset({R_SEQUENCE_GAP, R_CHAIN_BROKEN, R_SIGNATURE_INVALID,
+INADMISSIBLE = frozenset({R_SEQUENCE_GAP, R_CHAIN_BROKEN, R_CHAIN_UNANCHORED,
+                          R_SIGNATURE_INVALID,
                           R_KEY_UNKNOWN, R_SEQUENCE_REPLAY, R_PARTIAL_INTEGRITY,
                           R_KEY_REVOKED, R_KEY_EXPIRED, R_KEY_NOT_YET_VALID,
                           R_KEY_WRONG_ROLE, R_STALE, R_FROM_FUTURE,
@@ -2546,6 +2574,8 @@ class SessionIntegrity:
     codes: dict[str, int] = field(default_factory=dict)
     gaps: list[dict[str, int]] = field(default_factory=list)
     chain_breaks: list[int] = field(default_factory=list)
+    # Sequences consumed with no head to chain them from. See R_CHAIN_UNANCHORED.
+    unanchored: list[int] = field(default_factory=list)
     bad_signatures: list[int] = field(default_factory=list)
     unknown_key_ids: set[str] = field(default_factory=set)
     signatures_verified: int = 0
@@ -2692,6 +2722,7 @@ class SessionIntegrity:
             "codes": dict(sorted(self.codes.items())),
             "sequence_gaps": self.gaps[:cap],
             "chain_breaks": self.chain_breaks[:cap],
+            "unanchored": self.unanchored[:cap],
             "invalid_signatures": self.bad_signatures[:cap],
             "unknown_key_ids": sorted(self.unknown_key_ids)[:cap],
             "signatures_verified": self.signatures_verified,
@@ -3114,6 +3145,16 @@ class StreamVerifier:
             stream.first_prev = integrity.prev
         stream.last_seq = seq
         expected_chain = chain_step(stream.head, body) if stream.head else None
+        if expected_chain is None and seq > 0:
+            # No head, past the seed. Either _begin adopted an absent ``prev``
+            # on a mid-stream join or _force resynced onto one after a gap;
+            # either way the body in hand is bound to nothing, whatever the
+            # record's own ``chain`` and signature say. Charged to this
+            # session only: there is no earlier session on the stream to
+            # share it with, which is the whole problem.
+            self._note(state, stream, R_CHAIN_UNANCHORED)
+            if len(state.unanchored) < self.limits.max_evidence_items:
+                state.unanchored.append(seq)
 
         chain_mismatch = (expected_chain is not None
                           and integrity.chain is not None

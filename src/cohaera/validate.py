@@ -254,6 +254,30 @@ def semantic_text(value: Any, max_chars: int,
     return value, ()
 
 
+def as_finite_float(value: Any) -> float | None:
+    """``float(value)`` for a real int or float, or None if that cannot be done.
+
+    The one place in the package that converts a producer-written number to a
+    float, because the conversion itself can raise. ``_bounded_int`` admits an
+    integer of up to MAX_JSON_INT_DIGITS digits and ``float()`` overflows past
+    about 309 of them, so a record carrying ``"timestamp": 1e400`` written out
+    in full raised ``OverflowError`` out of a validator whose contract is
+    "never raises", and the whole run died with no output. C-08 closed the
+    ``float()`` on a string; this is the same hole with an int.
+
+    Booleans are refused because ``True`` is not a number here, and a
+    non-finite result is refused because nothing downstream can order or
+    compare one.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        v = float(value)
+    except OverflowError:
+        return None
+    return v if math.isfinite(v) else None
+
+
 def timestamp(value: Any) -> tuple[float, tuple[str, ...]]:
     """Return a finite positive epoch seconds value, or NaN plus a defect code.
 
@@ -265,7 +289,7 @@ def timestamp(value: Any) -> tuple[float, tuple[str, ...]]:
     if isinstance(value, bool):
         return _NAN, (DEFECT_TIMESTAMP,)      # True is not a timestamp
     if isinstance(value, (int, float)):
-        v = float(value)
+        v = as_finite_float(value)
     elif isinstance(value, str):
         try:
             v = float(value)
@@ -273,7 +297,7 @@ def timestamp(value: Any) -> tuple[float, tuple[str, ...]]:
             return _NAN, (DEFECT_TIMESTAMP,)
     else:
         return _NAN, (DEFECT_TIMESTAMP,)
-    if not math.isfinite(v) or v <= 0:
+    if v is None or not math.isfinite(v) or v <= 0:
         # Rejects "inf", "nan", "-1" and 0. An epoch of zero is not a clock,
         # it is a default that somebody forgot to fill in.
         return _NAN, (DEFECT_TIMESTAMP,)
@@ -284,10 +308,8 @@ def finite_number(value: Any) -> tuple[float | None, tuple[str, ...]]:
     """A finite int/float, or None. Booleans are not numbers here."""
     if value is None:
         return None, ()
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None, (DEFECT_NUMERIC_NONFINITE,)
-    v = float(value)
-    if not math.isfinite(v):
+    v = as_finite_float(value)
+    if v is None:
         return None, (DEFECT_NUMERIC_NONFINITE,)
     return v, ()
 

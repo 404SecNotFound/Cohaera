@@ -48,11 +48,13 @@ from .evidence import (
     BOUND_EXACT,
     BOUND_NONE,
     BOUND_SPAN_ONLY,
+    DECISION_ALLOW,
     DECISION_DENY,
     ENFORCEMENT_ADVISORY,
     ENFORCEMENT_BLOCKING,
     ENFORCEMENT_UNDECLARED,
     R_CHAIN_BROKEN,
+    R_CHAIN_UNANCHORED,
     R_FRESHNESS_UNVERIFIABLE,
     R_KEY_EXPIRED,
     R_KEY_NOT_YET_VALID,
@@ -100,6 +102,7 @@ from .validate import sanitise_display
 # one module, even though the integrity ones are produced in ``evidence``.
 __all__ = [
     "R_CHAIN_BROKEN",
+    "R_CHAIN_UNANCHORED",
     "R_FRESHNESS_UNVERIFIABLE",
     "R_KEY_EXPIRED",
     "R_KEY_NOT_YET_VALID",
@@ -1216,6 +1219,17 @@ def _approval_state(session: Session, call: ToolCall) -> tuple[str, Any]:
     covering = session.covering_approval(call)
     if covering is not None:
         return APPROVAL_COVERED, covering
+    if session.require_signed_approvals:
+        # Nothing covered, and an approval here passes every producer-stated
+        # test, so assurance is the only condition covering_approval can have
+        # failed it on. Decided before the mismatch and expiry states because
+        # those describe a DIFFERENT approval; this one is the right approval
+        # that nobody trusted vouches for.
+        for m in matches:
+            if (m.approval.decision == DECISION_ALLOW
+                    and m.binding in BINDING_TRUSTED and m.fresh is not False
+                    and m.observed_before_call is True):
+                return APPROVAL_UNASSURED, m
     for m in matches:
         if m.binding == BOUND_ARG_MISMATCH:
             return APPROVAL_ARG_MISMATCH, m
@@ -1244,16 +1258,28 @@ APPROVAL_EXPIRED = "approval_expired"
 # used to be indistinguishable from APPROVAL_COVERED, which meant one field the
 # producer could omit switched CH04 off entirely for that call.
 APPROVAL_SPAN_ONLY = "approval_not_argument_bound"
+# E26. An approval that fits the call in every way the producer can state --
+# ALLOW, exactly bound, inside its window, observed before the call -- and
+# that nothing the operator trusts could vouch for: no issuer signature, a
+# signature under a key the store does not hold for the approval role, or a
+# nonce the ledger had already seen. Only reachable under
+# --require-signed-approvals. Before it existed the fall-through reported this
+# case as APPROVAL_NONE, "no approval was presented", in precisely the run
+# whose whole purpose was to say that one was presented and was not good.
+APPROVAL_UNASSURED = "approval_not_assured"
 
 # The states in which a completed call after a control is NOT covered. Named
 # rather than written as "!= APPROVAL_COVERED" so that adding a further state
 # later cannot silently make it count as approval.
 UNAPPROVED_STATES = frozenset({APPROVAL_NONE, APPROVAL_DENIED,
                                APPROVAL_ARG_MISMATCH, APPROVAL_EXPIRED,
-                               APPROVAL_SPAN_ONLY})
+                               APPROVAL_SPAN_ONLY, APPROVAL_UNASSURED})
 
 _APPROVAL_WORDING = {
     APPROVAL_NONE: "no approval was presented for it",
+    APPROVAL_UNASSURED: "the approval naming it fits the call and nothing could "
+                        "vouch for it: unsigned, signed by a key not trusted "
+                        "for approvals, or its nonce already spent",
     APPROVAL_DENIED: "an approval bound to it recorded the decision DENY",
     APPROVAL_ARG_MISMATCH: "the only approval naming it was granted for "
                            "different arguments",
@@ -1416,6 +1442,15 @@ def ch04_guardrail_overrun(session: Session,
             # docstring. See evidence.APPROVAL_ORIGIN_IN_BAND.
             "approval_origins": sorted(
                 {m.approval.origin for c in completed + approved
+                 if (m := states[id(c)][1]) is not None}),
+            # E26. The tier each approval in play reached in THIS deployment:
+            # claimed or bound from the producer's own fields, authenticated
+            # once a trust store verified the issuer, single_use once a nonce
+            # ledger had not seen it. Without this the only visible effect of
+            # --seen-approvals was CH04 firing on a replay, and an operator
+            # could not tell a ledger that worked from one never consulted.
+            "approval_assurance": sorted(
+                {m.approval.tier for c in completed + approved
                  if (m := states[id(c)][1]) is not None}),
         }
 
@@ -1774,6 +1809,11 @@ def ch06_evidence_integrity(session: Session,
     if R_CHAIN_BROKEN in codes:
         parts.append(f"{len(audit.chain_breaks)} record(s) do not match the hash "
                      f"chain")
+    if R_CHAIN_UNANCHORED in codes:
+        parts.append(f"{len(audit.unanchored)} record(s) past sequence zero "
+                     f"declared no predecessor, so their content is bound to "
+                     f"no chain and the signature they carry attests nothing "
+                     f"about it")
     if R_SIGNATURE_INVALID in codes:
         parts.append(f"{len(audit.bad_signatures)} signature(s) did not verify")
     if R_KEY_UNKNOWN in codes:

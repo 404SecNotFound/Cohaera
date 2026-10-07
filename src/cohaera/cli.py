@@ -49,6 +49,8 @@ from .evidence import (
     P_ABSENT,
     POLICY_ARTIFACT_BASELINE,
     POLICY_ARTIFACT_MANIFEST,
+    ROLE_APPROVAL,
+    ApprovalLedger,
     Freshness,
     LedgerError,
     PolicyAttestation,
@@ -409,6 +411,34 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
                 " (WARNING: no file locking on this host, so concurrent runs "
                 "sharing this ledger cannot exclude each other)"))
 
+    # E26. Both of these were parsed for a whole release and read by nothing:
+    # the ledger was never opened and the flag never reached a Session, so
+    # the documented closure of the approval replay was unreachable from the
+    # command line. Loaded and refused on the same terms as the stream ledger.
+    approvals: ApprovalLedger | None = None
+    if args.seen_approvals:
+        try:
+            approvals = ApprovalLedger(Path(args.seen_approvals), limits=limits)
+        except (LedgerError, OSError) as exc:
+            _err(f"[cohaera] approval ledger rejected: "
+                 f"{sanitise_display(str(exc), 400)}")
+            return EXIT_ERROR
+        _err(f"[cohaera] approval ledger "
+             f"{sanitise_display(args.seen_approvals, 160)}: "
+             f"{approvals.size} nonce(s) previously spent")
+    approvals_known = approvals.size if approvals is not None else 0
+    if args.require_signed_approvals and not any(
+            k.authorises(ROLE_APPROVAL) for k in keys.keys.values()):
+        # Refused rather than run. With no key that may issue approvals, no
+        # approval can verify, so none covers anything and CH04 would report
+        # every approved action in the input as a bypass -- a verdict stream
+        # that is entirely noise, produced on purpose, is not a control.
+        _err("[cohaera] --require-signed-approvals: the trust store holds no "
+             "key with the 'approval' role, so no approval could ever "
+             "verify. Add the issuer's key with roles [\"approval\"], or drop "
+             "the flag.")
+        return EXIT_ERROR
+
     report = IngestReport(source=str(args.telemetry))
     correlator = _correlator(args, limits)
 
@@ -457,7 +487,9 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
 
     sessions = load(args.telemetry, limits=limits, correlator=correlator,
                     manifest=manifest, report=report, keys=keys,
-                    freshness=freshness, ledger=ledger)
+                    freshness=freshness, ledger=ledger,
+                    approval_ledger=approvals,
+                    require_signed_approvals=bool(args.require_signed_approvals))
     _err(f"[cohaera] {sanitise_display(str(args.telemetry), 160)}: "
          f"{sum(len(s.events) for s in sessions)} events in {len(sessions)} sessions, "
          f"{report.rejected} record(s) quarantined\n")
@@ -468,7 +500,15 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
     ledger_identity = ({"enabled": True, "generation": ledger.generation,
                         "state": ledger.state_digest()} if ledger is not None
                        else {"enabled": False})
+    approvals_identity = (
+        {"enabled": True, "path": str(args.seen_approvals),
+         # Nonces known when READ. Spending happened during assembly, so the
+         # ledger's live size is already this run's state, not its input.
+         "nonces_known": approvals_known}
+        if approvals is not None else {"enabled": False})
     trust_config = trust_config_digest(
+        approval_ledger=approvals_identity,
+        require_signed_approvals=bool(args.require_signed_approvals),
         trust_store=keys.as_dict(limits.max_evidence_items),
         policy_attestations=[a.as_dict() for a in attestations],
         freshness=freshness.as_dict(),
@@ -527,6 +567,8 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
              "generation_read": ledger_identity["generation"],
              "state_digest_read": ledger_identity["state"]} if ledger
             else {"enabled": False}),
+        "approval_ledger": approvals_identity,
+        "require_signed_approvals": bool(args.require_signed_approvals),
         # Stream identity and extent, so that two runs which scored the same
         # collector stream twice are distinguishable after the fact. Cohaera
         # keeps no state between runs, so this is the only form replay detection
@@ -592,6 +634,18 @@ def _score(args: argparse.Namespace, stack: contextlib.ExitStack) -> int:
             # replay of this stream is undetectable and nothing said so.
             _err(f"[cohaera] could not write the seen-stream ledger to "
                  f"{sanitise_display(str(args.seen_streams), 160)}: "
+                 f"{sanitise_display(str(exc), 300)}")
+            return EXIT_ERROR
+
+    if approvals is not None:
+        # After emission, for the reason the stream ledger is: a nonce
+        # recorded against findings nobody saw is a replay the next run
+        # cannot report. Writes only if a nonce was spent.
+        try:
+            approvals.save()
+        except (LedgerError, OSError) as exc:
+            _err(f"[cohaera] could not write the approval ledger to "
+                 f"{sanitise_display(str(args.seen_approvals), 160)}: "
                  f"{sanitise_display(str(exc), 300)}")
             return EXIT_ERROR
 

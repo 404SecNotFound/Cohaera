@@ -153,6 +153,73 @@ reports recall is a marketing document.
 
 ### Fixed
 
+- **`--seen-approvals` and `--require-signed-approvals` did nothing.** Both
+  were parsed and read by nothing: the ledger was never opened and the flag
+  never reached a `Session`, so the E26 closure described above, in the
+  README and in the operator guide was unreachable from the command line.
+  Scoring with and without both flags produced byte-identical output. Found
+  by the October 2026 review, reproduced in `tests/test_review_2026_10.py`.
+
+  They are wired now, on the same terms as the stream ledger. An unreadable
+  ledger refuses the run rather than starting fresh; the ledger is saved after
+  emission, so a nonce is never recorded against findings nobody saw; and
+  `--require-signed-approvals` with no approval-role key in the trust store is
+  refused outright, because a run in which no approval can verify reports
+  every approved action as a bypass. Both controls appear in provenance
+  (`approval_ledger`, `require_signed_approvals`) and, **only when switched
+  on**, in `trust_config_digest`, so every existing `analysis_run_id` is
+  unchanged.
+
+  Wiring them exposed a second fault the unit tests had exercised one call at
+  a time. `Session.assured` and `Session.approval_tier` each verified the
+  approval and spent its nonce, so every question about an approval consumed
+  it: CH04 asked whether a genuine signed approval covered the call, the
+  verdict asked which tier it reached, and the second answer read the first
+  as a replay. Verification now happens once per approval per run and every
+  caller reads the same result. The approval a match carries is the checked
+  one, so a finding's `approval_assurance` reports the tier the deployment
+  reached (`authenticated`, `single_use`) rather than the one the producer's
+  own fields imply. The CHANGELOG entry above claimed that already; it is true
+  now.
+
+- **One hostile record killed the run with nothing on stdout.** A timestamp
+  written as a 400-digit integer passed `_bounded_int` (the cap is 1024
+  digits) and raised `OverflowError` from `float()` inside a validator whose
+  contract is "never raises". A JSON object where a string was expected
+  (`"decision": {}`, `"enforcement": {}`, a policy signature's `"artifact"`)
+  raised `TypeError: unhashable type` from a frozenset membership test. Both
+  took the process down with a traceback, four good sessions included. Both
+  are the class BUG-01 and C-08 closed, found again in fields those fixes did
+  not reach.
+
+  The readers flag now: one `as_finite_float` does every producer-number
+  conversion in the package, and every membership test checks the type
+  first. Behind them is a backstop that did not exist before: a record whose
+  `Event` construction raises for any reason is quarantined as
+  `RECORD_NOT_READABLE` with the exception named in the reject detail, and
+  the run continues. The regression suite substitutes sixteen hostile shapes
+  into every leaf of a record carrying every sidecar and asserts the backstop
+  is never what saved it.
+
+- **A forged record passed on a stream joined mid-way.** The signature covers
+  the chain value a record DECLARES. On a mid-stream join the verifier adopted
+  the first record's `prev` as the chain head; with `prev` deleted there was
+  no head, the body was never chained, and the signature over the untouched
+  `chain` value verified. Edit the first record of any batch after the first,
+  drop one field, and the session reported `attested: true` with no
+  inadmissible code, and `sequence_verified` let the forged record decide
+  ordering for CH04. The resync after a sequence gap had the same hole.
+
+  New code **`INTEGRITY_CHAIN_UNANCHORED`**, inadmissible: a record past
+  sequence zero consumed with no head to recompute its chain from. The
+  reasoning for inadmissible rather than "could not check" is written on the
+  constant. `cohaera.session_verdict` integrity blocks gain `unanchored`, the
+  sequences it happened at, beside `chain_breaks`. A batch that declares its
+  `prev` is unchanged and still only `INTEGRITY_STREAM_JOINED_MIDSTREAM`.
+  Tail truncation (cutting records off the END of a signed stream) remains
+  undetected and THREAT-MODEL.md still overstates the chain on that point;
+  it is recorded in the review, not fixed here.
+
 - **CH04's coverage contract, which was inverted.** `coverage()` added
   `policy_semantics` and `approval_binding` to CH04's required surfaces only
   `if has_policy` — only once policy events already existed. So the one state

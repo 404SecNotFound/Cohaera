@@ -187,6 +187,7 @@ A new surface `event_integrity`, and reason codes:
 | `NO_COLLECTOR_KEYS` | Records are signed, but no key file was supplied, so signatures were parsed and not verified |
 | `INTEGRITY_SEQUENCE_GAP` | Records are missing from this stream |
 | `INTEGRITY_CHAIN_BROKEN` | A record does not match the chain |
+| `INTEGRITY_CHAIN_UNANCHORED` | A record past sequence zero declared no `prev` and nothing before it was seen, so its content is bound to no chain and its signature attests nothing about it. Inadmissible, because the record claims attestation while withholding the field that would let the claim be checked |
 | `INTEGRITY_SIGNATURE_INVALID` | A signature did not verify under the supplied key |
 | `INTEGRITY_KEY_UNKNOWN` | `key_id` is not in the supplied key set |
 

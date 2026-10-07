@@ -69,8 +69,12 @@ description: |
   working rather than infer it from silence.
 
   data.findings[].evidence.approval_states says why the reported calls were NOT
-  covered: no_approval, denied, approval_for_other_arguments, or
-  approval_expired. The middle two are the interesting ones. An approval granted
+  covered: no_approval, denied, approval_for_other_arguments, approval_expired,
+  approval_not_argument_bound, or approval_not_assured (the approval fit and
+  nothing the operator trusts could vouch for it, which is only reachable under
+  --require-signed-approvals). evidence.approval_assurance carries the tier each
+  approval in play reached. denied and approval_for_other_arguments are the
+  interesting ones. An approval granted
   for one set of arguments and presented for another is the reuse this schema
   exists to catch, and before argument binding existed it was indistinguishable
   from a legitimate approval.

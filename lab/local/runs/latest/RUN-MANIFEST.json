@@ -479,7 +479,7 @@
           "triggered_rules": [
             "CH06_evidence_integrity"
           ],
-          "verdict_id": "614764b454cdcd8809f9431fd34bb0a1"
+          "verdict_id": "c55877fba806fdf8f92602c8c0395018"
         }
       ]
     },
@@ -537,7 +537,7 @@
             "CH02_concealment_gap",
             "CH06_evidence_integrity"
           ],
-          "verdict_id": "2647716e5c17b8348edb50e8f2d363f2"
+          "verdict_id": "e446ae683c3571567e67ec7c07b26653"
         }
       ]
     }
@@ -712,7 +712,7 @@
           "triggered_rules": [
             "CH06_evidence_integrity"
           ],
-          "verdict_id": "e217fe1e179f8ac3293ede3ba4d02071"
+          "verdict_id": "7daa648be66b617cfc6bed15c6d08532"
         }
       ],
       "why": "State 1's behaviour, with one record edited after it was signed."

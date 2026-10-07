@@ -1249,7 +1249,12 @@ class Session:
                 # annotates. See evidence.BINDING_TRUSTED.
                 binding = evidence.BOUND_SPAN_ONLY
             out.append(ApprovalMatch(
-                approval=a, binding=binding,
+                # The approval as this deployment judged it, so the tier the
+                # verdict carries is the one reached (authenticated,
+                # single_use) rather than the one the producer's own fields
+                # imply (claimed, bound). With no trust store it is the parsed
+                # object unchanged.
+                approval=self._checked_approval(a), binding=binding,
                 fresh=a.covers_clock(call.started_at),
                 observed_before_call=self._observed_before(record, call)))
         return out
@@ -1304,6 +1309,43 @@ class Session:
             return m
         return None
 
+    def _checked_approval(self, approval: Approval) -> Approval:
+        """Verify an approval ONCE per session, and spend its nonce once.
+
+        ``assured`` and ``approval_tier`` each used to verify and then call
+        ``ledger.spend`` themselves, so every QUESTION about an approval
+        consumed it. CH04 asked whether a genuine signed approval covered the
+        call (spent: True), the verdict then asked which tier it reached
+        (spent: False, the ledger had just recorded it), and a second
+        evaluation of the same session reported a legitimate, approved action
+        as ``CH04_blocking_control_bypassed``. Reading a value must not change
+        it. Verification is a scalar multiplication and the nonce is a one-way
+        write, so both happen here exactly once per approval per run and every
+        caller reads the same answer.
+
+        Keyed on the approval OBJECT, not its content: the same nonce arriving
+        on two approvals is two presentations, and the second one is the
+        replay the ledger exists to refuse.
+        """
+        cache: dict[int, tuple[Approval, Approval]] = self._cached(
+            "approval_checks", dict)
+        hit = cache.get(id(approval))
+        if hit is not None and hit[0] is approval:
+            return hit[1]
+        store = self.trust_store
+        checked = (evidence.verify_approval(approval, store)
+                   if store is not None else approval)
+        ledger = self.approval_ledger
+        if checked.verified and ledger is not None and getattr(
+                ledger, "enabled", False):
+            checked = replace(checked, unspent=ledger.spend(checked.nonce))
+        cache[id(approval)] = (approval, checked)
+        # The checked object answers for itself too, so a caller holding the
+        # approval a match carries (which IS the checked one, see
+        # approvals_for) gets the same answer rather than a second spend.
+        cache[id(checked)] = (checked, checked)
+        return checked
+
     def assured(self, approval: Approval) -> bool:
         """Has this approval been verified, and its nonce not already spent?
 
@@ -1311,16 +1353,15 @@ class Session:
         verified. A nonce on an unsigned approval is decoration: an attacker
         who can rewrite the span can rewrite the nonce in the same edit.
         """
-        store = self.trust_store
-        if store is None:
+        if self.trust_store is None:
             return False
-        checked = evidence.verify_approval(approval, store)
+        checked = self._checked_approval(approval)
         if not checked.verified:
             return False
         ledger = self.approval_ledger
         if ledger is None or not getattr(ledger, "enabled", False):
             return True
-        return ledger.spend(checked.nonce) is not False
+        return checked.unspent is not False
 
     def approval_tier(self, approval: Approval) -> str:
         """The tier this approval reaches in this deployment, for the verdict.
@@ -1329,15 +1370,7 @@ class Session:
         and nothing could vouch for it" is a fact an analyst acts on and the
         current default is to let it cover anyway.
         """
-        store = self.trust_store
-        if store is None:
-            return approval.tier
-        checked = evidence.verify_approval(approval, store)
-        ledger = self.approval_ledger
-        if checked.verified and ledger is not None and getattr(
-                ledger, "enabled", False):
-            checked = replace(checked, unspent=ledger.spend(checked.nonce))
-        return checked.tier
+        return self._checked_approval(approval).tier
 
     @property
     def dangling_approvals(self) -> list[Approval]:

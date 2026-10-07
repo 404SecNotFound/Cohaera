@@ -232,7 +232,9 @@ def trust_config_digest(
         correlation_key_version: str = "",
         correlation_keyed: bool = False,
         baseline_partial_allowed: bool = False,
-        schema: str = "") -> str:
+        schema: str = "",
+        approval_ledger: dict[str, Any] | None = None,
+        require_signed_approvals: bool = False) -> str:
     """One digest over every setting that can change a verdict or its trust.
 
     R-06. ``run_id`` used to cover the detector version, the bounds, the source,
@@ -276,7 +278,8 @@ def trust_config_digest(
     store = trust_store or {}
     fresh = freshness or {}
     led = ledger or {}
-    return digest({
+    appr = approval_ledger or {}
+    payload: dict[str, Any] = {
         "schema": TRUST_CONFIG_SCHEMA,
         # Both digests, for the same reason run_id keeps the manifest's FILE
         # digest: the semantic one cannot move without the file one moving, and
@@ -317,7 +320,21 @@ def trust_config_digest(
                         "keyed": bool(correlation_keyed)},
         "baseline_partial_allowed": bool(baseline_partial_allowed),
         "output_schema": schema,
-    }, 24)
+    }
+    # The E26 controls. By the rule above both belong here: a run that refuses
+    # unsigned approvals, or that judged them against a ledger of spent
+    # nonces, can reach a different CH04 verdict on identical telemetry.
+    # Folded in only when either is ON, so every run that never enabled them
+    # keeps the identity it already had and nothing downstream that
+    # deduplicates on it sees a release boundary as a new run.
+    if require_signed_approvals or appr.get("enabled"):
+        payload["approvals"] = {
+            "require_signed": bool(require_signed_approvals),
+            "ledger": {"enabled": bool(appr.get("enabled", False)),
+                       # What was READ, as with the stream ledger.
+                       "nonces_known": appr.get("nonces_known", 0)},
+        }
+    return digest(payload, 24)
 
 
 NO_TRUST_CONFIG = trust_config_digest()

@@ -216,7 +216,7 @@ evidence that the current detections work on outside traffic.
 
 Repository controls are substantial but do not replace external validation:
 
-- Tests, 1191 passing across unit, hostile-input, content, lab, and regression
+- Tests, 1259 passing across unit, hostile-input, content, lab, and regression
   coverage.
 - Sigma content pack, 15 rules, validated and conformance-tested against real
   emitted fields.

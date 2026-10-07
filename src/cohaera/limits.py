@@ -121,13 +121,20 @@ RESIDENT_BYTES_PER_CONTAINER = 256
 RESIDENT_BYTES_PER_KEY = 64
 
 REJECT_RECORD_SHAPE = "RECORD_SHAPE_EXCEEDED"
+# The record parsed as JSON and could not be read as an event. Every field
+# reader is written to flag rather than raise, so this code should never
+# appear; it exists because "should never" has been wrong before (an
+# OverflowError in a timestamp, a TypeError in an enforcement field), and when
+# it is wrong again the right outcome is one quarantined record with the
+# exception named in its detail, not a run that dies with nothing on stdout.
+REJECT_RECORD_UNREADABLE = "RECORD_NOT_READABLE"
 
 ALL_REJECT_CODES = (
     REJECT_MALFORMED_JSON, REJECT_NOT_AN_OBJECT, REJECT_LINE_TOO_LONG,
     REJECT_NESTING_TOO_DEEP, REJECT_UNDECODABLE, REJECT_TOO_MANY_EVENTS,
     REJECT_TOO_MANY_SESSIONS, REJECT_TOO_MANY_KEYS, REJECT_TOO_MANY_RECORDS,
     REJECT_TOO_MANY_BYTES, REJECT_TOO_MANY_REJECTS, REJECT_RATIO_EXCEEDED,
-    REJECT_MEMORY_BUDGET, REJECT_RECORD_SHAPE,
+    REJECT_MEMORY_BUDGET, REJECT_RECORD_SHAPE, REJECT_RECORD_UNREADABLE,
 )
 
 ALL_DEFECT_CODES = (
