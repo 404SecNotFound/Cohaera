@@ -43,6 +43,8 @@ from .identity import CorrelationKey, canonical, digest
 from .identity import verdict_id as _verdict_id
 from .limits import (
     DEFAULT_LIMITS,
+    DEFECT_DUPLICATE_DELIVERY,
+    DEFECT_EVENT_ID_REUSED,
     DEFECT_RESPONSE_TEXT_LENGTH,
     DEFECT_RESPONSE_TEXT_TYPE,
     Limits,
@@ -410,6 +412,17 @@ class Event:
         return (0, t) if math.isfinite(t) else (1, 0.0)
 
     @property
+    def event_id(self) -> str | None:
+        """The producer's identity for this record, or None.
+
+        Read for exactly one decision -- is this the same record delivered
+        again -- and validated the way a span is, because the aliasing that
+        made ``span_id: true`` close the call opened as ``span_id: 1`` (BUG-04)
+        would make an integer id collide with a string one here.
+        """
+        return self.view.event_id
+
+    @property
     def span_id(self) -> str | None:
         """A bounded non-empty string, or None.
 
@@ -455,6 +468,45 @@ class Event:
     def digest(self) -> str:
         """Content identity for this record. Stable across runs."""
         return digest(self.raw, 16)
+
+    @cached_property
+    def canonical_bytes(self) -> bytes:
+        """The record's canonical JSON, encoded. Cached on the frozen record.
+
+        Two readers need it per session -- the session content digest and the
+        duplicate-delivery test -- and canonicalising a record is a full walk
+        of producer-controlled structure, so it is done once. Safe to cache for
+        the C4-07 reason everything else on this class is: ``raw`` cannot
+        change underneath it.
+        """
+        return canonical(self.raw).encode("utf-8")
+
+    @cached_property
+    def content_key(self) -> str:
+        """Full-content identity, wider than ``digest()``.
+
+        128 bits rather than the 64 that ``digest()`` exposes, because this one
+        decides whether a record is DROPPED from a session's view. A collision
+        on the shorter form would silently delete a distinct record, and the
+        extra sixteen characters cost nothing against a hash already computed.
+        """
+        return hashlib.sha256(self.canonical_bytes).hexdigest()[:32]
+
+    @cached_property
+    def restamp_key(self) -> str:
+        """Identity of the record with the fields a collector REWRITES on a
+        retry set aside: the timestamp and the integrity sidecar.
+
+        A redelivery is not always byte-identical. A collector that stamps
+        arrival time, or chains and signs each delivery afresh, changes those
+        two fields and nothing else. Two records sharing an ``event_id`` and
+        this key are one record delivered twice; two sharing only the id are
+        two records wearing one name, which is a different fact and is not
+        grounds to drop either. See ``Session._build_dedup``.
+        """
+        trimmed = {k: v for k, v in self.raw.items()
+                   if k not in ("timestamp", evidence.INTEGRITY_FIELD)}
+        return digest(trimmed, 32)
 
 
 @dataclass
@@ -793,11 +845,94 @@ class Session:
         cast("list[Event]", self.events).append(event)
         self.invalidate()
 
+    # ---- duplicate delivery ---------------------------------------------
+    def _build_dedup(self) -> tuple[tuple[Event, ...], int, int]:
+        """(unique events in list order, duplicates dropped, id conflicts).
+
+        At-least-once delivery is the normal failure mode of every collector
+        that retries, and nothing here read ``event_id`` at all, so a record
+        delivered twice was scored twice: the second ``tool_start`` had no
+        terminal event of its own and CH05 reported an unpaired call, a
+        consequential call delivered twice counted twice against the summary
+        in CH02, and each copy of a session added calls CH03 could not order
+        against the marker, so eight copies took its confidence from 0.35 to
+        0.02. One fixture session, concatenated with itself, went from one
+        finding to two. See DEFECT_DUPLICATE_DELIVERY in ``limits``.
+
+        Two tests, because a redelivery is not always byte-identical. A
+        producer that emits no ids at all can still deliver a line twice, so
+        identical content is one test. A collector that restamps an arrival
+        time or attaches a fresh integrity sidecar on retry changes the bytes
+        and keeps the id, so a shared id with the record otherwise unchanged
+        (``Event.restamp_key``) is the other. The FIRST delivery is the one
+        kept, in the order of ``events``, which assembly has sorted by clock.
+
+        A shared id over DIFFERENT content is deliberately not a third test.
+        The first version of this rule dropped on the id alone, and the
+        repository's own evasion suite caught it: its helper derives ids from
+        the timestamp, so a guardrail and a consequential call on the same
+        tick shared one and the call vanished from CH04's view -- a check
+        blinded by a producer's id scheme, which is worse than any double
+        count. Those records are KEPT, counted as ``event_id_conflicts`` and
+        reported under DEFECT_EVENT_ID_REUSED, because Cohaera cannot say
+        which of the two is the record and must not guess.
+
+        This is the session's VIEW, not a rejection: the records stay in
+        ``events``, ``event_count`` still counts them, and ``content_digest``
+        still commits to them, so a session that arrived with duplicates is a
+        different input from one that did not. Only the derived values that
+        the checks read are built from the deduplicated sequence.
+        """
+        # event_id -> restamp key of the first record that carried it
+        seen_ids: dict[str, str] = {}
+        seen_content: set[str] = set()
+        kept: list[Event] = []
+        dropped = 0
+        conflicts = 0
+        for e in self.events:
+            key = e.content_key
+            eid = e.event_id
+            if key in seen_content:
+                dropped += 1
+                continue
+            if eid is not None and eid in seen_ids:
+                if seen_ids[eid] == e.restamp_key:
+                    dropped += 1            # the same record, restamped
+                    continue
+                conflicts += 1              # a different record, same name
+            seen_content.add(key)
+            if eid is not None and eid not in seen_ids:
+                seen_ids[eid] = e.restamp_key
+            kept.append(e)
+        return tuple(kept), dropped, conflicts
+
+    @property
+    def unique_events(self) -> tuple[Event, ...]:
+        """``events`` with every duplicate delivery removed, first copy kept.
+
+        Every derived value on this class reads THIS rather than ``events``.
+        A check that read ``events`` directly would count a redelivered record
+        as a second event, which is the fault ``_build_dedup`` describes.
+        """
+        return self._cached("dedup", self._build_dedup)[0]
+
+    @property
+    def duplicate_event_count(self) -> int:
+        """Records dropped from the session's view as duplicate deliveries."""
+        return self._cached("dedup", self._build_dedup)[1]
+
+    @property
+    def event_id_conflicts(self) -> int:
+        """Records KEPT although their ``event_id`` was already taken by a
+        different record. A retry reproduces the record; this is something
+        else, and it is reported rather than resolved."""
+        return self._cached("dedup", self._build_dedup)[2]
+
     # ---- identity -------------------------------------------------------
     @property
     def agent_names(self) -> list[str]:
         seen: list[str] = []
-        for e in self.events:
+        for e in self.unique_events:
             n = e.agent_name
             if n and n not in seen:
                 seen.append(n)
@@ -805,16 +940,18 @@ class Session:
 
     @property
     def framework(self) -> str:
-        return next((e.view.framework for e in self.events if e.view.framework),
-                    "unknown")
+        return next((e.view.framework for e in self.unique_events
+                     if e.view.framework), "unknown")
 
     @property
     def host(self) -> str | None:
-        return next((e.view.host for e in self.events if e.view.host), None)
+        return next((e.view.host for e in self.unique_events if e.view.host),
+                    None)
 
     @property
     def user(self) -> str | None:
-        return next((e.view.user for e in self.events if e.view.user), None)
+        return next((e.view.user for e in self.unique_events if e.view.user),
+                    None)
 
     @property
     def correlation_confidence(self) -> float:
@@ -828,11 +965,18 @@ class Session:
         sessions with different events but the same findings therefore produced
         the same verdict_id, so a SIEM deduplicating on it would drop the second
         as a retry. Computed once per session, lazily, at emit time.
+
+        Over EVERY record received, duplicates included, and in clock order.
+        The checks read the deduplicated view, but the identity of what this
+        session was built from has to include the copies that were dropped: an
+        input that delivered a record twice is not the same input as one that
+        delivered it once, and a verdict that could not tell them apart would
+        be the C4-01 fault again with a narrower aperture.
         """
         def build() -> str:
             h = hashlib.sha256()
-            for e in self.ordered_events:
-                blob = canonical(e.raw).encode("utf-8")
+            for e in sorted(self.events, key=lambda e: e.sort_key):
+                blob = e.canonical_bytes
                 h.update(len(blob).to_bytes(8, "big"))
                 h.update(blob)
             return h.hexdigest()[:32]
@@ -840,10 +984,16 @@ class Session:
 
     @property
     def integrity_defects(self) -> dict[str, int]:
-        """Field-level defect codes seen in this session, with counts."""
+        """Field-level defect codes seen in this session, with counts.
+
+        Counted over the deduplicated view, so a defective record delivered
+        three times is one defect rather than three; the duplicate count is
+        reported on its own, under DEFECT_DUPLICATE_DELIVERY, rather than
+        folded in here as if a redelivery were a bad field.
+        """
         def build() -> dict[str, int]:
             counts: dict[str, int] = {}
-            for e in self.events:
+            for e in self.unique_events:
                 for code in e.defects:
                     counts[code] = counts.get(code, 0) + 1
             return dict(sorted(counts.items()))
@@ -852,7 +1002,7 @@ class Session:
     # ---- time -----------------------------------------------------------
     @property
     def _valid_ts(self) -> list[float]:
-        return [e.timestamp for e in self.events if e.timestamp_valid]
+        return [e.timestamp for e in self.unique_events if e.timestamp_valid]
 
     @property
     def started_at(self) -> float:
@@ -868,11 +1018,12 @@ class Session:
 
     @property
     def clock_defects(self) -> int:
-        return sum(1 for e in self.events if not e.timestamp_valid)
+        return sum(1 for e in self.unique_events if not e.timestamp_valid)
 
     @property
     def ordered_events(self) -> list[Event]:
-        return self._cached("ordered", lambda: sorted(self.events,
+        """The deduplicated events in clock order. What every check walks."""
+        return self._cached("ordered", lambda: sorted(self.unique_events,
                                                       key=lambda e: e.sort_key))
 
     # ---- tool calls -----------------------------------------------------
@@ -1031,7 +1182,7 @@ class Session:
     @property
     def user_messages(self) -> list[str]:
         out = []
-        for e in self.events:
+        for e in self.unique_events:
             if e.event_type != "user_message":
                 continue
             text, _ = validate.semantic_text(
@@ -1087,7 +1238,7 @@ class Session:
         def build() -> list[str]:
             out: list[str] = []
             cap = self.limits.max_injection_markers
-            for e in self.events:
+            for e in self.unique_events:
                 if len(out) >= cap:
                     break
                 items, _ = marker_list(e.data.get("injection_patterns"))
@@ -1107,7 +1258,7 @@ class Session:
         # other. `bool` is excluded because it is a subclass of `int` and a
         # producer sending `current_depth: true` would otherwise contribute 1.
         depths: list[int] = [
-            d for e in self.events
+            d for e in self.unique_events
             if isinstance(d := e.data.get("current_depth"), int)
             and not isinstance(d, bool)]
         return max(depths) if depths else 0
@@ -1115,7 +1266,7 @@ class Session:
     @property
     def handoffs(self) -> list[tuple[str, str]]:
         out = []
-        for e in self.events:
+        for e in self.unique_events:
             if e.event_type not in {"agent_handoff", "agent_handoff_error"}:
                 continue
             src = validate.identity_text(e.data.get("source_agent"),
@@ -1127,7 +1278,8 @@ class Session:
 
     @property
     def policy_events(self) -> list[str]:
-        return [e.event_type for e in self.events if e.event_type in POLICY_EVENTS]
+        return [e.event_type for e in self.unique_events
+                if e.event_type in POLICY_EVENTS]
 
     # ---- P1 approvals ---------------------------------------------------
     @property
@@ -1356,16 +1508,16 @@ class Session:
     def total_cost_usd(self) -> float:
         """Finite, or zero. An infinite cost is not a cost, it is a bad field."""
         session_costs = [v for v in (_num(e.data.get("session_cost_usd"))
-                                     for e in self.events) if v is not None]
+                                     for e in self.unique_events) if v is not None]
         if session_costs:
             return round(max(session_costs), 6)
         per_call = sum(v for v in (_num(e.data.get("cost_usd"))
-                                   for e in self.events) if v is not None)
+                                   for e in self.unique_events) if v is not None)
         return round(per_call, 6)
 
     @property
     def error_count(self) -> int:
-        return sum(1 for e in self.events
+        return sum(1 for e in self.unique_events
                    if e.event_type in {"tool_error", "model_error",
                                        "agent_handoff_error"})
 
@@ -1384,7 +1536,17 @@ class Session:
             "user": self.user,
             "started_at": self.started_at,
             "duration_s": self.duration_s,
+            # Records RECEIVED for this session, duplicates included. The two
+            # fields after it say how many of those the checks did not see
+            # twice; see _build_dedup. The code is the key a SIEM rule matches.
             "event_count": len(self.events),
+            "unique_event_count": len(self.unique_events),
+            "duplicate_event_count": self.duplicate_event_count,
+            "duplicate_delivery_code": (DEFECT_DUPLICATE_DELIVERY
+                                        if self.duplicate_event_count else None),
+            "event_id_conflicts": self.event_id_conflicts,
+            "event_id_conflict_code": (DEFECT_EVENT_ID_REUSED
+                                       if self.event_id_conflicts else None),
             "tool_call_count": len(calls),
             "distinct_tools": len({c.name for c in calls}),
             "tool_sequence": seq,

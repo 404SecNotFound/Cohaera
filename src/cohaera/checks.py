@@ -82,7 +82,12 @@ from .evidence import (
     SessionIntegrity,
 )
 from .identity import digest
-from .limits import DEFAULT_LIMITS, Limits
+from .limits import (
+    DEFAULT_LIMITS,
+    DEFECT_DUPLICATE_DELIVERY,
+    DEFECT_EVENT_ID_REUSED,
+    Limits,
+)
 from .model import (
     POLICY_EVENTS,
     SOURCE_MANIFEST,
@@ -478,10 +483,38 @@ _NEGATION = re.compile(
     r"chose not to|avoided)\b", re.IGNORECASE)
 
 
+# Where a negation stops applying: the end of the sentence it sits in. The
+# lookahead keeps "3.5 MB" and "v2.1" from ending a span mid-sentence, which
+# would re-admit "I did not send the 3.5 MB email" as a disclosure.
+_SENTENCE_END = re.compile(r"[.!?;](?=\s|$)|\n")
+
+
 def _negated_spans(text: str, window: int = 80) -> list[tuple[int, int]]:
-    """Character ranges following a negation cue, where a mention means denial."""
-    return [(m.start(), min(len(text), m.end() + window))
-            for m in _NEGATION.finditer(text)]
+    """Character ranges following a negation cue, where a mention means denial.
+
+    Bounded by the WINDOW and by the SENTENCE, whichever comes first. The span
+    used to run a flat 80 characters past the cue, through any punctuation,
+    so a denial in one sentence swallowed the disclosure in the next:
+
+        "No issues found, nothing was skipped. I sent the email to Bob."
+
+    "no" and "nothing" are not cues, but "skipped" is, and its 80 characters
+    reached "sent the email", so the only honest sentence in the summary was
+    read as a denial and CH02 fired CRITICAL on a disclosed egress -- while
+    the same summary without the first sentence did not fire. A negation does
+    not cross a full stop in any reading of English, and the EVASION.md row
+    that records negation as handled was describing a narrower fix than the
+    code had. Ending the span at `.`, `!`, `?`, `;` or a newline is the
+    correction; the window still applies inside a long sentence.
+    """
+    out: list[tuple[int, int]] = []
+    for m in _NEGATION.finditer(text):
+        end = min(len(text), m.end() + window)
+        stop = _SENTENCE_END.search(text, m.end(), end)
+        if stop is not None:
+            end = stop.start()
+        out.append((m.start(), end))
+    return out
 
 
 class ResponseIndex:
@@ -980,7 +1013,7 @@ def ch03_untrusted_to_consequential(session: Session,
     # whether the evidence exists, which is the thing the collector sequence
     # was introduced to take away from it. _References orders by sequence where
     # one exists and reports the rest as indeterminate.
-    marker_events = [e for e in session.events if scanner_marked(e.data)]
+    marker_events = [e for e in session.unique_events if scanner_marked(e.data)]
     if not marker_events:
         return []
 
@@ -1091,7 +1124,7 @@ def unordered_after_marker(session: Session) -> list[ToolCall]:
     call on the marker's tick empties the finding and leaves the session
     looking clean, so the emptiness has to be reported by something.
     """
-    marker_events = [e for e in session.events if scanner_marked(e.data)]
+    marker_events = [e for e in session.unique_events if scanner_marked(e.data)]
     if not marker_events:
         return []
     audit = session.integrity   # verified-sequence oracle; see _ordering
@@ -1176,7 +1209,7 @@ def _undeclared_controls(session: Session) -> list[Event]:
     manifest = session.manifest
     if not manifest.policies:
         return []
-    return [e for e in session.events
+    return [e for e in session.unique_events
             if e.event_type in POLICY_EVENTS
             and manifest.policy(e.data.get("policy_id"), e.event_type) is None]
 
@@ -1189,7 +1222,7 @@ def _policy_semantics(session: Session) -> dict[str, Any]:
     a gap, and averaging it away would report the better half.
     """
     sources = [_resolved_enforcement(e, session.manifest)[1]
-               for e in session.events if e.event_type in POLICY_EVENTS]
+               for e in session.unique_events if e.event_type in POLICY_EVENTS]
     return {
         "undeclared": ENFORCEMENT_FROM_NOWHERE in sources,
         "in_band_only": (ENFORCEMENT_FROM_NOWHERE not in sources
@@ -1324,7 +1357,7 @@ def ch04_guardrail_overrun(session: Session,
     counts: Counter[str] = Counter()
     audit = session.integrity   # verified-sequence oracle; see _ordering
     unusable_clock = 0
-    for e in session.events:
+    for e in session.unique_events:
         if e.event_type not in POLICY_EVENTS:
             continue
         counts[e.event_type] += 1
@@ -1606,7 +1639,7 @@ def unordered_after_policy(session: Session) -> list[ToolCall]:
     audit = session.integrity   # verified-sequence oracle; see _ordering
     out: list[ToolCall] = []
     seen: set[int] = set()
-    for e in session.events:
+    for e in session.unique_events:
         if e.event_type not in POLICY_EVENTS or not e.timestamp_valid:
             continue
         for c in session.consequential_calls:
@@ -2166,6 +2199,16 @@ R_SCANNER_PARTIAL = "INJECTION_SCANNER_PARTIAL_COVERAGE"
 R_UNSCANNED_CONTENT_MARKERS = "UNSCANNED_CONTENT_CARRIES_MARKERS"
 R_SCANNER_CONTRADICTED = "SCANNER_ANSWER_CONTRADICTED_BY_CONTENT"
 R_FIELD_DEFECTS = "RECORD_FIELD_DEFECTS_PRESENT"
+# The session arrived with records delivered more than once and the checks
+# ran over the first copy of each. Same string as the limits constant so a
+# rule written against the feature matches the coverage reason too. It does
+# not lower confidence: the checks saw every distinct record. It is reported
+# because the input was not what it appeared to be, and a collector that
+# retries is a collector whose stream can also be re-fed (EVASION.md E22).
+R_DUPLICATE_DELIVERY = DEFECT_DUPLICATE_DELIVERY
+# Two records in this session wear one `event_id`. Neither was dropped; see
+# Session._build_dedup for why dropping either would be the worse error.
+R_EVENT_ID_REUSED = DEFECT_EVENT_ID_REUSED
 # P1. The three absences that are now STATED rather than passed over.
 R_NO_APPROVAL_EVIDENCE = "NO_APPROVAL_EVIDENCE"
 R_APPROVAL_NOT_ARGUMENT_BOUND = "APPROVAL_BOUND_BY_SPAN_ONLY"
@@ -2263,9 +2306,9 @@ def _classification_quality(session: Session) -> tuple[float, int, int, int, flo
 
 
 def _clock_quality(session: Session) -> float:
-    if not session.events:
+    if not session.unique_events:
         return 1.0
-    return 1.0 - (session.clock_defects / len(session.events))
+    return 1.0 - (session.clock_defects / len(session.unique_events))
 
 
 def _scanner_evidence(session: Session) -> bool:
@@ -2284,7 +2327,7 @@ def _scanner_evidence(session: Session) -> bool:
     type error could turn CH03's blind spot into a clean bill of health, which
     is the same fail-open the schema firewall exists to prevent.
     """
-    return any(scanner_reported(e.data) for e in session.events)
+    return any(scanner_reported(e.data) for e in session.unique_events)
 
 
 @dataclass(frozen=True)
@@ -2337,7 +2380,7 @@ def _scanner_coverage(session: Session) -> ScannerCoverage:
 
     scanned: set[int] = set()
     unbound = 0
-    for e in session.events:
+    for e in session.unique_events:
         if not scanner_reported(e.data):
             continue
         call = by_span.get(e.span_id) if e.span_id else None
@@ -2441,7 +2484,7 @@ def _local_content_signal(session: Session,
     found: dict[int, tuple[str, ...]] = {}
     names: dict[int, str] = {}
 
-    for e in session.events:
+    for e in session.unique_events:
         call = bind(e)
         if call is None or id(call) not in scannable:
             continue
@@ -2516,6 +2559,10 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
         common_reasons.append(R_INVALID_CLOCK)
     if defects:
         common_reasons.append(R_FIELD_DEFECTS)
+    if session.duplicate_event_count:
+        common_reasons.append(R_DUPLICATE_DELIVERY)
+    if session.event_id_conflicts:
+        common_reasons.append(R_EVENT_ID_REUSED)
 
     def class_reasons() -> list[str]:
         out = []
