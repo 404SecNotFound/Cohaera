@@ -233,6 +233,59 @@ Small helper tools may generate signatures, receipts, manifests, or test
 fixtures. They support the evidence format and lab; they do not move Cohaera
 into the execution path.
 
+## Position relative to existing products
+
+Cohaera is not the behavioural layer between agent telemetry and a SIEM. That
+layer ships. Exabeam Agent Behavior Analytics baselines agent behaviour and
+correlates agents with users, entities and security events. Cohaera consumes
+exported telemetry, states how trustworthy and complete the record is, and
+emits records and detections that such a layer, a SIEM, or a hunt can use.
+
+Cohaera does not supply canonical field naming either. OpenTelemetry GenAI
+conventions, observra and SIEM-side agent tables do that, and Cohaera reads
+them. [EXABEAM-STACK.md](EXABEAM-STACK.md) states the comparison in detail and
+marks what was verified from source against what was taken on report.
+
+The earlier statement of position described Cohaera as an evidence layer
+feeding behavioural analytics. It is kept as a dated record in
+[archive/POSITIONING.md](archive/POSITIONING.md). This page replaces it.
+
+## Claims policy
+
+Language is the cheapest place to overstate a result, so the vocabulary is
+written down. `tests/test_readme.py` fails when tracked documentation uses a
+phrase from the second list.
+
+**Use**
+
+- "deterministic synthetic regression result";
+- "target-attributable recall on this corpus";
+- "false positives per 1,000 benign synthetic sessions";
+- "signature-verified prefix" or "complete signed checkpoint";
+- "provider-returned identifier";
+- "temporal association" for CH03, because coexistence is not causation;
+- "incomplete observation" for CH05, because a missing terminal is a
+  telemetry fact;
+- "feature for behavioural risk" where a signal should not open a case alone.
+
+**Do not use**
+
+- "validated detector";
+- "production-ready evidence";
+- "proof of causation";
+- "provider-confirmed effect", because nothing reconciles an identifier with
+  the provider that minted it;
+- "approved", where the approval is an in-band event the agent could have
+  written;
+- "verified session", where only a prefix is signed;
+- "the missing behavioural layer".
+
+The state behind the policy: Cohaera is pre-alpha research software with no
+external validation. [eval/EVALUATION-CARD.md](../eval/EVALUATION-CARD.md)
+prints the false-positive rate beside the recall, and the one external run
+detected nothing. Read those numbers before quoting any claim from this
+repository.
+
 ## Decision filter
 
 Before adding a feature, ask:

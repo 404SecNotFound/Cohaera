@@ -140,6 +140,10 @@ the machine-readable stream can be piped directly into another security tool.
 Exit codes distinguish a complete run, partial quarantine, strict rejection,
 and incomplete output.
 
+Input today: observra-shaped JSONL. The fields Cohaera reads, the output
+record, the exit codes, the environment variables, and every `cohaera score`
+flag are listed in [docs/REFERENCE.md](docs/REFERENCE.md).
+
 ## What it emits
 
 Cohaera currently emits one `cohaera_session_verdict` per assembled session.
@@ -194,9 +198,9 @@ which model, framework, gateway, or collector produced the events:
 Cohaera complements collectors, OpenTelemetry, Exabeam Agent Behavior
 Analytics, and existing enforcement products. It should make their downstream
 security analysis better, rather than become another control point agents must
-traverse. The detailed competitive boundary and claims policy remain in
-[POSITIONING.md](POSITIONING.md) and
-[the Exabeam stack analysis](docs/EXABEAM-STACK.md).
+traverse. The product boundary and the claims policy are in
+[docs/DIRECTION.md](docs/DIRECTION.md); the detailed comparison with Exabeam's
+stack is in [docs/EXABEAM-STACK.md](docs/EXABEAM-STACK.md).
 
 ## Evidence before claims
 
@@ -214,13 +218,24 @@ The result is a layer mismatch found by measurement: those third-party traces
 did not preserve the content and evidence needed by Cohaera's checks. It is not
 evidence that the current detections work on outside traffic.
 
+One boundary sits underneath every number above. Cohaera is an assurance
+control, not an adversarial one: it reads telemetry the observed agent chose
+to emit, so it can say whether a recorded session did its job and cannot by
+itself say whether the agent lied. Security monitoring here means monitoring
+of the record, with the record's trustworthiness stated beside every
+conclusion; [EVASION.md](EVASION.md) E13 and [SECURITY.md](SECURITY.md) state
+the boundary in full.
+
 Repository controls are substantial but do not replace external validation:
 
-- Tests, 1259 passing across unit, hostile-input, content, lab, and regression
-  coverage.
+- Tests, 1259 collected across unit, hostile-input, content, lab, and
+  regression coverage. A few skip by design where their data is absent, such
+  as commit history on a shallow clone.
 - Sigma content pack, 15 rules, validated and conformance-tested against real
   emitted fields.
-- Adversarial self-test, 34 evasions and remedies in [EVASION.md](EVASION.md).
+- Adversarial self-test, 34 rows in [EVASION.md](EVASION.md): 28 constructed
+  evasions and 6 remedies, so the 34 here and the 28 in the table above are
+  the same catalogue counted with and without the remedy rows.
 
 Read the generated [evaluation card](eval/EVALUATION-CARD.md) before using a
 behavioural finding as an alert. Read [EVASION.md](EVASION.md) before treating
@@ -263,8 +278,11 @@ run, current evidence, and next work.
 
 Cohaera is an independent downstream consumer of observra's public JSONL
 output. It is not a fork and has no runtime dependency on observra. It also
-does not replace Exabeam Agent Behavior Analytics or Praxen; each operates at a
-different point in the monitoring and assurance stack.
+does not replace Exabeam Agent Behavior Analytics or Praxen, an
+Exabeam-sponsored open-source verifier that runs before an agent is deployed;
+each operates at a different point in the monitoring and assurance stack.
+[docs/EXABEAM-STACK.md](docs/EXABEAM-STACK.md) states each boundary and what
+was verified from source.
 
 ## License
 

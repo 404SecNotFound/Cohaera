@@ -5,6 +5,8 @@
 
 # What the field did while this was being built
 
+> **Archived.** This is a dated record, superseded by [DIRECTION.md](../DIRECTION.md). It reflects a literature survey conducted on 19 August 2026 over the preceding twelve months, from an environment that could not read most primary sources. The prior art it found lives on in [PRIOR-ART.md](../PRIOR-ART.md); the positioning claims it tested have since been replaced by DIRECTION.md.
+
 **Survey window: August 2025 to August 2026. Conducted 19 August 2026.**
 
 Four rounds of external review have checked this repository's *code*. Nothing

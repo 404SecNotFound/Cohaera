@@ -515,7 +515,7 @@ verified prefix. That is plumbing, and it is the useful part.
 ## 6. Contemporaries: agent evidence, 2026
 
 This is the section that retired a claim. Until this file existed,
-[POSITIONING.md](../POSITIONING.md) said that almost nothing reasons about
+[POSITIONING.md](archive/POSITIONING.md) said that almost nothing reasons about
 whether an agent's record deserves to be believed. That was true when it was
 written and it is not true now.
 
@@ -700,7 +700,7 @@ the roadmap rather than in a comparison table.
 external gap analysis asserted that nobody ships tamper-evident agent telemetry
 and that the first mover would set the standard regulators cite. That is false
 twice over: the six rows above, and the regulatory half is addressed in
-[BLUEPRINT-2026-08](BLUEPRINT-2026-08.md) §3.4. What is left is checkable:
+[BLUEPRINT-2026-08](archive/BLUEPRINT-2026-08.md) §3.4. What is left is checkable:
 
 > No **mainstream observability platform** ships event integrity — OTel GenAI
 > conventions, Langfuse, Arize Phoenix, OpenLLMetry, Helicone, AgentOps and
@@ -776,7 +776,7 @@ makes, about a particular item, in a particular proceeding, under rules of
 evidence. A detection tool asserting that a record is inadmissible is claiming
 an authority it does not have and cannot have, and the claim is the kind that
 gets quoted back at a project in a context it did not choose.
-[POSITIONING.md](../POSITIONING.md) already keeps a list of words this project
+[DIRECTION.md](DIRECTION.md) already keeps a list of words this project
 refuses to use about its own results; this one belongs on it and is not on it
 yet. `inconclusive` says what the value means — the chain does not support a
 conclusion. `broken_chain` says what actually happened, which is better still

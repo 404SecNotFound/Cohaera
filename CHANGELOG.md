@@ -277,7 +277,7 @@ The checks that fire cleanly are the evidence-integrity ones; the behavioural
 ones are noisy, and the card names which and why.
 
 **Two external reviews were closed in this release** — 43 findings between
-them, accounted for one by one in [REVIEW-RESPONSE.md](REVIEW-RESPONSE.md),
+them, accounted for one by one in [REVIEW-RESPONSE.md](docs/archive/REVIEW-RESPONSE.md),
 including the three recommended remedies that were declined and why.
 
 ### Breaking — the output contract moved to `cohaera:0.3`
@@ -355,7 +355,7 @@ returns an explicit non-evaluated state.
 
 Twenty-one findings were raised against the merged branch. The four that
 change the output contract are above; these change behaviour, bounds or
-claims. [REVIEW-RESPONSE.md](REVIEW-RESPONSE.md) accounts for all of them,
+claims. [REVIEW-RESPONSE.md](docs/archive/REVIEW-RESPONSE.md) accounts for all of them,
 including the three recommended remedies that were declined.
 
 - **The ledger now proves continuity** (R-02). Advancement requires the next
@@ -405,7 +405,7 @@ including the three recommended remedies that were declined.
 - **The positioning is corrected** (R-19). Agent behaviour analytics ships;
   pitching session correlation as the missing layer was late. Cohaera is the
   evidence-quality layer that feeds one. See
-  [POSITIONING.md](POSITIONING.md), which also carries the language this
+  [POSITIONING.md](docs/archive/POSITIONING.md), which also carries the language this
   project will not use about its own results — enforced by a test.
 - **A local lab** ([`lab/local/`](lab/local/)) runs the evidence path end to
   end in about a second and commits what it produced. CI re-runs it, so a

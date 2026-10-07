@@ -5,6 +5,8 @@
 
 # Where Cohaera sits, and where it does not
 
+> **Archived.** This is a dated record, superseded by [DIRECTION.md](../DIRECTION.md). It reflects the project's position as of late August 2026, when Cohaera described itself as an evidence layer feeding behavioural analytics. The current statement of position, boundary, roadmap, non-goals and claims policy is DIRECTION.md. Nothing here is updated; the still-true claims policy was folded into DIRECTION.md and the rest is kept for the record.
+
 This file exists because an external review made a strategic point that was
 more useful than any of its bug findings, and the honest response is to write
 the correction down rather than quietly adjust the wording.
@@ -78,14 +80,14 @@ projects shipping it, in two briefs whose lists do not overlap. **Cohaera does
 not combine all three either** — it chains and signs, it has key roles and
 rotation rather than per-agent attestation, and it has no evidence-pack export.
 The narrowed claim describes an open position, not an occupied one. The six are
-in [docs/PRIOR-ART.md](docs/PRIOR-ART.md).
+in [docs/PRIOR-ART.md](../PRIOR-ART.md).
 
 Producing a trustworthy record and grading somebody else's are different jobs.
 Agent Action Capsule and halo-record are producers: the checkability is a
 property of the format, and it is unavailable to any deployment that has not
 adopted the format. Cohaera is a consumer — it reads whatever a deployment
 already emits, including streams carrying no integrity evidence at all, which is
-where every deployment starts. [docs/PRIOR-ART.md](docs/PRIOR-ART.md) is the
+where every deployment starts. [docs/PRIOR-ART.md](../PRIOR-ART.md) is the
 full search, including the several places where this project comes second.
 
 > **Agent behaviour analytics needs trustworthy agent identity, complete session
@@ -156,9 +158,9 @@ cannot get from its own telemetry:
   absence. This one is a **port, not an invention** — MITRE OVAL has had `not
   evaluated` as a distinct result value since the 5.x schema, XCCDF has four
   ways of having no verdict, and a Nagios plugin has exited `UNKNOWN` since
-  before any of this. [docs/PRIOR-ART.md](docs/PRIOR-ART.md) §1 is the list,
+  before any of this. [docs/PRIOR-ART.md](../PRIOR-ART.md) §1 is the list,
   and the narrow part that is not a port is §8.
-- **A published failure catalogue.** [EVASION.md](EVASION.md) is a list of ways
+- **A published failure catalogue.** [EVASION.md](../../EVASION.md) is a list of ways
   to defeat this, kept executable, kept current, and kept public.
 
 None of that competes with a risk engine. All of it changes what a risk engine
@@ -199,7 +201,7 @@ documentation. A rule about language that nothing enforces is a preference.
 Cohaera is a pre-alpha research artifact with a strong engineering core and no
 external validation. On its own synthetic corpus the headline cell reaches full
 target-attributable recall at a false-positive rate that would be unusable in
-production, and [`eval/EVALUATION-CARD.md`](eval/EVALUATION-CARD.md) prints
+production, and [`eval/EVALUATION-CARD.md`](../../eval/EVALUATION-CARD.md) prints
 both numbers side by side along with what precision would look like at a
 realistic base rate. There is no live SIEM integration, no independent labels,
 and no second reviewer.

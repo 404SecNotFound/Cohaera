@@ -22,8 +22,9 @@ seconds.
 
 Everything below runs on a clean checkout with nothing installed but CPython —
 3.10 to 3.13, the range `pyproject.toml` supports. No `pip install`, because
-this project has no runtime dependencies. There is one entry point and this
-is it.
+this project has no runtime dependencies. This lab's entry point is
+`lab/local/run.py`. The CH06 conformance lab (`lab/ch06/run.py`) and the
+`cohaera` command line are separate entry points and are not needed here.
 
 ### 1. Confirm the committed run still reproduces
 

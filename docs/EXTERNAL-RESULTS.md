@@ -293,7 +293,7 @@ work.
 - The coverage contract earned its place. It is the only reason a zero is
   readable, and it caught the CH04 defect that the internal corpus structurally
   could not.
-- [The three reviews](REVIEWS-2026-08.md) each concluded independently that
+- [The three reviews](archive/REVIEWS-2026-08.md) each concluded independently that
   *the format is the business*. This run is the first empirical support for it:
   on a corpus with no capability manifest, no policy plane and eight generic
   tool names, four of seven checks cannot start and the other three run blind.

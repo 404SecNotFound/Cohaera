@@ -4,7 +4,7 @@ Rules and mappings that consume `cohaera_session_verdict` records.
 
 ```
 content/
-  sigma/     15 Sigma rules, tiered: 7 production, 5 hunt, 2 dashboard
+  sigma/     15 Sigma rules, tiered: 7 production, 6 hunt, 2 dashboard
   manifest/  example capability manifest: exact tool ID -> declared effects
   aie/       LogRhythm AIE rule specifications + the build-vs-buy comparison
   parser/    Exabeam field map + notes on observra issue #108
