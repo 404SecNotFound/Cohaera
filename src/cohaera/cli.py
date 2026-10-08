@@ -1,6 +1,7 @@
 """Cohaera command line.
 
     python -m cohaera.cli score <telemetry.jsonl> [--baseline benign.jsonl]
+    cohaera keygen | sign | issue-approval ...     (the producer side)
 
 Prints a human summary to stderr and emits one correlation-grade CIM record per
 session as JSONL on stdout, so it pipes straight into a collector:
@@ -954,7 +955,32 @@ def _add_common(p: argparse._ActionsContainer) -> None:
                         f"(default {DEFAULT_LIMITS.max_evidence_items}).")
 
 
+# The producer commands, by name only. Their parsers and their code live in
+# the emit subpackage, which this module must not load on the scoring path: a
+# host that only verifies never imports signing code. So the names are listed
+# here, the help shows them, and the import happens in _producer() after one
+# of them was asked for. tests/test_emit.py holds this table equal to the one
+# the emit package owns, and checks in a fresh interpreter that `score` never
+# loads it.
+PRODUCER_COMMANDS = {
+    "keygen": "generate a key pair and publish the public half",
+    "sign": "attach cohaera.integrity:1 sidecars to JSONL",
+    "issue-approval": "sign one cohaera.approval:1",
+}
+
+
+def _producer(argv: list[str]) -> int:
+    """Hand a producer command to its own parser. The only import of the
+    signing code anywhere in the verifier's modules, and it is deferred."""
+    from .emit import command  # noqa: PLC0415 -- deferred by design, see above
+    return command.main(argv, prog="cohaera")
+
+
 def main(argv: list[str] | None = None) -> int:
+    args_in = list(sys.argv[1:] if argv is None else argv)
+    if args_in and args_in[0] in PRODUCER_COMMANDS:
+        return _producer(args_in)
+
     ap = argparse.ArgumentParser(prog="cohaera")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -971,8 +997,12 @@ def main(argv: list[str] | None = None) -> int:
                          "makes editing the file detectable.")
     _add_common(sc)
     sc.set_defaults(func=cmd_score)
+    # Listed so `cohaera --help` names them. Never parsed here: main() hands
+    # them over before this parser runs, so these entries carry no arguments.
+    for name, help_text in PRODUCER_COMMANDS.items():
+        sub.add_parser(name, help=help_text, add_help=False)
 
-    args = ap.parse_args(argv)
+    args = ap.parse_args(args_in)
     try:
         return args.func(args)
     except KeyboardInterrupt:                       # pragma: no cover

@@ -248,3 +248,21 @@ subcommand is `score`. There is no `--version` flag; read
 
 Every bound is folded into `config_hash`, so two runs with different bounds
 have different run identities.
+
+## 6. Producer commands
+
+The collector side of the evidence format, as subcommands of `cohaera`. The
+scoring path never loads this code: `cohaera score` imports nothing from
+`cohaera.emit`, and the producer commands are handed to their own parser
+before the scoring parser runs. `python -m cohaera.emit` is the same parser.
+The guide is [EMITTING.md](EMITTING.md).
+
+| Command | Purpose |
+|---|---|
+| `cohaera keygen --out PATH --roles ROLE [ROLE ...]` | generate a key pair, write the private key with mode `0600`, and write or extend a trust store with `--trust-store PATH` |
+| `cohaera sign --key PATH --stream-id ID` | attach chained, signed `cohaera.integrity:1` sidecars to JSONL (`--in`, `--out`, default stdin and stdout); `--state PATH` resumes a chain, `--close` signs the last record as `final` and closes the stream |
+| `cohaera issue-approval --key PATH --decision allow\|deny --span-id ID --tool-id ID` | sign one `cohaera.approval:1`; `--expires-at` or `--expires-in` is required, and `--tool-args` or `--arg-digest` binds it to the call's arguments |
+
+Each prints its own flags with `--help`. Exit codes: 0 done, 1 refused (with
+the reason on stderr), 2 usage error.
+

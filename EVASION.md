@@ -849,8 +849,7 @@ last record carries `integrity.final: true`, and the literal `final` is part
 of that record's signing input, so the statement "nothing follows this" is
 the collector's and cannot be added to or stripped from a signed record
 without the signature failing. `cohaera.emit` signs it with
-`StreamSigner.sign(record, final=True)` or `python -m cohaera.emit sign
---close`, and refuses to sign anything after it; `tools/collector_sign.py`
+`StreamSigner.sign(record, final=True)` or `cohaera sign --close`, and refuses to sign anything after it; `tools/collector_sign.py`
 takes `close=True`. On the verifier side a stream that ends without a verified
 final record is `INTEGRITY_STREAM_NOT_CLOSED`, which degrades CH06 the way a
 missing ledger does; records past a verified close, in this run or through
@@ -1466,7 +1465,7 @@ regression tests.
 | CH05 | Orphan terminal events were constructed with `result="success"` and never flagged. | An irreversible action appearing from nowhere was invisible | **Fixed.** `orphan_end` state, reported by CH05. |
 
 The review's C-05 finding, no executable test suite, was accurate at revision
-`45d3bf8`. There are now 1567 tests: unit, hostile-input, content conformance and
+`45d3bf8`. There are now 1571 tests: unit, hostile-input, content conformance and
 35 evasion characterizations, plus a seeded fuzz smoke test in CI.
 
 ### What is still open from the third review

@@ -20,6 +20,18 @@ reports recall is a marketing document.
 
 ### Added
 
+- **`cohaera keygen | sign | issue-approval`.** The producer commands are now
+  subcommands of `cohaera`, so a collector host needs one command rather than
+  a module path. `python -m cohaera.emit` still runs the same parser. The
+  boundary the emitter was built around is kept as a runtime fact rather than
+  a module layout: `cohaera.cli` hands a producer command to its parser before
+  the scoring parser runs, through the only import of the signing code in any
+  verifier module, and that import is deferred. A full `cohaera score` run in
+  a fresh interpreter loads nothing from `cohaera.emit`, and the test that
+  used to forbid the string `cohaera.emit` in verifier sources is now a
+  syntax-tree check that permits exactly that one deferred import and nothing
+  at module level.
+
 - **A collector can close a stream, and a verifier can tell a cut from an
   end.** EVASION.md E30, half closed. The chain proves nothing is missing in
   between and the signatures prove the collector wrote what remains; neither

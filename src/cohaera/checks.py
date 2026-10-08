@@ -3199,8 +3199,8 @@ def coverage(session: Session, grammar: SequenceGrammar | None,
             int_reasons.append(R_STREAM_NOT_CLOSED)
             int_remedies.append(
                 "Have the collector close each stream with a signed final "
-                "record (StreamSigner.sign(record, final=True), or the emit "
-                "command's --close; see docs/EMITTING.md), and pass "
+                "record (StreamSigner.sign(record, final=True), or "
+                "`cohaera sign --close`; see docs/EMITTING.md), and pass "
                 "--require-closed-streams once every collector does. Until "
                 "then, cutting records off the END of this stream leaves a "
                 "verified prefix nothing can tell from the whole.")
