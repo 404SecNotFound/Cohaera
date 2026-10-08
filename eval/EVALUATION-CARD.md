@@ -6,7 +6,7 @@ a byte-identical card and any diff is a change in the detector.
 
 | Provenance | |
 |---|---|
-| detector version | `0.3.0` |
+| detector version | `0.4.0` |
 | bounds digest (`config_hash`) | `cbeeb890e20a1751` |
 | corpus digest | `a3d9aa5099f7e8d3` |
 | corpus seed | `20260807` |
