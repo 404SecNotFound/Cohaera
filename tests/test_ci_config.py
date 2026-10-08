@@ -95,6 +95,19 @@ def expected_check_names(workflow: dict) -> set[str]:
     return names
 
 
+def runs_on_pull_requests(workflow: dict) -> bool:
+    """Does this workflow report checks on a pull request at all?
+
+    YAML 1.1 reads the `on:` key as the boolean True, so both spellings are
+    looked up. A string or list trigger is handled as well as a mapping."""
+    triggers = workflow.get("on", workflow.get(True))
+    if isinstance(triggers, str):
+        return triggers == "pull_request"
+    if isinstance(triggers, list):
+        return "pull_request" in triggers
+    return isinstance(triggers, dict) and "pull_request" in triggers
+
+
 def required_contexts(ruleset: dict) -> set[str]:
     for rule in ruleset.get("rules", []):
         if rule.get("type") == "required_status_checks":
@@ -126,7 +139,12 @@ def test_required_checks_match_the_ci_jobs_exactly():
     """
     expected: set[str] = set()
     for path in workflow_files():
-        expected |= expected_check_names(load_workflow(path))
+        workflow = load_workflow(path)
+        if not runs_on_pull_requests(workflow):
+            # release.yml is dispatched by hand and reports nothing on a PR,
+            # so requiring its jobs would block every pull request forever.
+            continue
+        expected |= expected_check_names(workflow)
     required = required_contexts(load_ruleset())
 
     missing = expected - required          # job exists, nothing requires it
@@ -479,6 +497,36 @@ def test_workflow_permissions_are_least_privilege():
         assert perms.get("contents") == "read", (
             f"{path.name} grants contents: {perms.get('contents')!r} at the "
             "top level; grant write per job if a job genuinely needs it")
+
+
+RELEASE = WORKFLOW_DIR / "release.yml"
+
+
+def test_the_release_workflow_is_dispatched_from_main_only():
+    """The tag is created by the run that gated it, so the run must not be
+    startable from a tag push or a branch other than main."""
+    workflow = load_workflow(RELEASE)
+    triggers = workflow.get("on", workflow.get(True))
+    assert set(triggers) == {"workflow_dispatch"}, triggers
+    assert workflow["jobs"]["build"]["if"] == "github.ref == 'refs/heads/main'"
+
+
+def test_the_release_is_gated_on_the_tag_it_is_about_to_create():
+    text = "\n".join(s.get("run", "") for s in
+                     load_workflow(RELEASE)["jobs"]["build"]["steps"])
+    assert 'release_gate.py --tag "v${VERSION}"' in text
+    assert "SOURCE_DATE_EPOCH" in text, "the release must build reproducibly"
+
+
+def test_release_write_permissions_are_per_job_and_minimal():
+    """contents: write only where the tag and release are created, id-token:
+    write only where PyPI is published to, and nothing else elevated."""
+    jobs = load_workflow(RELEASE)["jobs"]
+    assert jobs["build"].get("permissions") is None
+    assert jobs["github-release"]["permissions"] == {"contents": "write"}
+    assert jobs["pypi"]["permissions"] == {"id-token": "write"}
+    assert jobs["pypi"]["environment"]["name"] == "pypi"
+    assert jobs["pypi"]["needs"] == ["build", "github-release"]
 
 
 if __name__ == "__main__":

@@ -183,10 +183,15 @@ Both need the repository owner; neither can be done from an automation session.
 A8 below is now closed as far as one maintainer can close it, and the entry
 states what it still does not buy.
 
-- [ ] **Tag and publish v0.3.0.** Artefacts are built, committed and internally
-      consistent — `tools/release_gate.py` passes. The tag push and the release
-      API both return 403 through the egress proxy. Run `git tag -a v0.3.0` and
-      push from a machine with direct access.
+- [ ] **Publish v0.4.0.** v0.3.0 was never tagged: the tag push and the
+      release API both returned 403 through the egress proxy. Releases are now
+      cut by `.github/workflows/release.yml`, dispatched on main with the
+      version, which gates, builds reproducibly, creates the tag and the GitHub
+      release, then publishes to PyPI by trusted publishing. Two one-time steps
+      need the repository owner and are written at the top of that file: a
+      pending trusted publisher on pypi.org, and an environment named `pypi`
+      in the repository settings. v0.3.0 stays untagged; its notes remain in
+      CHANGELOG.md.
 - [x] **Require independent approvals** (item A8). `.github/rulesets/main.json`
       now sets `required_approving_review_count: 1`, `require_code_owner_review`
       and `require_last_push_approval`, pinned by `tests/test_ci_config.py`.

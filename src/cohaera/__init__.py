@@ -8,7 +8,7 @@ SIEM or investigation workflow. It does not proxy, authorize, or block agent
 actions.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from .capabilities import Capability, CapabilityManifest, ManifestError
 from .checks import SequenceGrammar, coverage, run_all

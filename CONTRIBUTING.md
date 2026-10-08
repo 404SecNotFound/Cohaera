@@ -188,3 +188,19 @@ design boundary rather than a vulnerability.
 ## Licence
 
 Contributions are accepted under [Apache-2.0](LICENSE), the project's licence.
+
+## Cutting a release
+
+1. Move the `[Unreleased]` section of `CHANGELOG.md` under a new
+   `## [X.Y.Z] — date` heading, with a "What this release measures" table
+   that states the false-positive rate per 1,000 benign sessions, and add the
+   `[X.Y.Z]` link definition.
+2. Set the version in `pyproject.toml`, `src/cohaera/__init__.py` and
+   `CITATION.cff`, regenerate the labs and the evaluation card (both carry
+   the version), and run `python tools/release_gate.py --tag vX.Y.Z`.
+3. Merge that through a pull request like any other change.
+4. Dispatch the `release` workflow on `main` with `X.Y.Z`. It refuses unless
+   the gate passes and the tag is free, then tags the commit, creates the
+   GitHub release with the wheel, the sdist and `SHA256SUMS`, and publishes
+   to PyPI. Nothing is tagged by hand.
+

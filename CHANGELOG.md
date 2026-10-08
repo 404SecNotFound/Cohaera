@@ -18,6 +18,47 @@ reports recall is a marketing document.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-10-08
+
+Pre-alpha. The evaluation card is regenerated on every change and CI fails on
+any diff, so the numbers below are derived rather than claimed.
+
+### What this release measures
+
+| | |
+|---|---|
+| Corpus | Synthetic, written by the detector's author. Not validation. |
+| Target-attributable recall | 100% on the unseen / task-disjoint / manifest cell |
+| False positives | **420.4 per 1,000 benign sessions**, unchanged from 0.3.0 |
+| Projected precision at 0.1% attack prevalence | **0.238%** |
+| Known evasions | 29 constructed, 27 still working (14 open, 13 half closed, so their remedy is opt-in or partial), each with a test |
+| External corpus | 375 StepShield attack sessions scored, zero detections, a layer mismatch rather than a measurement of the checks |
+| Independent validation | None |
+
+The detection numbers did not move. This release is about the evidence the
+detections stand on, and about whether what the documents said was true. An
+end-to-end review in October found three defects the 1,172 existing tests did
+not cover: the approval-replay controls were parsed and never read, one
+hostile record could end a run with nothing on stdout, and an edited record
+on a stream joined mid-way verified as attested. All three are fixed below,
+with about thirty smaller ones, each kept as a regression.
+
+Output schema: still **`cohaera:0.3`**. Every change to the verdict is an
+added field or an added reason code (`unanchored`, `stream_key_changes`,
+`closed_at`, `approval_assurance`, `INTEGRITY_CHAIN_UNANCHORED`,
+`INTEGRITY_STREAM_KEY_CHANGED`, the four E30 closure codes and the
+`approval_not_assured` state), so a parser written for 0.3.0 keeps working
+and a rule written against an existing code keeps matching. Exit codes are
+unchanged.
+
+**Upgrade notes.** `--require-signed-approvals` is now refused without an
+approval-role key, and `--require-closed-streams` without a trust store,
+where before the first did nothing at all. Signed streams that are not closed
+now carry `INTEGRITY_STREAM_NOT_CLOSED`, which multiplies CH06 confidence by
+0.9 and is not a finding. A duplicate delivery is now dropped from the
+session view rather than scored twice, so a session delivered at least once
+may fire fewer findings than it did.
+
 ### Added
 
 - **`cohaera keygen | sign | issue-approval`.** The producer commands are now
@@ -1049,6 +1090,7 @@ First tagged version, and the first with an evaluation card. See
 include a false-positive rate that is not usable in a SOC and a name-only
 condition where recall falls by 46.7 points.
 
-[Unreleased]: https://github.com/404SecNotFound/Cohaera/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/404SecNotFound/Cohaera/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/404SecNotFound/Cohaera/releases/tag/v0.4.0
 [0.3.0]: https://github.com/404SecNotFound/Cohaera/releases/tag/v0.3.0
 [0.2.0]: https://github.com/404SecNotFound/Cohaera/releases/tag/v0.2.0

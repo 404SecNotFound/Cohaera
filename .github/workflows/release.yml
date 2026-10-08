@@ -1,0 +1,131 @@
+name: release
+
+# Cut a release from main: gate it, build it reproducibly, tag it, attach the
+# artefacts to a GitHub release, and publish to PyPI.
+#
+# DISPATCHED, NOT TAG-TRIGGERED. The tag is created HERE, by the job that has
+# just proved the source agrees with itself about its version, rather than
+# pushed by hand and then checked. Two reasons, both learned the hard way:
+# docs/OUTSTANDING.md records that v0.3.0 was never tagged because a tag push
+# from an automation session is refused by the egress proxy, and a tag pushed
+# first and gated second leaves a published tag pointing at a release the gate
+# then refuses. Dispatch from the Actions tab or the API with the version to
+# cut; the run refuses unless that version is what pyproject, the package,
+# CITATION.cff and CHANGELOG.md all say.
+#
+# PERMISSIONS ARE PER JOB. The top level reads, as every workflow here does
+# (tests/test_ci_config.py). Only the job that creates the tag and the release
+# gets contents: write, and only the job that publishes gets id-token: write,
+# which is what PyPI trusted publishing exchanges for a short-lived upload
+# token. No PyPI password or API token exists anywhere in this repository.
+#
+# ONE-TIME SETUP, by the repository owner, before the first run:
+#   1. On pypi.org, add a pending trusted publisher for the project `cohaera`:
+#      owner 404SecNotFound, repository Cohaera, workflow release.yml,
+#      environment pypi.
+#   2. In this repository's settings, create an environment named `pypi`.
+#      Adding a required reviewer there makes the upload wait for a person,
+#      which is the recommended setting: the GitHub release is created either
+#      way, and PyPI is the step that cannot be undone.
+#
+# This workflow reports no check on pull requests, so it is deliberately not a
+# required status check; tests/test_ci_config.py counts only PR-triggered
+# workflows against the ruleset.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, without the v (for example 0.4.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: gate and build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: The release is internally consistent and the tag is free
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python tools/release_gate.py --tag "v${VERSION}"
+          if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+            echo "::error::tag v${VERSION} already exists; a release is cut once"
+            exit 1
+          fi
+      - name: Build, reproducibly
+        # Same recipe as the CI build job, so the bytes published are the bytes
+        # CI built and tested from this commit.
+        run: |
+          python -m pip install --upgrade pip build
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) python -m build
+          ( cd dist && sha256sum *.whl *.tar.gz | tee SHA256SUMS )
+      - name: The wheel installs into a clean environment and has no dependencies
+        run: |
+          python -m venv /tmp/verify
+          /tmp/verify/bin/pip install dist/*.whl
+          /tmp/verify/bin/python -c "import cohaera, sys; assert cohaera.__version__ == sys.argv[1], cohaera.__version__" "${{ inputs.version }}"
+          test "$(/tmp/verify/bin/pip list --format=freeze | grep -vc '^\(cohaera\|pip\|setuptools\)==')" = "0"
+          /tmp/verify/bin/cohaera --help >/dev/null
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/
+
+  github-release:
+    name: tag and github release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: dist
+          path: dist/
+      - name: Create the tag and the release from this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          # The notes are this version's CHANGELOG section, verbatim.
+          awk -v v="## [${VERSION}]" 'index($0, v) == 1 {on = 1; next}
+               on && /^## \[/ {exit} on {print}' CHANGELOG.md > notes.md
+          test -s notes.md
+          gh release create "v${VERSION}" dist/* \
+            --target "${GITHUB_SHA}" --title "v${VERSION}" \
+            --notes-file notes.md --prerelease
+
+  pypi:
+    name: publish to pypi
+    needs: [build, github-release]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/cohaera/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: dist
+          path: dist/
+      - name: Only the wheel and the sdist go to PyPI
+        run: rm -f dist/SHA256SUMS
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
